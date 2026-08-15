@@ -268,7 +268,17 @@ export function predictContextualRace(input: ContextualPredictionInput): Context
     top3Probability: probabilities.top3[index],
   })).sort((left, right) => right.winProbability - left.winProbability || left.horseName.localeCompare(right.horseName))
 
-  const allHorses: PredictedHorse[] = scored.map((entry, index) => {
+  const calibrated = scored.map((entry) => {
+    const historyWeight = clamp((entry.features.historyStarts - 3) / 12, 0, 1)
+    const baseRate = entry.features.historyStarts > 0
+      ? clamp((entry.features.recentForm - 0.5) * 0.6 + 0.12)
+      : 0.05
+    const winProbability = entry.winProbability * (0.7 + historyWeight * 0.3) + baseRate * (1 - historyWeight) * 0.3
+    const top3Probability = entry.top3Probability * (0.7 + historyWeight * 0.3) + baseRate * 3 * (1 - historyWeight) * 0.3
+    return { ...entry, winProbability, top3Probability: clamp(top3Probability) }
+  })
+
+  const allHorses: PredictedHorse[] = calibrated.map((entry, index) => {
     const winEdge = entry.odds.win ? entry.winProbability * entry.odds.win - 1 : undefined
     const placeEdge = entry.odds.place ? entry.top3Probability * entry.odds.place - 1 : undefined
     const bestEdge = Math.max(winEdge ?? -1, placeEdge ?? -1)
@@ -301,7 +311,7 @@ export function predictContextualRace(input: ContextualPredictionInput): Context
       ? [{ horse_id: horse.horse_id, horse_name: horse.horse_name, market: 'place' as const, probability: horse.top3_probability ?? 0, odds: horse.place_odds, return_10: horse.place_return_10!, value_edge: horse.place_value_edge! }]
       : []),
   ]).sort((left, right) => right.value_edge - left.value_edge)
-  const featureSnapshots = Object.fromEntries(scored.map((entry) => [entry.horseId, {
+  const featureSnapshots = Object.fromEntries(calibrated.map((entry) => [entry.horseId, {
     features: Object.fromEntries(Object.entries(entry.features)),
     recent_starts: entry.recentStarts.map((start) => ({
       race_id: start.raceId,
