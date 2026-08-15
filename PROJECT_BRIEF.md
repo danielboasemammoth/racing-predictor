@@ -32,14 +32,18 @@ Build an Australian horse race prediction app that uses historical race data to 
 - ✅ Database schema defined in `supabase/schema.sql`
 - ✅ Pages scaffolded: `/`, `/races/[id]`, `/accuracy`, `/admin`
 - ✅ Admin API routes protected by an HttpOnly session and server-only key
-- ✅ Typed `v2-heuristic` model with normalized probabilities and condition-aware form scoring
+- ✅ Leakage-safe `v3-contextual-ranking` model with last-five context, speed, class, course, jockey/trainer, barrier, weight, and fitness features
+- ✅ Win/place payout metadata and value signals kept separate from prediction features
+- ✅ Ordered trifecta probability and model-fair return estimates
+- ✅ Walk-forward probability metrics including Brier score and log loss
 - ✅ Backtesting for winner, exact podium, and finishing-time error by model version
 - ✅ Unit tests for prediction and backtest behavior
+- ✅ Racing.com ingestion for Victorian meetings, fields, and results
 - ✅ TypeScript types defined in `src/lib/types.ts`
 - ✅ Supabase client wired up in `src/lib/supabase.ts`
 - ⬜ Database schema NOT yet run in Supabase
-- ⬜ No real data ingested yet
-- ⬜ Scrapers not implemented
+- ✅ Initial real race data ingested into Supabase
+- ⬜ Additional state and fallback data sources not implemented
 - ⬜ No RapidAPI integration yet
 
 ## Database Schema (supabase/schema.sql)
@@ -139,7 +143,7 @@ Get the Supabase values from Supabase Dashboard → Settings → API. Never expo
 - Store raw HTML/snapshots for debugging if structure changes
 
 ### Priority 2: Prediction Model
-**Current:** `v2-heuristic` in `src/lib/prediction.ts` — typed scoring based on career form, track condition preference, recency, and barrier, with normalized confidence probabilities
+**Current:** `v3-contextual-ranking` in `src/lib/prediction-v3.ts` — last-five starts are weighted by recency and similarity in class, distance, condition, and course, then combined with speed, jockey/trainer, barrier, weight, and fitness features. Odds are excluded from ranking and used only for payout/value display.
 
 **Tasks:**
 1. Improve heuristic model with more features:
@@ -231,7 +235,7 @@ Get the Supabase values from Supabase Dashboard → Settings → API. Never expo
 - Scrapers not implemented yet
 - RapidAPI integration not started
 - No real data in database yet
-- Model still needs venue, jockey, trainer, class, weight, and sectional features
+- Sectional split coverage is still limited by source availability
 - No error handling in scrapers
 - No rate limiting on scrapers
 

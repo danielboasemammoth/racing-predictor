@@ -19,7 +19,16 @@ describe('evaluatePrediction', () => {
       { horse_id: 'b', finishing_position: 3, finishing_time: 72 },
     ])
 
-    expect(outcome).toMatchObject({ correctWinner: true, correctPodium: true, accuracyScore: 1 })
+    expect(outcome).toMatchObject({
+      correctWinner: true,
+      correctPodium: true,
+      orderedTrifecta: false,
+      winnerTop3: true,
+      podiumOverlap: 1,
+      accuracyScore: 1,
+    })
+    expect(outcome?.winnerBrierScore).toBeGreaterThan(0)
+    expect(outcome?.winnerLogLoss).toBeCloseTo(-Math.log(0.5))
   })
 
   it('calculates absolute finishing-time errors only for available predictions', () => {

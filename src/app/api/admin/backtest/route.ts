@@ -32,30 +32,36 @@ export async function POST() {
     }
 
     const raceIds = races.map((race) => race.id)
-    const [{ data: entriesData, error: entriesError }, { data: predictionsData, error: predictionsError }] = await Promise.all([
-      supabase
-        .from('race_entries')
-        .select('race_id, horse_id, finishing_position, finishing_time')
-        .in('race_id', raceIds),
-      supabase
-        .from('predictions')
-        .select('id, race_id, model_version, predicted_at, predictions, confidence_scores, predicted_times')
-        .in('race_id', raceIds)
-        .order('predicted_at', { ascending: false }),
-    ])
-
-    if (entriesError) throw entriesError
-    if (predictionsError) throw predictionsError
+    const entriesData: ActualRaceEntry[] & Array<{ race_id: string }> = []
+    const predictionsData: PredictionRow[] = []
+    const raceChunkSize = 40
+    for (let offset = 0; offset < raceIds.length; offset += raceChunkSize) {
+      const chunk = raceIds.slice(offset, offset + raceChunkSize)
+      const [entriesResult, predictionsResult] = await Promise.all([
+        supabase
+          .from('race_entries')
+          .select('race_id, horse_id, finishing_position, finishing_time')
+          .in('race_id', chunk),
+        supabase
+          .from('predictions')
+          .select('id, race_id, model_version, predicted_at, predictions, confidence_scores, predicted_times')
+          .in('race_id', chunk),
+      ])
+      if (entriesResult.error) throw entriesResult.error
+      if (predictionsResult.error) throw predictionsResult.error
+      entriesData.push(...(entriesResult.data as typeof entriesData))
+      predictionsData.push(...(predictionsResult.data as PredictionRow[]))
+    }
 
     const entriesByRace = new Map<string, ActualRaceEntry[]>()
-    for (const entry of entriesData ?? []) {
+    for (const entry of entriesData) {
       const entries = entriesByRace.get(entry.race_id) ?? []
       entries.push(entry as ActualRaceEntry)
       entriesByRace.set(entry.race_id, entries)
     }
 
     const latestPredictions = new Map<string, PredictionRow>()
-    for (const prediction of (predictionsData ?? []) as PredictionRow[]) {
+    for (const prediction of predictionsData) {
       const key = `${prediction.race_id}:${prediction.model_version}`
       if (!latestPredictions.has(key)) latestPredictions.set(key, prediction)
     }
@@ -67,6 +73,11 @@ export async function POST() {
       correctPodium: boolean
       confidence: number
       timeErrors: number[]
+      winnerTop3: boolean
+      podiumOverlap: number
+      orderedTrifecta: boolean
+      winnerBrierScore: number
+      winnerLogLoss: number
     }>>()
 
     for (const prediction of latestPredictions.values()) {
@@ -81,7 +92,14 @@ export async function POST() {
       const { error: updateError } = await supabase
         .from('predictions')
         .update({
-          actual_results: { podium: outcome.actualPodium },
+          actual_results: {
+            podium: outcome.actualPodium,
+            winner_top3: outcome.winnerTop3,
+            podium_overlap: outcome.podiumOverlap,
+            ordered_trifecta: outcome.orderedTrifecta,
+            winner_brier_score: outcome.winnerBrierScore,
+            winner_log_loss: outcome.winnerLogLoss,
+          },
           accuracy_score: outcome.accuracyScore,
         })
         .eq('id', prediction.id)
@@ -94,6 +112,11 @@ export async function POST() {
         correctPodium: outcome.correctPodium,
         confidence: prediction.confidence_scores.overall,
         timeErrors: outcome.timeErrors,
+        winnerTop3: outcome.winnerTop3,
+        podiumOverlap: outcome.podiumOverlap,
+        orderedTrifecta: outcome.orderedTrifecta,
+        winnerBrierScore: outcome.winnerBrierScore,
+        winnerLogLoss: outcome.winnerLogLoss,
       })
       outcomesByModel.set(prediction.model_version, modelOutcomes)
     }
@@ -127,10 +150,20 @@ export async function POST() {
       return NextResponse.json({ success: false, message: 'No completed races had predictions and results' }, { status: 404 })
     }
 
+    const metrics = Object.fromEntries([...outcomesByModel].map(([modelVersion, outcomes]) => [modelVersion, {
+      races: outcomes.length,
+      winnerTop3Accuracy: outcomes.filter((outcome) => outcome.winnerTop3).length / outcomes.length,
+      averagePodiumOverlap: outcomes.reduce((sum, outcome) => sum + outcome.podiumOverlap, 0) / outcomes.length,
+      orderedTrifectaAccuracy: outcomes.filter((outcome) => outcome.orderedTrifecta).length / outcomes.length,
+      winnerBrierScore: outcomes.reduce((sum, outcome) => sum + outcome.winnerBrierScore, 0) / outcomes.length,
+      winnerLogLoss: outcomes.reduce((sum, outcome) => sum + outcome.winnerLogLoss, 0) / outcomes.length,
+    }]))
+
     return NextResponse.json({
       success: true,
       scored,
       models: outcomesByModel.size,
+      metrics,
       message: `Backtested ${scored} predictions across ${outcomesByModel.size} models`,
     })
   } catch (error) {

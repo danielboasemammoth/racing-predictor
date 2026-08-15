@@ -70,11 +70,38 @@ export interface PredictedHorse {
   predicted_position: number
   predicted_time?: number
   confidence: number
+  win_probability?: number
+  top3_probability?: number
+  win_odds?: number
+  place_odds?: number
+  win_return_10?: number
+  place_return_10?: number
+  win_value_edge?: number
+  place_value_edge?: number
+  value_rating?: 'strong' | 'positive' | 'neutral'
 }
 
 export interface PredictionPayload {
   podium: PredictedHorse[]
   all_horses: PredictedHorse[]
+  trifecta?: {
+    horse_ids: string[]
+    horse_names: string[]
+    probability: number
+    fair_return_10: number
+    likelihood: 'high' | 'medium' | 'low'
+    notable_value: boolean
+  }
+  value_opportunities?: Array<{
+    horse_id: string
+    horse_name: string
+    market: 'win' | 'place'
+    probability: number
+    odds: number
+    return_10: number
+    value_edge: number
+  }>
+  feature_snapshots?: Record<string, JsonValue>
 }
 
 export interface Prediction {

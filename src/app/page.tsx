@@ -127,7 +127,7 @@ export default async function Home() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {race.prediction.predictions.podium.map((horse, idx) => (
                         <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
                           <div className="flex items-center gap-2 mb-2">
@@ -141,16 +141,51 @@ export default async function Home() {
                               Predicted: {horse.predicted_time}s
                             </p>
                           )}
-                          {horse.confidence && (
-                            <p className="text-xs text-slate-500 ml-8">
-                              {(horse.confidence * 100).toFixed(0)}%
-                            </p>
-                          )}
+                          <div className="ml-8 space-y-1 text-xs text-slate-600">
+                            <p>{((horse.win_probability ?? horse.confidence) * 100).toFixed(0)}% win</p>
+                            {horse.top3_probability !== undefined && <p>{(horse.top3_probability * 100).toFixed(0)}% top 3</p>}
+                            {horse.win_return_10 !== undefined && <p>${horse.win_return_10.toFixed(2)} return / $10 win</p>}
+                            {horse.place_return_10 !== undefined && <p>${horse.place_return_10.toFixed(2)} return / $10 place</p>}
+                            {horse.value_rating !== 'neutral' && (
+                              <p className={horse.value_rating === 'strong' ? 'font-semibold text-emerald-700' : 'font-medium text-teal-700'}>
+                                {horse.value_rating === 'strong' ? 'Strong model value' : 'Positive model value'}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       )) || (
                         <div className="col-span-3 text-sm text-slate-500">No podium predictions available</div>
                       )}
                     </div>
+
+                    {race.prediction.predictions.trifecta && (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
+                        <p className="font-semibold text-slate-900">
+                          Trifecta likelihood: <span className="capitalize">{race.prediction.predictions.trifecta.likelihood}</span>
+                          {' '}({(race.prediction.predictions.trifecta.probability * 100).toFixed(1)}%)
+                        </p>
+                        <p className="mt-1">
+                          {race.prediction.predictions.trifecta.horse_names.join(' → ')} · model-fair $10 return approximately ${race.prediction.predictions.trifecta.fair_return_10.toFixed(0)}
+                        </p>
+                        {race.prediction.predictions.trifecta.notable_value && (
+                          <p className="mt-1 font-semibold text-emerald-700">Notable likelihood / return profile</p>
+                        )}
+                        <p className="mt-1 text-slate-500">Estimate only. Actual trifecta dividends depend on the pool.</p>
+                      </div>
+                    )}
+
+                    {race.prediction.predictions.value_opportunities?.length ? (
+                      <div className="mt-3 border-t border-slate-100 pt-3">
+                        <p className="text-xs font-semibold uppercase text-slate-600">Value watch</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {race.prediction.predictions.value_opportunities.slice(0, 3).map((opportunity) => (
+                            <span key={`${opportunity.horse_id}-${opportunity.market}`} className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-900">
+                              <strong>{opportunity.horse_name}</strong> · {opportunity.market} {(opportunity.probability * 100).toFixed(0)}% · ${opportunity.return_10.toFixed(2)} / $10
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
 
                     {race.prediction.predictions?.all_horses && race.prediction.predictions.all_horses.length > 3 && (
                       <div className="mt-3 pt-3 border-t border-slate-100">

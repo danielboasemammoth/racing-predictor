@@ -103,7 +103,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
         {prediction && (
           <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
             <h2 className="text-lg font-semibold text-slate-900 mb-4">Prediction</h2>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {prediction.predictions.podium.map((horse, idx) => (
                 <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
                   <div className="flex items-center gap-2 mb-2">
@@ -115,12 +115,24 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                   {horse.predicted_time && (
                     <p className="text-xs text-slate-600 ml-8">Predicted: {horse.predicted_time}s</p>
                   )}
-                  {horse.confidence && (
-                    <p className="text-xs text-slate-500 ml-8">{(horse.confidence * 100).toFixed(0)}%</p>
-                  )}
+                  <div className="ml-8 space-y-1 text-xs text-slate-600">
+                    <p>{((horse.win_probability ?? horse.confidence) * 100).toFixed(0)}% win</p>
+                    {horse.top3_probability !== undefined && <p>{(horse.top3_probability * 100).toFixed(0)}% top 3</p>}
+                    {horse.win_return_10 !== undefined && <p>${horse.win_return_10.toFixed(2)} return / $10 win</p>}
+                    {horse.place_return_10 !== undefined && <p>${horse.place_return_10.toFixed(2)} return / $10 place</p>}
+                    {horse.value_rating !== 'neutral' && <p className="font-semibold text-emerald-700">{horse.value_rating} model value</p>}
+                  </div>
                 </div>
               ))}
             </div>
+            {prediction.predictions.trifecta && (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <p className="font-semibold text-slate-900">
+                  Trifecta: {prediction.predictions.trifecta.horse_names.join(' → ')} · {(prediction.predictions.trifecta.probability * 100).toFixed(1)}% model likelihood
+                </p>
+                <p className="mt-1">Model-fair $10 return approximately ${prediction.predictions.trifecta.fair_return_10.toFixed(0)}. Actual pool dividend will vary.</p>
+              </div>
+            )}
           </div>
         )}
 

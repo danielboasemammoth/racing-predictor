@@ -12,6 +12,11 @@ export interface BacktestOutcome {
   correctPodium: boolean
   timeErrors: number[]
   accuracyScore: number
+  winnerTop3: boolean
+  podiumOverlap: number
+  orderedTrifecta: boolean
+  winnerBrierScore: number
+  winnerLogLoss: number
 }
 
 export function evaluatePrediction(
@@ -31,6 +36,23 @@ export function evaluatePrediction(
   const correctPodium = actualPodium.length === 3
     && predictedPodium.length === 3
     && actualPodium.every((horseId) => predictedPodium.includes(horseId))
+  const orderedTrifecta = actualPodium.length === 3
+    && actualPodium.every((horseId, index) => predictedPodium[index] === horseId)
+  const winnerTop3 = predictedPodium[0] ? actualPodium.includes(predictedPodium[0]) : false
+  const podiumOverlap = actualPodium.length
+    ? predictedPodium.filter((horseId) => actualPodium.includes(horseId)).length / actualPodium.length
+    : 0
+  const winnerId = actualPodium[0]
+  const probabilityField = prediction.all_horses.length ? prediction.all_horses : prediction.podium
+  const winnerProbability = probabilityField.find((horse) => horse.horse_id === winnerId)?.win_probability
+    ?? probabilityField.find((horse) => horse.horse_id === winnerId)?.confidence
+    ?? 0
+  const winnerBrierScore = probabilityField.reduce((sum, horse) => {
+    const probability = horse.win_probability ?? horse.confidence
+    const outcome = horse.horse_id === winnerId ? 1 : 0
+    return sum + (probability - outcome) ** 2
+  }, 0) / Math.max(probabilityField.length, 1)
+  const winnerLogLoss = -Math.log(Math.max(winnerProbability, 1e-9))
   const timeErrors = finishers.flatMap((entry) => {
     const predictedTime = predictedTimes[entry.horse_id]
     return entry.finishing_time !== null && predictedTime > 0
@@ -44,5 +66,10 @@ export function evaluatePrediction(
     correctPodium,
     timeErrors,
     accuracyScore: (Number(correctWinner) + Number(correctPodium)) / 2,
+    winnerTop3,
+    podiumOverlap,
+    orderedTrifecta,
+    winnerBrierScore,
+    winnerLogLoss,
   }
 }
