@@ -86,7 +86,8 @@ create table public.predictions (
   predicted_times jsonb not null,
   actual_results jsonb,
   accuracy_score numeric,
-  created_at timestamptz default now() not null
+  created_at timestamptz default now() not null,
+  unique(race_id, model_version)
 );
 
 -- Accuracy log (daily/weekly aggregates)
@@ -102,7 +103,8 @@ create table public.accuracy_log (
   podium_accuracy numeric not null,
   avg_confidence numeric,
   avg_time_error numeric,
-  model_version text
+  model_version text not null,
+  unique(period_start, period_end, model_version)
 );
 
 -- Data sources (track where data came from)
@@ -127,3 +129,19 @@ create index idx_horses_trainer on public.horses(trainer);
 create index idx_horses_last_race_date on public.horses(last_race_date);
 create index idx_predictions_race_id on public.predictions(race_id);
 create index idx_accuracy_log_period on public.accuracy_log(period_start, period_end);
+
+-- Public clients may read race data. All writes require the server-only service role.
+alter table public.racecourses enable row level security;
+alter table public.races enable row level security;
+alter table public.horses enable row level security;
+alter table public.race_entries enable row level security;
+alter table public.predictions enable row level security;
+alter table public.accuracy_log enable row level security;
+alter table public.data_sources enable row level security;
+
+create policy "Public racecourse read access" on public.racecourses for select using (true);
+create policy "Public race read access" on public.races for select using (true);
+create policy "Public horse read access" on public.horses for select using (true);
+create policy "Public race entry read access" on public.race_entries for select using (true);
+create policy "Public prediction read access" on public.predictions for select using (true);
+create policy "Public accuracy read access" on public.accuracy_log for select using (true);

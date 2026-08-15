@@ -1,26 +1,29 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { RaceWithPrediction } from '@/lib/types'
+import type { Prediction, Race, RaceEntryWithHorse } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
 async function getRaceData(raceId: string) {
   const supabase = await createClient()
-  const { data: race } = await supabase
+  const { data: race, error: raceError } = await supabase
     .from('races')
     .select('*, racecourses(*)')
     .eq('id', raceId)
-    .single()
+    .maybeSingle()
 
+  if (raceError) throw raceError
   if (!race) return null
 
-  const { data: entries } = await supabase
+  const { data: entries, error: entriesError } = await supabase
     .from('race_entries')
     .select('*, horses(*)')
     .eq('race_id', raceId)
     .order('barrier_number', { ascending: true })
 
-  const { data: prediction } = await supabase
+  if (entriesError) throw entriesError
+
+  const { data: prediction, error: predictionError } = await supabase
     .from('predictions')
     .select('*')
     .eq('race_id', raceId)
@@ -28,10 +31,12 @@ async function getRaceData(raceId: string) {
     .limit(1)
     .maybeSingle()
 
+  if (predictionError) throw predictionError
+
   return {
-    race,
-    entries: entries || [],
-    prediction: prediction || null
+    race: race as Race,
+    entries: (entries ?? []) as RaceEntryWithHorse[],
+    prediction: prediction as Prediction | null
   }
 }
 
@@ -52,8 +57,9 @@ function formatDistance(m: number) {
   return `${m}m`
 }
 
-export default async function RaceDetailPage({ params }: { params: { id: string } }) {
-  const data = await getRaceData(params.id)
+export default async function RaceDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const data = await getRaceData(id)
 
   if (!data) {
     return (
@@ -98,7 +104,7 @@ export default async function RaceDetailPage({ params }: { params: { id: string 
           <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
             <h2 className="text-lg font-semibold text-slate-900 mb-4">Prediction</h2>
             <div className="grid grid-cols-3 gap-4">
-              {prediction.predictions?.podium?.map((horse: any, idx: number) => (
+              {prediction.predictions.podium.map((horse, idx) => (
                 <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
                   <div className="flex items-center gap-2 mb-2">
                     <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-400 text-white' : 'bg-slate-300 text-slate-700'}`}>
@@ -135,7 +141,7 @@ export default async function RaceDetailPage({ params }: { params: { id: string 
                 </tr>
               </thead>
               <tbody>
-                {entries.map((entry: any) => (
+                {entries.map((entry) => (
                   <tr key={entry.id} className="border-b border-slate-100">
                     <td className="py-2 px-2">{entry.finishing_position || '—'}</td>
                     <td className="py-2 px-2 font-medium">{entry.horses?.name || 'Unknown'}</td>

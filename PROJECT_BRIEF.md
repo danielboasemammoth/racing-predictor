@@ -31,14 +31,15 @@ Build an Australian horse race prediction app that uses historical race data to 
 - ✅ GitHub repo: https://github.com/danielboasemammoth/racing-predictor
 - ✅ Database schema defined in `supabase/schema.sql`
 - ✅ Pages scaffolded: `/`, `/races/[id]`, `/accuracy`, `/admin`
-- ✅ API route stubs: `/api/admin/scrape`, `/api/admin/scrape-results`, `/api/admin/predict`, `/api/admin/backtest`
-- ✅ Prediction model stub (`v1-heuristic`) with basic scoring logic
+- ✅ Admin API routes protected by an HttpOnly session and server-only key
+- ✅ Typed `v2-heuristic` model with normalized probabilities and condition-aware form scoring
+- ✅ Backtesting for winner, exact podium, and finishing-time error by model version
+- ✅ Unit tests for prediction and backtest behavior
 - ✅ TypeScript types defined in `src/lib/types.ts`
 - ✅ Supabase client wired up in `src/lib/supabase.ts`
 - ⬜ Database schema NOT yet run in Supabase
 - ⬜ No real data ingested yet
 - ⬜ Scrapers not implemented
-- ⬜ Backtesting not implemented
 - ⬜ No RapidAPI integration yet
 
 ## Database Schema (supabase/schema.sql)
@@ -61,7 +62,7 @@ Run this in Supabase SQL Editor after creating your project.
 - races 1→∞ accuracy_log
 
 ### Important Notes
-- All tables have RLS (Row Level Security) — currently allows all operations for simplicity
+- All tables have RLS; public clients can read racing data, while writes require the server-only service role
 - `predictions.predictions` and `confidence_scores` are JSONB for flexibility
 - `race_entries.sectional_times` is JSONB for variable sectional time data
 - Indexes on foreign keys and commonly queried fields
@@ -100,9 +101,11 @@ Create `.env.local` in project root:
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+ADMIN_API_KEY=generate-a-strong-random-secret
 ```
 
-Get these from: Supabase Dashboard → Settings → API
+Get the Supabase values from Supabase Dashboard → Settings → API. Never expose the service-role or admin keys to the browser.
 
 ## What Needs to Be Built Next
 
@@ -136,7 +139,7 @@ Get these from: Supabase Dashboard → Settings → API
 - Store raw HTML/snapshots for debugging if structure changes
 
 ### Priority 2: Prediction Model
-**Current:** `v1-heuristic` in `/api/admin/predict/route.ts` — basic scoring based on win rate, best time, track condition, barrier
+**Current:** `v2-heuristic` in `src/lib/prediction.ts` — typed scoring based on career form, track condition preference, recency, and barrier, with normalized confidence probabilities
 
 **Tasks:**
 1. Improve heuristic model with more features:
@@ -222,17 +225,15 @@ Get these from: Supabase Dashboard → Settings → API
 2. **JSONB for flexible prediction outputs** — allows model structure to evolve without schema migrations
 3. **Heuristic model first** — prove the concept before investing in ML
 4. **Admin-triggered actions** — no cron jobs yet, manual triggers from admin panel
-5. **No auth required for MVP** — public preview, admin panel is unauthenticated (add auth later)
+5. **Public predictions, protected operations** — viewing is public; admin mutations require `ADMIN_API_KEY`
 
 ## Known Issues / TODOs
 - Scrapers not implemented yet
-- Backtesting not implemented yet
 - RapidAPI integration not started
 - No real data in database yet
-- Model is basic heuristic — needs improvement
+- Model still needs venue, jockey, trainer, class, weight, and sectional features
 - No error handling in scrapers
 - No rate limiting on scrapers
-- Admin panel has no authentication
 
 ## Getting Started
 1. Create Supabase project at https://supabase.com/dashboard

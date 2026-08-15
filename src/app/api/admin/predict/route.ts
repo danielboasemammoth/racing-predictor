@@ -1,149 +1,79 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { MODEL_VERSION, predictRace } from '@/lib/prediction'
+import { createAdminClient } from '@/lib/supabase/admin'
+import type { RaceEntryWithHorse } from '@/lib/types'
+import { hasAdminSession } from '@/lib/admin-auth'
 
-interface HorseWithEntry {
-  id: string
-  name: string
-  career_runs?: number
-  career_wins?: number
-  best_time_this_distance?: number
-  wet_form_rating?: number
-  heavy_form_rating?: number
-  dry_form_rating?: number
-  last_race_date?: string
-  last_race_result?: string
-}
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-async function predictRace(raceId: string, entries: any[], horses: HorseWithEntry[]) {
-  const predictions: any = {
-    podium: [],
-    all_horses: [],
-  }
+async function readRaceId(request: Request) {
+  if (!request.headers.get('content-type')?.includes('application/json')) return undefined
 
-  const scored = entries.map(entry => {
-    const horse = horses.find(h => h.id === entry.horse_id)
-    if (!horse) return { ...entry, score: 0, confidence: 0.1 }
-
-    let score = 0
-    let confidence = 0.3
-
-    if (horse.career_runs && horse.career_runs > 0) {
-      const winRate = horse.career_wins! / horse.career_runs
-      score += winRate * 3
-      confidence += Math.min(winRate, 0.3)
-    }
-
-    if (horse.best_time_this_distance) {
-      score += 0.5
-      confidence += 0.1
-    }
-
-    if (horse.wet_form_rating) {
-      score += horse.wet_form_rating * 0.5
-      confidence += 0.1
-    }
-
-    if (horse.last_race_date) {
-      const daysSince = (Date.now() - new Date(horse.last_race_date).getTime()) / 86400000
-      if (daysSince < 30) {
-        score += 0.2
-        confidence += 0.05
-      }
-    }
-
-    if (entry.barrier_number && entry.barrier_number <= 4) {
-      score += 0.15
-    }
-
-    return {
-      ...entry,
-      horse_name: horse.name,
-      score,
-      confidence: Math.min(confidence, 0.95),
-      predicted_time: horse.best_time_this_distance || null,
-    }
-  })
-
-  scored.sort((a: any, b: any) => b.score - a.score)
-
-  const podium = scored.slice(0, 3).map((s: any, idx: number) => ({
-    horse_id: s.horse_id,
-    horse_name: s.horse_name,
-    predicted_position: idx + 1,
-    predicted_time: s.predicted_time,
-    confidence: s.confidence,
-  }))
-
-  const allHorses = scored.map((s: any, idx: number) => ({
-    horse_id: s.horse_id,
-    horse_name: s.horse_name,
-    predicted_position: idx + 1,
-    predicted_time: s.predicted_time,
-    confidence: s.confidence,
-  }))
-
-  predictions.podium = podium
-  predictions.all_horses = allHorses
-
-  const overallConfidence = podium.reduce((sum: number, p: any) => sum + (p.confidence || 0), 0) / Math.max(podium.length, 1)
-
-  return {
-    predictions,
-    confidence_scores: {
-      overall: overallConfidence,
-      winner: podium[0]?.confidence || 0,
-      podium: overallConfidence,
-    },
-    predicted_times: Object.fromEntries(scored.map((s: any) => [s.horse_id, s.predicted_time || 0])),
-  }
+  const body: unknown = await request.json()
+  if (typeof body !== 'object' || body === null || !('raceId' in body)) return undefined
+  return typeof body.raceId === 'string' ? body.raceId : null
 }
 
 export async function POST(request: Request) {
+  if (!await hasAdminSession()) {
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
-    const body = await request.json().catch(() => ({})) as { raceId?: string }
-    const { raceId } = body
-
-    const supabase = await createClient()
-    let racesToPredict: any[] = []
-
-    if (raceId) {
-      const { data } = await supabase.from('races').select('id').eq('id', raceId).eq('status', 'upcoming').single()
-      if (data) racesToPredict = [data]
-    } else {
-      const { data } = await supabase.from('races').select('id').eq('status', 'upcoming').limit(20)
-      racesToPredict = data || []
+    const raceId = await readRaceId(request)
+    if (raceId === null || (raceId !== undefined && !UUID_PATTERN.test(raceId))) {
+      return NextResponse.json({ success: false, message: 'raceId must be a valid UUID' }, { status: 400 })
     }
 
-    if (racesToPredict.length === 0) {
-      return NextResponse.json({ success: false, message: 'No upcoming races to predict' })
+    const supabase = createAdminClient()
+    let raceQuery = supabase.from('races').select('id, track_condition').eq('status', 'upcoming')
+    raceQuery = raceId ? raceQuery.eq('id', raceId) : raceQuery.limit(20)
+
+    const { data: races, error: racesError } = await raceQuery
+    if (racesError) throw racesError
+    if (!races?.length) {
+      return NextResponse.json({ success: false, message: 'No upcoming races to predict' }, { status: 404 })
     }
 
     let created = 0
+    let skipped = 0
 
-    for (const race of racesToPredict) {
-      const { data: entries } = await supabase
+    for (const race of races) {
+      const { data: entries, error: entriesError } = await supabase
         .from('race_entries')
         .select('*, horses(*)')
         .eq('race_id', race.id)
 
-      if (!entries || entries.length === 0) continue
+      if (entriesError) throw entriesError
+      const typedEntries = (entries ?? []) as RaceEntryWithHorse[]
+      if (!typedEntries.some((entry) => entry.horses)) {
+        skipped += 1
+        continue
+      }
 
-      const horses: HorseWithEntry[] = entries.map(e => e.horses).filter(Boolean) as HorseWithEntry[]
-      const result = await predictRace(race.id, entries, horses)
-
-      await supabase.from('predictions').insert({
+      const result = predictRace(typedEntries, race.track_condition ?? undefined)
+      const { error: predictionError } = await supabase.from('predictions').upsert({
         race_id: race.id,
-        model_version: 'v1-heuristic',
+        model_version: MODEL_VERSION,
         predictions: result.predictions,
         confidence_scores: result.confidence_scores,
         predicted_times: result.predicted_times,
-      })
+        predicted_at: new Date().toISOString(),
+      }, { onConflict: 'race_id,model_version' })
 
-      created++
+      if (predictionError) throw predictionError
+      created += 1
     }
 
-    return NextResponse.json({ success: true, created, message: `Generated predictions for ${created} races` })
+    return NextResponse.json({
+      success: true,
+      created,
+      skipped,
+      modelVersion: MODEL_VERSION,
+      message: `Generated predictions for ${created} races`,
+    })
   } catch (error) {
-    return NextResponse.json({ success: false, error: String(error) }, { status: 500 })
+    console.error('Prediction run failed', error)
+    return NextResponse.json({ success: false, message: 'Prediction run failed' }, { status: 500 })
   }
 }

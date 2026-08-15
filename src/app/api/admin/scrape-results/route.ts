@@ -1,12 +1,13 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { hasAdminSession } from '@/lib/admin-auth'
 
 export async function POST() {
-  try {
-    const supabase = await createClient()
-    // TODO: Implement actual result scraping from Breednet / Racing.com
-    return NextResponse.json({ success: true, message: 'Result scraper stub — implement in scraper module' })
-  } catch (error) {
-    return NextResponse.json({ success: false, error: String(error) }, { status: 500 })
+  if (!await hasAdminSession()) {
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
   }
+
+  return NextResponse.json(
+    { success: false, message: 'Race result ingestion is not configured' },
+    { status: 501 },
+  )
 }

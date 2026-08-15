@@ -53,9 +53,28 @@ export interface RaceEntry {
   trainer?: string
   finishing_position?: number
   finishing_time?: number
-  sectional_times?: any
+  sectional_times?: JsonValue
   margin?: number
   status: string
+}
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
+
+export type RaceEntryWithHorse = RaceEntry & {
+  horses: Horse | null
+}
+
+export interface PredictedHorse {
+  horse_id: string
+  horse_name: string
+  predicted_position: number
+  predicted_time?: number
+  confidence: number
+}
+
+export interface PredictionPayload {
+  podium: PredictedHorse[]
+  all_horses: PredictedHorse[]
 }
 
 export interface Prediction {
@@ -63,29 +82,14 @@ export interface Prediction {
   race_id: string
   model_version: string
   predicted_at: string
-  predictions: {
-    podium?: Array<{
-      horse_id: string
-      horse_name: string
-      predicted_position: number
-      predicted_time?: number
-      confidence: number
-    }>
-    all_horses?: Array<{
-      horse_id: string
-      horse_name: string
-      predicted_position: number
-      predicted_time?: number
-      confidence: number
-    }>
-  }
+  predictions: PredictionPayload
   confidence_scores: {
     overall: number
     winner?: number
     podium?: number
   }
   predicted_times: Record<string, number>
-  actual_results?: any
+  actual_results?: JsonValue
   accuracy_score?: number
 }
 

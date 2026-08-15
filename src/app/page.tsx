@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { RaceWithPrediction, Prediction } from '@/lib/types'
+import { Race, RaceWithPrediction, Prediction } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
 async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
   const supabase = await createClient()
-  const { data: races } = await supabase
+  const { data: races, error: racesError } = await supabase
     .from('races')
     .select('*, racecourses(*)')
     .eq('status', 'upcoming')
@@ -14,23 +14,28 @@ async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
     .order('race_datetime', { ascending: true })
     .limit(20)
 
-  if (!races || races.length === 0) return []
+  if (racesError) throw racesError
 
-  const { data: predictions } = await supabase
+  const typedRaces = (races ?? []) as Race[]
+  if (typedRaces.length === 0) return []
+
+  const { data: predictions, error: predictionsError } = await supabase
     .from('predictions')
     .select('*')
-    .in('race_id', races.map((r: any) => r.id))
+    .in('race_id', typedRaces.map((race) => race.id))
     .order('predicted_at', { ascending: false })
 
+  if (predictionsError) throw predictionsError
+
   const predictionMap = new Map<string, Prediction>()
-  predictions?.forEach((p: Prediction) => {
-    const existing = predictionMap.get(p.race_id)
-    if (!existing || new Date(p.predicted_at) > new Date(existing.predicted_at)) {
-      predictionMap.set(p.race_id, p)
+  ;(predictions as Prediction[] | null)?.forEach((prediction) => {
+    const existing = predictionMap.get(prediction.race_id)
+    if (!existing || new Date(prediction.predicted_at) > new Date(existing.predicted_at)) {
+      predictionMap.set(prediction.race_id, prediction)
     }
   })
 
-  return races.map((race: any) => ({
+  return typedRaces.map((race) => ({
     ...race,
     prediction: predictionMap.get(race.id) || null
   }))
@@ -123,7 +128,7 @@ export default async function Home() {
                     </div>
 
                     <div className="grid grid-cols-3 gap-4">
-                      {race.prediction.predictions?.podium?.map((horse: any, idx: number) => (
+                      {race.prediction.predictions.podium.map((horse, idx) => (
                         <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
                           <div className="flex items-center gap-2 mb-2">
                             <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-400 text-white' : 'bg-slate-300 text-slate-700'}`}>
@@ -150,7 +155,7 @@ export default async function Home() {
                     {race.prediction.predictions?.all_horses && race.prediction.predictions.all_horses.length > 3 && (
                       <div className="mt-3 pt-3 border-t border-slate-100">
                         <p className="text-xs text-slate-600">
-                          Full field: {race.prediction.predictions.all_horses.map((h: any) => h.horse_name).join(', ')}
+                          Full field: {race.prediction.predictions.all_horses.map((horse) => horse.horse_name).join(', ')}
                         </p>
                       </div>
                     )}

@@ -19,8 +19,9 @@ See `supabase/schema.sql` — run this in Supabase SQL Editor after creating you
 ## Getting Started
 1. Create Supabase project at https://supabase.com/dashboard
 2. Run `supabase/schema.sql` in SQL Editor
-3. Add env vars to Vercel: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-4. Deploy to Vercel
+3. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and a strong server-only `ADMIN_API_KEY`
+4. Run `npm run lint`, `npm test`, and `npm run build`
+5. Deploy to Vercel
 
 ## Data Sources
 - Scrapes public race data (Racing.com, Breednet)
@@ -28,7 +29,8 @@ See `supabase/schema.sql` — run this in Supabase SQL Editor after creating you
 - All data stored in Supabase for model training
 
 ## Prediction Model
-- Current: v1-heuristic (simple scoring based on form, barriers, track conditions)
+- Current: v2-heuristic (career form, condition preference, recency, barriers, and normalized probabilities)
+- Backtesting scores winners, exact podiums, and finishing-time error by model version
 - Future: ML model trained on historical race outcomes
-- Confidence scores calibrated against actual results
+- Confidence calibration is tracked against actual results
 - Continuous improvement via backtesting

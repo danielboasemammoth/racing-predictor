@@ -1,17 +1,17 @@
 import { createClient } from '@/lib/supabase/server'
-import { AccuracyLog } from '@/lib/types'
 import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
 async function getAccuracyLogs() {
   const supabase = await createClient()
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('accuracy_log')
     .select('*')
     .order('period_end', { ascending: false })
     .limit(30)
 
+  if (error) throw error
   return data || []
 }
 
@@ -25,8 +25,13 @@ export default async function AccuracyPage() {
   const logs = await getAccuracyLogs()
 
   const latest = logs[0]
-  const avgWinner = logs.reduce((sum, log) => sum + (log.winner_accuracy || 0), 0) / logs.length
-  const avgPodium = logs.reduce((sum, log) => sum + (log.podium_accuracy || 0), 0) / logs.length
+  const totalRaces = logs.reduce((sum, log) => sum + log.total_races, 0)
+  const avgWinner = totalRaces > 0
+    ? logs.reduce((sum, log) => sum + log.correct_winners, 0) / totalRaces
+    : 0
+  const avgPodium = totalRaces > 0
+    ? logs.reduce((sum, log) => sum + log.correct_podiums, 0) / totalRaces
+    : 0
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -56,14 +61,14 @@ export default async function AccuracyPage() {
                 <p className={`text-3xl font-bold ${getAccuracyColor(avgWinner)}`}>
                   {(avgWinner * 100).toFixed(1)}%
                 </p>
-                <p className="text-xs text-slate-500 mt-1">Across {logs.length} periods</p>
+                <p className="text-xs text-slate-500 mt-1">Across {totalRaces} races</p>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 p-6">
                 <p className="text-sm text-slate-600 mb-1">Overall Podium Accuracy</p>
                 <p className={`text-3xl font-bold ${getAccuracyColor(avgPodium)}`}>
                   {(avgPodium * 100).toFixed(1)}%
                 </p>
-                <p className="text-xs text-slate-500 mt-1">Across {logs.length} periods</p>
+                <p className="text-xs text-slate-500 mt-1">Across {totalRaces} races</p>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 p-6">
                 <p className="text-sm text-slate-600 mb-1">Latest Period</p>
