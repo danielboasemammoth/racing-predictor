@@ -4,6 +4,7 @@ import {
   predictContextualRace,
   type HistoricalStart,
 } from '@/lib/prediction-v3'
+import { predictConsensusRace } from '@/lib/prediction-consensus'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { RaceEntryWithHorse } from '@/lib/types'
 import { hasAdminSession } from '@/lib/admin-auth'
@@ -12,7 +13,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 interface PredictionOptions {
   raceId?: string
-  mode?: 'retrospective'
+  mode?: 'retrospective' | 'consensus'
 }
 
 interface HistoricalEntryRow {
@@ -52,7 +53,9 @@ function bestOdds(entry: RaceEntryWithHorse) {
 }
 
 async function readOptions(request: Request): Promise<PredictionOptions | null> {
-  if (!request.headers.get('content-type')?.includes('application/json')) return {}
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return {}
+  }
 
   const body: unknown = await request.json()
   if (typeof body !== 'object' || body === null) return null
@@ -60,8 +63,12 @@ async function readOptions(request: Request): Promise<PredictionOptions | null> 
   const raceId = 'raceId' in body ? body.raceId : undefined
   const mode = 'mode' in body ? body.mode : undefined
   if (raceId !== undefined && typeof raceId !== 'string') return null
-  if (mode !== undefined && mode !== 'retrospective') return null
-  return { raceId, mode }
+  if (mode !== undefined && !['retrospective', 'consensus'].includes(mode as string)) return null
+
+  return {
+    raceId,
+    mode: mode as PredictionOptions['mode'],
+  }
 }
 
 export async function POST(request: Request) {
@@ -76,9 +83,13 @@ export async function POST(request: Request) {
     }
 
     const status = options.mode === 'retrospective' ? 'completed' : 'upcoming'
-    const modelVersion = options.mode === 'retrospective'
-      ? `${CONTEXTUAL_MODEL_VERSION}-retrospective`
-      : CONTEXTUAL_MODEL_VERSION
+    const useConsensus = options.mode === 'consensus'
+    const modelVersion = useConsensus
+      ? 'v3.2-consensus'
+      : options.mode === 'retrospective'
+        ? `${CONTEXTUAL_MODEL_VERSION}-retrospective`
+        : CONTEXTUAL_MODEL_VERSION
+
     const supabase = createAdminClient()
     let raceQuery = supabase
       .from('races')
@@ -159,19 +170,39 @@ export async function POST(request: Request) {
         continue
       }
 
-      const result = predictContextualRace({
-        race: {
-          id: race.id,
-          racecourseId: race.racecourse_id,
-          raceDatetime: race.race_datetime,
-          distanceM: race.distance_m ?? undefined,
-          trackCondition: race.track_condition ?? undefined,
-          raceClass: race.race_class ?? undefined,
-        },
-        entries: typedEntries,
-        history,
-        oddsByHorse: Object.fromEntries(typedEntries.map((entry) => [entry.horse_id, bestOdds(entry)])),
-      })
+      const oddsByHorse = Object.fromEntries(typedEntries.map((entry) => [entry.horse_id, bestOdds(entry)]))
+
+      let result
+      if (useConsensus) {
+        result = predictConsensusRace({
+          race: {
+            id: race.id,
+            racecourseId: race.racecourse_id,
+            raceDatetime: race.race_datetime,
+            distanceM: race.distance_m ?? undefined,
+            trackCondition: race.track_condition ?? undefined,
+            raceClass: race.race_class ?? undefined,
+          },
+          entries: typedEntries,
+          history,
+          oddsByHorse,
+        })
+      } else {
+        result = predictContextualRace({
+          race: {
+            id: race.id,
+            racecourseId: race.racecourse_id,
+            raceDatetime: race.race_datetime,
+            distanceM: race.distance_m ?? undefined,
+            trackCondition: race.track_condition ?? undefined,
+            raceClass: race.race_class ?? undefined,
+          },
+          entries: typedEntries,
+          history,
+          oddsByHorse,
+        })
+      }
+
       const { error: predictionError } = await supabase.from('predictions').upsert({
         race_id: race.id,
         model_version: modelVersion,
