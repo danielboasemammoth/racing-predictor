@@ -158,7 +158,7 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     .filter((start) => start.horseId === entry.horse_id)
     .sort((left, right) => right.raceDatetime.localeCompare(left.raceDatetime))
   const recentStarts = horseHistory.slice(0, 5)
-  const weights = [1, 0.8, 0.65, 0.5, 0.4]
+  const weights = [1, 0.85, 0.7, 0.55, 0.4]
   const weightTotal = recentStarts.reduce((sum, _, index) => sum + weights[index], 0) || 1
   const recentForm = recentStarts.reduce((sum, start, index) => sum + resultScore(start) * weights[index], 0) / weightTotal
   const contextualForm = recentStarts.reduce(
@@ -172,6 +172,11 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     ? knownWeights.reduce((sum, weight) => sum + weight, 0) / knownWeights.length
     : entry.weight_carried ?? 0
   const daysSince = lastStart ? (targetTime - new Date(lastStart.raceDatetime).getTime()) / 86_400_000 : 60
+  const fitness = daysSince <= 14 ? 1
+    : daysSince <= 35 ? 0.95
+      : daysSince <= 60 ? 0.85
+        : daysSince <= 90 ? 0.7
+          : 0.4
   const courseDistance = availableHistory.filter((start) =>
     start.racecourseId === target.racecourseId
     && Math.abs((start.distanceM ?? targetDistance) - targetDistance) <= 200,
@@ -196,8 +201,8 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     jockeyForm: strikeRate(availableHistory, 'jockey', entry.jockey, target),
     trainerForm: strikeRate(availableHistory, 'trainer', entry.trainer, target),
     barrierSuitability: suitability(sameBarrierBand, () => true),
-    weightSuitability: clamp(0.5 + (averageWeight - (entry.weight_carried ?? averageWeight)) * 0.05),
-    fitness: daysSince >= 7 && daysSince <= 42 ? 1 : daysSince <= 90 ? 0.65 : 0.35,
+    weightSuitability: clamp(0.5 + (averageWeight - (entry.weight_carried ?? averageWeight)) * 0.12),
+    fitness,
     historyStarts: horseHistory.length,
   }
   return { features, recentStarts }
@@ -210,13 +215,13 @@ function score(features: Features, fieldSize = 10) {
     + (features.distanceSuitability - 0.5) * 1.1
     + (features.conditionSuitability - 0.5) * 1.1
     + (features.courseSuitability - 0.5) * 0.7
-    + (features.classMovement - 0.5) * 0.9
+    + (features.classMovement - 0.5) * 0.6
     + (features.speedRating - 0.5) * 1.2
     + (features.jockeyForm - 0.5) * 0.8
     + (features.trainerForm - 0.5) * 0.8
-    + (features.barrierSuitability - 0.5) * 0.35
-    + (features.weightSuitability - 0.5) * 0.5
-    + (features.fitness - 0.5) * 0.45
+    + (features.barrierSuitability - 0.5) * 0.55
+    + (features.weightSuitability - 0.5) * 0.7
+    + (features.fitness - 0.5) * 0.65
     + fieldSizeAdjustment
 }
 
