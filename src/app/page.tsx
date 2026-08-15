@@ -100,7 +100,7 @@ export default async function Home() {
                     <p className="text-sm text-slate-600">{race.race_name}</p>
                     <div className="flex gap-4 mt-2 text-xs text-slate-500">
                       <span>{formatDateTime(race.race_datetime)}</span>
-                      <span>{formatDistance(race.distance_m)}</span>
+                      <span>{formatDistance(race.distance_m || 0)}</span>
                       {race.track_condition && <span className="capitalize">{race.track_condition}</span>}
                       {race.weather_condition && <span className="capitalize">{race.weather_condition}</span>}
                     </div>
