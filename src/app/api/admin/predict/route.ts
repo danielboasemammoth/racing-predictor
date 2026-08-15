@@ -186,6 +186,7 @@ export async function POST(request: Request) {
           entries: typedEntries,
           history,
           oddsByHorse,
+          fieldSize: typedEntries.length,
         })
       } else {
         result = predictContextualRace({
@@ -200,6 +201,7 @@ export async function POST(request: Request) {
           entries: typedEntries,
           history,
           oddsByHorse,
+          fieldSize: typedEntries.length,
         })
       }
 

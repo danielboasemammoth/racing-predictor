@@ -14,6 +14,7 @@ export interface ConsensusInput {
   entries: RaceEntryWithHorse[]
   history: HistoricalStart[]
   oddsByHorse?: Record<string, { win?: number; place?: number }>
+  fieldSize?: number
 }
 
 export function predictConsensusRace(input: ConsensusInput) {
@@ -22,6 +23,7 @@ export function predictConsensusRace(input: ConsensusInput) {
     entries: input.entries,
     history: input.history,
     oddsByHorse: input.oddsByHorse,
+    fieldSize: input.fieldSize,
   })
 
   const crossChecks = [

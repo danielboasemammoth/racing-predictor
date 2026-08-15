@@ -40,6 +40,7 @@ export interface ContextualPredictionInput {
   entries: RaceEntryWithHorse[]
   history: HistoricalStart[]
   oddsByHorse?: Record<string, EntryOdds>
+  fieldSize?: number
 }
 
 export interface ContextualPredictionResult {
@@ -179,11 +180,15 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     start.barrier && entry.barrier_number
     && (start.barrier <= 4) === (entry.barrier_number <= 4),
   )
+  const distanceBand = horseHistory.filter((start) =>
+    start.distanceM !== undefined && target.distanceM !== undefined
+    && Math.abs(start.distanceM - target.distanceM) <= 200,
+  )
 
   const features: Features = {
     recentForm: recentStarts.length ? recentForm : 0.5,
     contextualForm: recentStarts.length ? contextualForm : 0.5,
-    distanceSuitability: suitability(horseHistory, (start) => Math.abs((start.distanceM ?? targetDistance) - targetDistance) <= 200),
+    distanceSuitability: suitability(distanceBand, () => true),
     conditionSuitability: suitability(horseHistory, (start) => conditionGroup(start.trackCondition) === conditionGroup(target.trackCondition)),
     courseSuitability: suitability(horseHistory, (start) => start.racecourseId === target.racecourseId),
     classMovement: lastStart ? clamp(0.5 + (classRating(lastStart.raceClass) - classRating(target.raceClass)) * 0.08) : 0.5,
@@ -198,7 +203,8 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
   return { features, recentStarts }
 }
 
-function score(features: Features) {
+function score(features: Features, fieldSize = 10) {
+  const fieldSizeAdjustment = Math.log(fieldSize) * 0.08
   return (features.recentForm - 0.5) * 2.2
     + (features.contextualForm - 0.5) * 2.8
     + (features.distanceSuitability - 0.5) * 1.1
@@ -211,6 +217,7 @@ function score(features: Features) {
     + (features.barrierSuitability - 0.5) * 0.35
     + (features.weightSuitability - 0.5) * 0.5
     + (features.fitness - 0.5) * 0.45
+    + fieldSizeAdjustment
 }
 
 function placeProbabilities(scores: number[]) {
@@ -247,7 +254,7 @@ export function predictContextualRace(input: ContextualPredictionInput): Context
       return {
         horseId: entry.horse_id,
         horseName: entry.horses.name,
-        score: score(features),
+        score: score(features, input.fieldSize),
         features,
         recentStarts,
         predictedTime,
