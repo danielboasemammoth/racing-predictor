@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation'
 const actions = [
   { path: '/api/admin/scrape', label: 'Scrape Upcoming Races', detail: 'Import upcoming races from public sources' },
   { path: '/api/admin/scrape-results', label: 'Scrape Race Results', detail: 'Import results for completed races' },
-  { path: '/api/admin/predict', label: 'Run Prediction Model', detail: 'Generate predictions for upcoming races' },
+  { path: '/api/admin/predict', label: 'Run Prediction Model', detail: 'Generate predictions for upcoming races', mode: undefined },
+  { path: '/api/admin/predict', label: 'Run Consensus Model', detail: 'Generate predictions with cross-model consensus', mode: 'consensus' },
   { path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
 ]
 
@@ -16,12 +17,19 @@ export function AdminActions() {
   const [message, setMessage] = useState<string>()
   const [isError, setIsError] = useState(false)
 
-  async function runAction(path: string) {
+  async function runAction(path: string, mode?: string) {
     setPendingPath(path)
     setMessage(undefined)
 
     try {
-      const response = await fetch(path, { method: 'POST' })
+      const body: Record<string, string> = { raceId: '' }
+      if (mode) body.mode = mode
+
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
       const payload = await response.json() as { message?: string }
       setIsError(!response.ok)
       setMessage(payload.message ?? (response.ok ? 'Action completed' : 'Action failed'))
@@ -41,7 +49,7 @@ export function AdminActions() {
           key={action.path}
           type="button"
           disabled={Boolean(pendingPath)}
-          onClick={() => runAction(action.path)}
+          onClick={() => runAction(action.path, action.mode)}
           className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition disabled:cursor-wait disabled:opacity-60"
         >
           <span className="block font-medium text-slate-900">
