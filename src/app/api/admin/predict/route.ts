@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
 interface HorseWithEntry {
@@ -103,6 +103,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({})) as { raceId?: string }
     const { raceId } = body
 
+    const supabase = await createClient()
     let racesToPredict: any[] = []
 
     if (raceId) {

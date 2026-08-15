@@ -1,8 +1,11 @@
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { RaceWithPrediction, Prediction } from '@/lib/types'
 
+export const dynamic = 'force-dynamic'
+
 async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
+  const supabase = await createClient()
   const { data: races } = await supabase
     .from('races')
     .select('*, racecourses(*)')
