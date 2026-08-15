@@ -1,69 +1,168 @@
-import Image from "next/image";
+import { createClient } from '@/lib/supabase'
+import Link from 'next/link'
+import { RaceWithPrediction, Racecourse, Prediction } from '@/lib/types'
 
-export default function Home() {
+async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
+  const supabase = createClient()
+  const { data: races } = await supabase
+    .from('races')
+    .select('*, racecourses(*)')
+    .eq('status', 'upcoming')
+    .gte('race_datetime', new Date().toISOString())
+    .order('race_datetime', { ascending: true })
+    .limit(20)
+
+  if (!races || races.length === 0) return []
+
+  const { data: predictions } = await supabase
+    .from('predictions')
+    .select('*')
+    .in('race_id', races.map((r: any) => r.id))
+    .order('predicted_at', { ascending: false })
+
+  const predictionMap = new Map<string, Prediction>()
+  predictions?.forEach((p: Prediction) => {
+    const existing = predictionMap.get(p.race_id)
+    if (!existing || new Date(p.predicted_at) > new Date(existing.predicted_at)) {
+      predictionMap.set(p.race_id, p)
+    }
+  })
+
+  return races.map((race: any) => ({
+    ...race,
+    prediction: predictionMap.get(race.id) || null
+  }))
+}
+
+function formatDateTime(iso: string) {
+  const d = new Date(iso)
+  return d.toLocaleString('en-AU', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Australia/Sydney'
+  })
+}
+
+function formatDistance(m: number) {
+  if (m >= 1000) return `${m / 1000}km`
+  return `${m}m`
+}
+
+function getConfidenceColor(conf: number) {
+  if (conf >= 0.7) return 'text-green-700 bg-green-50'
+  if (conf >= 0.5) return 'text-amber-700 bg-amber-50'
+  return 'text-red-700 bg-red-50'
+}
+
+export default async function Home() {
+  const races = await getUpcomingRaces()
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-slate-50">
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">Racing Predictor</h1>
+              <p className="text-sm text-slate-600 mt-1">Australian horse race predictions powered by historical data</p>
+            </div>
+            <div className="flex gap-3">
+              <Link href="/accuracy" className="text-sm font-medium text-teal-700 hover:text-teal-800">Accuracy</Link>
+              <Link href="/admin" className="text-sm font-medium text-slate-600 hover:text-slate-900">Admin</Link>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        {races.length === 0 ? (
+          <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
+            <p className="text-slate-600 mb-2">No upcoming races with predictions yet.</p>
+            <Link href="/admin" className="text-teal-700 font-medium hover:underline">Go to Admin to run prediction model</Link>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-900">Upcoming Races</h2>
+              <span className="text-sm text-slate-600">{races.length} races</span>
+            </div>
+
+            {races.map((race) => (
+              <div key={race.id} className="bg-white rounded-xl border border-slate-200 p-6 hover:shadow-md transition">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <div className="flex items-center gap-3 mb-1">
+                      <h3 className="text-lg font-semibold text-slate-900">{race.racecourses?.name}</h3>
+                      <span className="text-sm text-slate-600">Race {race.race_number}</span>
+                    </div>
+                    <p className="text-sm text-slate-600">{race.race_name}</p>
+                    <div className="flex gap-4 mt-2 text-xs text-slate-500">
+                      <span>{formatDateTime(race.race_datetime)}</span>
+                      <span>{formatDistance(race.distance_m)}</span>
+                      {race.track_condition && <span className="capitalize">{race.track_condition}</span>}
+                      {race.weather_condition && <span className="capitalize">{race.weather_condition}</span>}
+                    </div>
+                  </div>
+                  <Link href={`/races/${race.id}`} className="text-sm font-medium text-teal-700 hover:text-teal-800">
+                    View details →
+                  </Link>
+                </div>
+
+                {race.prediction ? (
+                  <div className="border-t border-slate-100 pt-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-xs font-medium text-slate-600">PREDICTED PODIUM</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getConfidenceColor(race.prediction.confidence_scores?.overall || 0)}`}>
+                        {Math.round((race.prediction.confidence_scores?.overall || 0) * 100)}% confidence
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      {race.prediction.predictions?.podium?.map((horse: any, idx: number) => (
+                        <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-400 text-white' : 'bg-slate-300 text-slate-700'}`}>
+                              {idx + 1}
+                            </span>
+                            <span className="font-semibold text-slate-900 text-sm">{horse.horse_name}</span>
+                          </div>
+                          {horse.predicted_time && (
+                            <p className="text-xs text-slate-600 ml-8">
+                              Predicted: {horse.predicted_time}s
+                            </p>
+                          )}
+                          {horse.confidence && (
+                            <p className="text-xs text-slate-500 ml-8">
+                              {(horse.confidence * 100).toFixed(0)}%
+                            </p>
+                          )}
+                        </div>
+                      )) || (
+                        <div className="col-span-3 text-sm text-slate-500">No podium predictions available</div>
+                      )}
+                    </div>
+
+                    {race.prediction.predictions?.all_horses && race.prediction.predictions.all_horses.length > 3 && (
+                      <div className="mt-3 pt-3 border-t border-slate-100">
+                        <p className="text-xs text-slate-600">
+                          Full field: {race.prediction.predictions.all_horses.map((h: any) => h.horse_name).join(', ')}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="border-t border-slate-100 pt-4 text-sm text-slate-500">
+                    No predictions yet — run model from Admin
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </main>
     </div>
-  );
+  )
 }
