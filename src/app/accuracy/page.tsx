@@ -1,9 +1,8 @@
-import { createClient } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 import { AccuracyLog } from '@/lib/types'
 import Link from 'next/link'
 
 async function getAccuracyLogs() {
-  const supabase = createClient()
   const { data } = await supabase
     .from('accuracy_log')
     .select('*')

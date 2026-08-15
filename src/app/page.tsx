@@ -1,9 +1,8 @@
-import { createClient } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
-import { RaceWithPrediction, Racecourse, Prediction } from '@/lib/types'
+import { RaceWithPrediction, Prediction } from '@/lib/types'
 
 async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
-  const supabase = createClient()
   const { data: races } = await supabase
     .from('races')
     .select('*, racecourses(*)')
