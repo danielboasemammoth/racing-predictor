@@ -9,18 +9,38 @@ Flemington,2026-08-18T14:30:00+10:00,1400,Good 3,BM78,Silver Dash,3,85.78,0.55,1
 Caulfield,2026-08-17T16:00:00+10:00,1200,Soft 5,BM64,Swift Star,1,68.12,0.45,1,60.0,C. Williams,M. Moroney
 Caulfield,2026-08-17T16:00:00+10:00,1200,Soft 5,BM64,Wild Spirit,2,68.35,0.62,9,59.5,L. Nolen,J. Cummings`
 
+interface CsvSample {
+  racecourse: string
+  race_datetime: string
+  entries: number
+}
+
+interface CsvSummary {
+  races: number
+  entries?: number
+  racesCreated?: number
+  entriesCreated?: number
+  errors?: string[]
+  sample?: CsvSample[]
+}
+
+interface CsvResponse {
+  message?: string
+  summary?: CsvSummary
+}
+
 export function CsvImporter() {
   const [csv, setCsv] = useState(SAMPLE_CSV)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string>()
   const [isError, setIsError] = useState(false)
-  const [preview, setPreview] = useState<any>(null)
+  const [preview, setPreview] = useState<CsvSummary>()
 
   async function handleDryRun() {
     setLoading(true)
     setMessage(undefined)
     setIsError(false)
-    setPreview(null)
+    setPreview(undefined)
 
     try {
       const response = await fetch('/api/admin/import-csv', {
@@ -28,7 +48,7 @@ export function CsvImporter() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ csv, dryRun: true }),
       })
-      const payload = await response.json()
+      const payload = await response.json() as CsvResponse
       setIsError(!response.ok)
       setMessage(payload.message ?? (response.ok ? 'Dry run complete' : 'Dry run failed'))
       if (response.ok) setPreview(payload.summary)
@@ -47,7 +67,7 @@ export function CsvImporter() {
     setLoading(true)
     setMessage(undefined)
     setIsError(false)
-    setPreview(null)
+    setPreview(undefined)
 
     try {
       const response = await fetch('/api/admin/import-csv', {
@@ -55,7 +75,7 @@ export function CsvImporter() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ csv, dryRun: false }),
       })
-      const payload = await response.json()
+      const payload = await response.json() as CsvResponse
       setIsError(!response.ok)
       setMessage(payload.message ?? (response.ok ? 'Import complete' : 'Import failed'))
       if (response.ok) setPreview(payload.summary)
@@ -119,7 +139,7 @@ export function CsvImporter() {
               <div>
                 <div className="mt-2 text-xs text-zinc-500">Sample:</div>
                 <ul className="ml-4 list-disc">
-                  {preview.sample.map((item: any) => (
+                  {preview.sample.map((item) => (
                     <li key={item.race_datetime}>
                       {item.racecourse} - {item.race_datetime} ({item.entries} runners)
                     </li>

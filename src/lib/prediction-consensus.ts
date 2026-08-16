@@ -36,8 +36,6 @@ export function predictConsensusRace(input: ConsensusInput) {
   const agreementCount = crossChecks.filter((model) => model.predictions.podium[0]?.horse_id === contextualWinner).length
 
   const baseWinnerConfidence = contextual.confidence_scores.winner ?? contextual.predictions.podium[0]?.confidence ?? 0
-  const agreementBoost = agreementCount * 0.05
-  const adjustedWinnerConfidence = Math.min(baseWinnerConfidence + agreementBoost, 0.95)
 
   const crossCheckPodiums = crossChecks.map((model) => model.predictions.podium.map((p) => p.horse_id))
 
@@ -45,8 +43,8 @@ export function predictConsensusRace(input: ConsensusInput) {
     model: 'v3.2-consensus',
     predictions: contextual.predictions,
     confidence_scores: {
-      overall: adjustedWinnerConfidence,
-      winner: adjustedWinnerConfidence,
+      overall: baseWinnerConfidence,
+      winner: baseWinnerConfidence,
       podium: contextual.confidence_scores.podium,
     },
     predicted_times: contextual.predicted_times,
@@ -57,7 +55,7 @@ export function predictConsensusRace(input: ConsensusInput) {
       cross_check_podiums: crossCheckPodiums,
       contextual_winner: contextualWinner,
       disagreement_flag: agreementCount === 0,
-      confidence_boost: agreementBoost,
+      confidence_boost: 0,
     },
   }
 }

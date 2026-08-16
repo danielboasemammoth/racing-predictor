@@ -1,18 +1,9 @@
-import { createClient } from '@supabase/supabase-js'
 import 'dotenv/config'
 import { config } from 'dotenv'
+import { createScriptClient } from './supabase-client'
 config({ path: '.env.local' })
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-if (!url || !key) {
-  console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY')
-  process.exit(1)
-}
-
-const supabase = createClient(url, key, {
-  auth: { autoRefreshToken: false, persistSession: false },
-})
+const supabase = createScriptClient()
 
 const VICTORIA_RACECOURSES = [
   'Flemington',
@@ -67,7 +58,6 @@ type EntryRow = {
 
 function normaliseRacecourse(name: string): string | null {
   const value = name.trim()
-  // @ts-ignore
   return VICTORIA_RACECOURSES.find((course) => value.toLowerCase().includes(course.toLowerCase())) ?? null
 }
 
@@ -79,7 +69,7 @@ async function loadVictoriaRacecourses() {
   if (error) throw error
 
   return (data ?? [])
-    .map((rc: any) => ({ id: rc.id, normalised: normaliseRacecourse(rc.name) }))
+    .map((racecourse) => ({ id: racecourse.id, normalised: normaliseRacecourse(racecourse.name) }))
     .filter((rc) => rc.normalised != null)
 }
 

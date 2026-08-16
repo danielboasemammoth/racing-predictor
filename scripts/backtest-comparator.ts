@@ -2,23 +2,44 @@ import 'dotenv/config'
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 
-import { createClient } from '@supabase/supabase-js'
-import { evaluatePrediction } from '../src/lib/backtest'
+import { evaluatePrediction, type BacktestOutcome } from '../src/lib/backtest'
 import { predictContextualRace, type HistoricalStart } from '../src/lib/prediction-v3'
 import { predictConsensusRace } from '../src/lib/prediction-consensus'
+import type { RaceEntryWithHorse } from '../src/lib/types'
+import { createScriptClient } from './supabase-client'
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-if (!url || !key) {
-  console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY')
-  console.error('Loaded URL:', url)
-  console.error('Loaded KEY:', key)
-  process.exit(1)
+interface CompletedRace {
+  id: string
+  race_datetime: string
+  distance_m: number | null
+  track_condition: string | null
+  race_class: string | null
+  racecourse_id: string
 }
 
-const supabase = createClient(url, key, {
-  auth: { autoRefreshToken: false, persistSession: false },
-})
+interface HistoricalRow {
+  race_id: string
+  horse_id: string
+  finishing_position: number | null
+  finishing_time: number | null
+  margin: number | null
+  barrier_number: number | null
+  weight_carried: number | null
+  jockey: string | null
+  trainer: string | null
+  races: {
+    racecourse_id: string
+    race_datetime: string
+    distance_m: number | null
+    track_condition: string | null
+    race_class: string | null
+    field: Array<{ count: number }>
+  }
+}
+
+type ModelOutcome = BacktestOutcome & { raceId: string; confidence: number }
+
+const supabase = createScriptClient()
 
 async function loadCompletedRaces(limit = 200) {
   const { data: races, error } = await supabase
@@ -29,7 +50,7 @@ async function loadCompletedRaces(limit = 200) {
     .limit(limit)
 
   if (error) throw error
-  return races ?? []
+  return (races ?? []) as CompletedRace[]
 }
 
 async function loadEntriesForRaces(raceIds: string[]) {
@@ -39,13 +60,13 @@ async function loadEntriesForRaces(raceIds: string[]) {
     .in('race_id', raceIds)
 
   if (error) throw error
-  return entries ?? []
+  return (entries ?? []) as unknown as RaceEntryWithHorse[]
 }
 
 async function loadHistoryForHorses(horseIds: string[]) {
   const pageSize = 1000
   const chunkSize = 40
-  const rows: any[] = []
+  const rows: HistoricalRow[] = []
 
   for (let offset = 0; offset < horseIds.length; offset += chunkSize) {
     const horseIdsChunk = horseIds.slice(offset, offset + chunkSize)
@@ -66,7 +87,7 @@ async function loadHistoryForHorses(horseIds: string[]) {
         .range(page, page + pageSize - 1)
 
       if (error) throw error
-      rows.push(...(data ?? []))
+      rows.push(...((data ?? []) as unknown as HistoricalRow[]))
       if (!data || data.length < pageSize) break
     }
   }
@@ -90,13 +111,9 @@ async function loadHistoryForHorses(horseIds: string[]) {
   })) as HistoricalStart[]
 }
 
-function runModel(model: 'contextual' | 'consensus', entries: any[], race: any, history: HistoricalStart[]) {
+function runModel(model: 'contextual' | 'consensus', entries: RaceEntryWithHorse[], race: CompletedRace, history: HistoricalStart[]) {
   const typedEntries = entries
-    .filter((e: any) => e.status !== 'scratched')
-    .map((e: any) => ({
-      ...e,
-      horses: e.horses ?? null,
-    })) as any[]
+    .filter((entry) => entry.status !== 'scratched')
 
   if (model === 'consensus') {
     return predictConsensusRace({
@@ -135,14 +152,14 @@ async function compareModels() {
   const horseIds = [...new Set(entries.map((e) => e.horse_id))]
   const history = await loadHistoryForHorses(horseIds)
 
-  const entriesByRace = new Map<string, any[]>()
+  const entriesByRace = new Map<string, RaceEntryWithHorse[]>()
   for (const entry of entries) {
     const existing = entriesByRace.get(entry.race_id) ?? []
     existing.push(entry)
     entriesByRace.set(entry.race_id, existing)
   }
 
-  const models: Array<{ name: string; key: 'contextual' | 'consensus'; outcomes: any[] }> = [
+  const models: Array<{ name: string; key: 'contextual' | 'consensus'; outcomes: ModelOutcome[] }> = [
     { name: 'v3.1 contextual', key: 'contextual', outcomes: [] },
     { name: 'v3.2 consensus', key: 'consensus', outcomes: [] },
   ]
@@ -158,8 +175,8 @@ async function compareModels() {
         result.predicted_times,
         raceEntries.map((e) => ({
           horse_id: e.horse_id,
-          finishing_position: e.finishing_position,
-          finishing_time: e.finishing_time,
+          finishing_position: e.finishing_position ?? null,
+          finishing_time: e.finishing_time ?? null,
         })),
       )
 

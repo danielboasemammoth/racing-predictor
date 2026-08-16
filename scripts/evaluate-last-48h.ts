@@ -1,18 +1,10 @@
-import { createClient } from '@supabase/supabase-js'
 import 'dotenv/config'
 import { config } from 'dotenv'
+import type { PredictionPayload } from '../src/lib/types'
+import { createScriptClient } from './supabase-client'
 config({ path: '.env.local' })
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-if (!url || !key) {
-  console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY')
-  process.exit(1)
-}
-
-const supabase = createClient(url, key, {
-  auth: { autoRefreshToken: false, persistSession: false },
-})
+const supabase = createScriptClient()
 
 type RaceRow = {
   id: string
@@ -44,8 +36,8 @@ type HorseRow = {
 
 type PredictionRow = {
   race_id: string
-  predictions: any
-  confidence_scores: any
+  predictions: PredictionPayload
+  confidence_scores: { winner?: number }
   predicted_at: string
 }
 
@@ -79,7 +71,6 @@ const VICTORIA_RACECOURSES = [
 
 function normaliseRacecourse(name: string): string | null {
   const value = name.trim()
-  // @ts-ignore
   return VICTORIA_RACECOURSES.find((course) => value.toLowerCase().includes(course.toLowerCase())) ?? null
 }
 
@@ -181,14 +172,14 @@ function buildEntriesByRace(entries: EntryRow[]) {
 function buildPredictionsByRace(predictions: PredictionRow[]) {
   const map = new Map<string, PredictionRow>()
   for (const prediction of predictions) {
-    map.set(prediction.race_id, prediction)
+    if (!map.has(prediction.race_id)) map.set(prediction.race_id, prediction)
   }
   return map
 }
 
 function pickPredictedPodium(prediction: PredictionRow): Array<{ horse_id: string; horse_name?: string; win_probability?: number }> {
   const podium = prediction.predictions?.podium ?? prediction.predictions?.all_horses?.slice(0, 3) ?? []
-  return podium.map((horse: any) => ({
+  return podium.map((horse) => ({
     horse_id: horse.horse_id,
     horse_name: horse.horse_name,
     win_probability: horse.win_probability,
@@ -212,8 +203,8 @@ function scorePrediction(predictedPodium: Array<{ horse_id: string }>, actualPod
   const actualIds = actualPodium.map((entry) => entry.horse_id)
 
   const winnerCorrect = predictedIds[0] === actualIds[0]
-  const exacta = predictedIds[1] === actualIds[1]
-  const trifecta = predictedIds[2] === actualIds[2]
+  const exacta = actualIds.length >= 2 && predictedIds.slice(0, 2).every((id, index) => id === actualIds[index])
+  const trifecta = actualIds.length >= 3 && predictedIds.slice(0, 3).every((id, index) => id === actualIds[index])
   const anyCorrect = predictedIds.some((id) => actualIds.includes(id))
 
   return {
@@ -238,9 +229,8 @@ async function evaluateLast48Hours() {
   console.log(`Victoria races: ${victoriaRaces.length}`)
 
   const raceIds = races.map((race) => race.id)
-  const [entries, horses, predictions] = await Promise.all([
+  const [entries, predictions] = await Promise.all([
     loadEntriesForRaces(raceIds),
-    loadHorses([...new Set(races.flatMap((race) => []))]),
     loadPredictionsForRaces(raceIds),
   ])
 
@@ -263,9 +253,10 @@ async function evaluateLast48Hours() {
     const prediction = predictionsByRace.get(race.id)
     if (!prediction) continue
 
-    predictedRaces += 1
     const predictedPodium = pickPredictedPodium(prediction)
     const actualPodium = pickActualPodium(raceEntries, horseMap)
+    if (!actualPodium.length) continue
+    predictedRaces += 1
     const result = scorePrediction(predictedPodium, actualPodium)
     totalScore += result.score
     maxScore += 6

@@ -93,6 +93,9 @@ describe('v3 contextual ranking', () => {
     })
 
     expect(result.predictions.podium[0].horse_id).toBe('alpha')
+    expect(result.predictions.all_horses.reduce((sum, horse) => sum + (horse.win_probability ?? 0), 0)).toBeCloseTo(1)
+    expect(result.predictions.all_horses.map((horse) => horse.win_probability ?? 0))
+      .toEqual([...result.predictions.all_horses].map((horse) => horse.win_probability ?? 0).sort((left, right) => right - left))
     expect(result.predictions.feature_snapshots?.alpha).toBeDefined()
     expect(result.predictions.trifecta?.fair_return_10).toBeGreaterThan(0)
   })

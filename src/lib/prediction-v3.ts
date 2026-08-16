@@ -1,5 +1,4 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
-import { drawBiasScore } from '@/lib/victoria-draw-bias'
 
 export const CONTEXTUAL_MODEL_VERSION = 'v3.1-contextual-ranking'
 const PROBABILITY_TEMPERATURE = 1.8
@@ -64,7 +63,6 @@ interface Features {
   weightSuitability: number
   fitness: number
   historyStarts: number
-  drawBias: number
 }
 
 interface RankedEntry {
@@ -160,13 +158,12 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     .filter((start) => start.horseId === entry.horse_id)
     .sort((left, right) => right.raceDatetime.localeCompare(left.raceDatetime))
   const recentStarts = horseHistory.slice(0, 5)
-  const weights = [1, 0.85, 0.7, 0.55, 0.4]
-  const weightTotal = recentStarts.reduce((sum, _, index) => sum + weights[index], 0) || 1
-  const recentForm = recentStarts.reduce((sum, start, index) => sum + resultScore(start) * Math.exp(-index / 4), 0)
+  const weightTotal = recentStarts.reduce((sum, _, index) => sum + Math.exp(-index / 4), 0) || 1
+  const recentForm = recentStarts.reduce((sum, start, index) => sum + resultScore(start) * Math.exp(-index / 4), 0) / weightTotal
   const contextualForm = recentStarts.reduce(
     (sum, start, index) => sum + resultScore(start) * contextualSimilarity(start, target) * Math.exp(-index / 4),
     0,
-  )
+  ) / weightTotal
   const targetDistance = target.distanceM ?? 0
   const lastStart = recentStarts[0]
   const knownWeights = horseHistory.flatMap((start) => start.weight ? [start.weight] : [])
@@ -206,13 +203,11 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     weightSuitability: clamp(0.5 + (averageWeight - (entry.weight_carried ?? averageWeight)) * 0.12),
     fitness,
     historyStarts: horseHistory.length,
-    drawBias: drawBiasScore(target.racecourseId, entry.barrier_number),
   }
   return { features, recentStarts }
 }
 
-function score(features: Features, fieldSize = 10) {
-  const fieldSizeAdjustment = Math.log(fieldSize) * 0.08
+function score(features: Features) {
   return (features.recentForm - 0.5) * 2.2
     + (features.contextualForm - 0.5) * 2.8
     + (features.distanceSuitability - 0.5) * 1.1
@@ -225,8 +220,6 @@ function score(features: Features, fieldSize = 10) {
     + (features.barrierSuitability - 0.5) * 0.55
     + (features.weightSuitability - 0.5) * 0.7
     + (features.fitness - 0.5) * 0.65
-    + (features.drawBias - 0.5) * 0.5
-    + fieldSizeAdjustment
 }
 
 function placeProbabilities(scores: number[]) {
@@ -263,7 +256,7 @@ export function predictContextualRace(input: ContextualPredictionInput): Context
       return {
         horseId: entry.horse_id,
         horseName: entry.horses.name,
-        score: score(features, input.fieldSize),
+        score: score(features),
         features,
         recentStarts,
         predictedTime,
@@ -277,15 +270,18 @@ export function predictContextualRace(input: ContextualPredictionInput): Context
     top3Probability: probabilities.top3[index],
   })).sort((left, right) => right.winProbability - left.winProbability || left.horseName.localeCompare(right.horseName))
 
-  const calibrated = scored.map((entry) => {
+  const calibrationRows = scored.map((entry) => {
     const historyWeight = clamp((entry.features.historyStarts - 3) / 12, 0, 1)
     const baseRate = entry.features.historyStarts > 0
       ? clamp((entry.features.recentForm - 0.5) * 0.6 + 0.12)
       : 0.05
     const winProbability = entry.winProbability * (0.7 + historyWeight * 0.3) + baseRate * (1 - historyWeight) * 0.3
-    const top3Probability = entry.top3Probability * (0.7 + historyWeight * 0.3) + baseRate * 3 * (1 - historyWeight) * 0.3
-    return { ...entry, winProbability, top3Probability: clamp(top3Probability) }
+    return { ...entry, winProbability }
   })
+  const calibratedTotal = calibrationRows.reduce((sum, entry) => sum + entry.winProbability, 0) || 1
+  const calibrated = calibrationRows
+    .map((entry) => ({ ...entry, winProbability: entry.winProbability / calibratedTotal }))
+    .sort((left, right) => right.winProbability - left.winProbability || left.horseName.localeCompare(right.horseName))
 
   const allHorses: PredictedHorse[] = calibrated.map((entry, index) => {
     const winEdge = entry.odds.win ? entry.winProbability * entry.odds.win - 1 : undefined

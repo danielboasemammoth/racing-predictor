@@ -1,4 +1,14 @@
 import { NextResponse } from 'next/server'
+import { hasAdminSession } from '@/lib/admin-auth'
+import {
+  inferColumns,
+  isValidHorseName,
+  missingRequiredColumns,
+  normaliseRacecourse,
+  optionalNumber,
+  optionalValue,
+  parseCsv,
+} from '@/lib/csv-import'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export const dynamic = 'force-dynamic'
@@ -10,6 +20,7 @@ interface RaceRow {
   track_condition?: string
   race_class?: string
   status?: string
+  race_number?: number
 }
 
 interface EntryRow {
@@ -26,37 +37,13 @@ interface EntryRow {
   status?: string
 }
 
-function normaliseRacecourse(name: string): string | null {
-  const value = name.trim()
-  const victoriaCourses = [
-    'Flemington',
-    'Caulfield',
-    'Moonee Valley',
-    'Sandown',
-    'Ballarat',
-    'Bendigo',
-    'Geelong',
-    'Mornington',
-    'Sale',
-    'Cranbourne',
-    'Pakenham',
-    'Melton',
-    'Healesville',
-    'Traralgon',
-    'Moe',
-    'Wodonga',
-    'Shepparton',
-    'Mildura',
-    'Wangaratta',
-    'Ararat',
-    'Echuca',
-    'Swan Hill',
-    'Horsham',
-    'Casterton',
-    'Portland',
-  ]
-  // @ts-ignore
-  return victoriaCourses.find((course) => value.toLowerCase().includes(course.toLowerCase())) ?? null
+function raceStatus(value?: string) {
+  return ['upcoming', 'live', 'completed', 'cancelled'].includes(value ?? '') ? value : 'completed'
+}
+
+function entryStatus(value: string | undefined, finishingPosition?: number) {
+  if (['running', 'finished', 'scratched', 'did_not_finish'].includes(value ?? '')) return value
+  return finishingPosition !== undefined ? 'finished' : 'running'
 }
 
 async function findOrCreateRacecourse(name: string): Promise<string> {
@@ -79,7 +66,7 @@ async function findOrCreateRacecourse(name: string): Promise<string> {
 
   const { data: created, error: createError } = await supabase
     .from('racecourses')
-    .insert({ name: normalised })
+    .insert({ name: normalised, state: 'VIC', region: 'Victoria' })
     .select('id')
     .single()
 
@@ -110,71 +97,11 @@ async function findOrCreateHorse(name: string): Promise<string> {
   return created.id
 }
 
-function parseCsv(text: string): string[][] {
-  const lines = text.trim().split(/\r?\n/)
-  const rows: string[][] = []
-  let current: string[] = []
-  let currentField = ''
-  let inQuotes = false
-
-  for (const line of lines) {
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i]
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          currentField += '"'
-          i += 1
-        } else {
-          inQuotes = !inQuotes
-        }
-      } else if (char === ',' && !inQuotes) {
-        current.push(currentField.trim())
-        currentField = ''
-      } else {
-        currentField += char
-      }
-    }
-    current.push(currentField.trim())
-    currentField = ''
-    if (!inQuotes) {
-      rows.push(current)
-      current = []
-    }
-  }
-
-  if (currentField || current.length) {
-    rows.push(current)
-  }
-
-  return rows
-}
-
-function inferColumns(headers: string[]): { race: RaceRow; entries: EntryRow[]; idx: Record<string, number> } {
-  const lower = headers.map((h) => h.toLowerCase())
-  const race: RaceRow = { racecourse: '', race_datetime: '', status: 'completed' }
-  const entries: EntryRow[] = []
-
-  const idx = {
-    racecourse: lower.indexOf('racecourse'),
-    race_datetime: lower.indexOf('race_datetime') !== -1 ? lower.indexOf('race_datetime') : lower.indexOf('date'),
-    distance_m: lower.indexOf('distance_m') !== -1 ? lower.indexOf('distance_m') : lower.indexOf('distance'),
-    track_condition: lower.indexOf('track_condition') !== -1 ? lower.indexOf('track_condition') : lower.indexOf('condition'),
-    race_class: lower.indexOf('race_class') !== -1 ? lower.indexOf('race_class') : lower.indexOf('class'),
-    horse_name: lower.indexOf('horse_name') !== -1 ? lower.indexOf('horse_name') : lower.indexOf('horse'),
-    finishing_position: lower.indexOf('finishing_position') !== -1 ? lower.indexOf('finishing_position') : lower.indexOf('position'),
-    finishing_time: lower.indexOf('finishing_time') !== -1 ? lower.indexOf('finishing_time') : lower.indexOf('time'),
-    margin: lower.indexOf('margin'),
-    barrier_number: lower.indexOf('barrier_number') !== -1 ? lower.indexOf('barrier_number') : lower.indexOf('barrier'),
-    weight_carried: lower.indexOf('weight_carried') !== -1 ? lower.indexOf('weight_carried') : lower.indexOf('weight'),
-    jockey: lower.indexOf('jockey'),
-    trainer: lower.indexOf('trainer'),
-    status: lower.indexOf('status'),
-  }
-
-  return { race, entries, idx }
-}
-
 export async function POST(request: Request) {
+  if (!await hasAdminSession()) {
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
+  }
+
   const supabase = createAdminClient()
 
   try {
@@ -185,14 +112,32 @@ export async function POST(request: Request) {
     if (!csv) {
       return NextResponse.json({ success: false, message: 'Missing CSV payload' }, { status: 400 })
     }
+    if (csv.length > 1_000_000) {
+      return NextResponse.json({ success: false, message: 'CSV exceeds the 1 MB limit' }, { status: 413 })
+    }
 
-    const rows = parseCsv(csv)
+    let rows: string[][]
+    try {
+      rows = parseCsv(csv)
+    } catch (error) {
+      return NextResponse.json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Malformed CSV',
+      }, { status: 400 })
+    }
     if (!rows.length) {
       return NextResponse.json({ success: false, message: 'Empty CSV' }, { status: 400 })
     }
 
     const headers = rows[0]
-    const { race, entries, idx } = inferColumns(headers)
+    const idx = inferColumns(headers)
+    const missingColumns = missingRequiredColumns(idx)
+    if (missingColumns.length) {
+      return NextResponse.json({
+        success: false,
+        message: `Missing required columns: ${missingColumns.join(', ')}`,
+      }, { status: 400 })
+    }
 
     const dataRows = rows.slice(1)
     if (!dataRows.length) {
@@ -202,37 +147,39 @@ export async function POST(request: Request) {
     const racesMap = new Map<string, { race: RaceRow; entries: EntryRow[] }>()
 
     for (const row of dataRows) {
-      const racecourse = row[idx.racecourse] ?? ''
-      const raceDatetime = row[idx.race_datetime] ?? ''
-      if (!racecourse || !raceDatetime) continue
+      const racecourse = optionalValue(row, idx.racecourse) ?? ''
+      const raceDatetime = optionalValue(row, idx.race_datetime) ?? ''
+      if (!normaliseRacecourse(racecourse) || !Number.isFinite(Date.parse(raceDatetime))) continue
 
       const key = `${racecourse.trim()}|${raceDatetime.trim()}`
       const existing = racesMap.get(key) ?? {
         race: {
           racecourse: racecourse.trim(),
           race_datetime: raceDatetime.trim(),
-          distance_m: row[idx.distance_m] ? Number(row[idx.distance_m]) : undefined,
-          track_condition: row[idx.track_condition]?.trim() ?? undefined,
-          race_class: row[idx.race_class]?.trim() ?? undefined,
-          status: row[idx.status]?.trim() || 'completed',
+          race_number: optionalNumber(row, idx.race_number) ?? 1,
+          distance_m: optionalNumber(row, idx.distance_m),
+          track_condition: optionalValue(row, idx.track_condition),
+          race_class: optionalValue(row, idx.race_class),
+          status: raceStatus(optionalValue(row, idx.status)),
         },
         entries: [],
       }
 
-      const horseName = row[idx.horse_name]?.trim()
-      if (horseName) {
+      const horseName = optionalValue(row, idx.horse_name)
+      if (horseName && isValidHorseName(horseName)) {
+        const finishingPosition = optionalNumber(row, idx.finishing_position)
         existing.entries.push({
           racecourse: racecourse.trim(),
           race_datetime: raceDatetime.trim(),
           horse_name: horseName,
-          finishing_position: row[idx.finishing_position] ? Number(row[idx.finishing_position]) : undefined,
-          finishing_time: row[idx.finishing_time] ? Number(row[idx.finishing_time]) : undefined,
-          margin: row[idx.margin] ? Number(row[idx.margin]) : undefined,
-          barrier_number: row[idx.barrier_number] ? Number(row[idx.barrier_number]) : undefined,
-          weight_carried: row[idx.weight_carried] ? Number(row[idx.weight_carried]) : undefined,
-          jockey: row[idx.jockey]?.trim() ?? undefined,
-          trainer: row[idx.trainer]?.trim() ?? undefined,
-          status: row[idx.status]?.trim() || 'finished',
+          finishing_position: finishingPosition,
+          finishing_time: optionalNumber(row, idx.finishing_time),
+          margin: optionalNumber(row, idx.margin),
+          barrier_number: optionalNumber(row, idx.barrier_number),
+          weight_carried: optionalNumber(row, idx.weight_carried),
+          jockey: optionalValue(row, idx.jockey),
+          trainer: optionalValue(row, idx.trainer),
+          status: entryStatus(optionalValue(row, idx.status), finishingPosition),
         })
       }
 
@@ -284,6 +231,7 @@ export async function POST(request: Request) {
             .from('races')
             .insert({
               racecourse_id: racecourseId,
+              race_number: group.race.race_number ?? 1,
               race_datetime: group.race.race_datetime,
               distance_m: group.race.distance_m,
               track_condition: group.race.track_condition,

@@ -1,10 +1,32 @@
-import { Suspense } from 'react'
-import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import Link from 'next/link'
+import type { PredictedHorse } from '@/lib/types'
 
 const PAGE_SIZE = 20
 
+interface VerifyRace {
+  id: string
+  race_datetime: string
+  distance_m: number | null
+  track_condition: string | null
+  race_class: string | null
+  status: string
+  racecourse: string
+}
+
+interface VerifyEntry {
+  position: number | null
+  horse: string
+}
+
+function relatedName(value: unknown) {
+  const relation = Array.isArray(value) ? value[0] : value
+  if (!relation || typeof relation !== 'object' || !('name' in relation)) return 'Unknown'
+  return typeof relation.name === 'string' ? relation.name : 'Unknown'
+}
+
 async function loadRaces(page: number) {
-  const supabase = createAdminClient()
+  const supabase = await createClient()
   const from = (page - 1) * PAGE_SIZE
   const to = from + PAGE_SIZE - 1
 
@@ -19,9 +41,11 @@ async function loadRaces(page: number) {
 
   if (racesResult.error) throw racesResult.error
 
-  const races = racesResult.data.map((race: any) => ({
+  if (countResult.error) throw countResult.error
+
+  const races: VerifyRace[] = racesResult.data.map((race) => ({
     ...race,
-    racecourse: (race.racecourses as any)?.name ?? 'Unknown',
+    racecourse: relatedName(race.racecourses),
   }))
 
   return {
@@ -33,7 +57,7 @@ async function loadRaces(page: number) {
 }
 
 async function loadEntries(raceId: string) {
-  const supabase = createAdminClient()
+  const supabase = await createClient()
   const { data, error } = await supabase
     .from('race_entries')
     .select('finishing_position, horse_id, horses(id, name)')
@@ -43,46 +67,53 @@ async function loadEntries(raceId: string) {
   if (error) throw error
   return data.map((entry) => ({
     position: entry.finishing_position,
-    horse: (entry.horses as any)?.name ?? 'Unknown',
+    horse: relatedName(entry.horses),
   }))
 }
 
 async function loadPredictions(raceId: string) {
-  const supabase = createAdminClient()
+  const supabase = await createClient()
   const { data, error } = await supabase
     .from('predictions')
-    .select('predicted_position, horses(id, name)')
+    .select('predictions, predicted_at')
     .eq('race_id', raceId)
-    .order('predicted_position', { ascending: true })
+    .order('predicted_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   if (error) throw error
-  return data.map((pred) => ({
-    position: pred.predicted_position,
-    horse: (pred.horses as any)?.name ?? 'Unknown',
+  const podium = (data?.predictions?.podium ?? []) as PredictedHorse[]
+  return podium.map((horse) => ({
+    position: horse.predicted_position,
+    horse: horse.horse_name,
   }))
 }
 
 function buildRacingComUrl(racecourse: string, dateStr: string) {
   const slug = racecourse.toLowerCase().replace(/\s+/g, '-')
-  return `https://www.racing.com/races/${slug}/${dateStr}`
+  return `https://www.racing.com/form/${dateStr}/${slug}`
 }
 
 export const dynamic = 'force-dynamic'
 
 export default async function VerifyPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const { page: pageParam } = await searchParams
-  const page = Number(pageParam) || 1
-  const { races, total, totalPages } = await loadRaces(page)
+  const requestedPage = Math.max(1, Math.floor(Number(pageParam) || 1))
+  const initial = await loadRaces(requestedPage)
+  const page = Math.min(requestedPage, Math.max(initial.totalPages, 1))
+  const { races, total, totalPages } = page === requestedPage ? initial : await loadRaces(page)
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto max-w-6xl px-4 py-10">
+      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
-          <h1 className="text-2xl font-semibold text-zinc-100">Race Data Verification</h1>
-          <p className="mt-1 text-sm text-zinc-400">
+          <h1 className="text-2xl font-bold text-slate-900">Race Data Verification</h1>
+          <p className="mt-1 text-sm text-slate-600">
             Cross-check our data against live Racing.com results. {total} races in database.
           </p>
         </div>
+        <Link href="/" className="text-sm font-semibold text-teal-700 hover:text-teal-900">Back to races</Link>
       </div>
 
       <div className="space-y-4">
@@ -96,29 +127,30 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
           {page > 1 && (
             <a
               href={`/verify?page=${page - 1}`}
-              className="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
             >
               ← Previous
             </a>
           )}
-          <span className="text-sm text-zinc-500">
+          <span className="text-sm font-medium text-slate-600">
             Page {page} of {totalPages}
           </span>
           {page < totalPages && (
             <a
               href={`/verify?page=${page + 1}`}
-              className="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
             >
               Next →
             </a>
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }
 
-async function RaceCard({ race }: { race: any }) {
+async function RaceCard({ race }: { race: VerifyRace }) {
   const [entries, predictions] = await Promise.all([
     loadEntries(race.id),
     loadPredictions(race.id),
@@ -130,17 +162,17 @@ async function RaceCard({ race }: { race: any }) {
   const hasPredictions = predictions.length > 0
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <div className="mb-3 flex items-start justify-between gap-4">
+    <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-100">
+          <h2 className="text-lg font-bold text-slate-900">
             {race.racecourse} — {new Date(race.race_datetime).toLocaleString('en-AU')}
           </h2>
-          <div className="mt-1 flex flex-wrap gap-2 text-xs text-zinc-400">
-            {race.distance_m && <span className="rounded bg-zinc-800 px-2 py-1">{race.distance_m}m</span>}
-            {race.track_condition && <span className="rounded bg-zinc-800 px-2 py-1">{race.track_condition}</span>}
-            {race.race_class && <span className="rounded bg-zinc-800 px-2 py-1">{race.race_class}</span>}
-            <span className={`rounded px-2 py-1 ${race.status === 'completed' ? 'bg-emerald-900/30 text-emerald-300' : 'bg-blue-900/30 text-blue-300'}`}>
+          <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium text-slate-700">
+            {race.distance_m && <span className="rounded bg-slate-100 px-2 py-1">{race.distance_m}m</span>}
+            {race.track_condition && <span className="rounded bg-slate-100 px-2 py-1">{race.track_condition}</span>}
+            {race.race_class && <span className="rounded bg-slate-100 px-2 py-1">{race.race_class}</span>}
+            <span className={`rounded px-2 py-1 font-semibold ${race.status === 'completed' ? 'bg-emerald-100 text-emerald-800' : 'bg-sky-100 text-sky-800'}`}>
               {race.status}
             </span>
           </div>
@@ -149,33 +181,33 @@ async function RaceCard({ race }: { race: any }) {
           href={racingComUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700"
+          className="shrink-0 rounded-lg border border-teal-700 bg-white px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-50"
         >
           View on Racing.com ↗
         </a>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <h3 className="mb-2 text-sm font-medium text-zinc-300">Our Predictions</h3>
+        <div className="rounded-lg border border-teal-200 bg-teal-50 p-4">
+          <h3 className="mb-3 text-xs font-bold uppercase text-teal-800">Our Predictions</h3>
           {hasPredictions ? (
             <ol className="space-y-1">
               {predictions.map((pred) => (
                 <li key={pred.position} className="flex items-center gap-2 text-sm">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-900/40 text-xs font-semibold text-teal-300">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-teal-700 text-xs font-bold text-white">
                     {pred.position}
                   </span>
-                  <span className="text-zinc-300">{pred.horse}</span>
+                  <span className="font-medium text-slate-900">{pred.horse}</span>
                 </li>
               ))}
             </ol>
           ) : (
-            <p className="text-sm text-zinc-500">No predictions yet</p>
+            <p className="text-sm text-slate-600">No predictions yet</p>
           )}
         </div>
 
-        <div>
-          <h3 className="mb-2 text-sm font-medium text-zinc-300">Actual Results</h3>
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+          <h3 className="mb-3 text-xs font-bold uppercase text-emerald-800">Actual Results</h3>
           {hasResults ? (
             <ol className="space-y-1">
               {entries
@@ -183,15 +215,15 @@ async function RaceCard({ race }: { race: any }) {
                 .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
                 .map((entry) => (
                   <li key={entry.position} className="flex items-center gap-2 text-sm">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-900/40 text-xs font-semibold text-emerald-300">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-700 text-xs font-bold text-white">
                       {entry.position}
                     </span>
-                    <span className="text-zinc-300">{entry.horse}</span>
+                    <span className="font-medium text-slate-900">{entry.horse}</span>
                   </li>
                 ))}
             </ol>
           ) : (
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-slate-600">
               No results imported yet.{' '}
               {race.status === 'upcoming' && 'Race has not been run.'}
             </p>
@@ -202,15 +234,17 @@ async function RaceCard({ race }: { race: any }) {
       {hasPredictions && hasResults && (
         <AccuracyBadge predictions={predictions} entries={entries.filter((e) => e.position)} />
       )}
-    </div>
+    </article>
   )
 }
 
-function AccuracyBadge({ predictions, entries }: { predictions: any[]; entries: any[] }) {
-  const predictedTop3 = predictions.filter((p) => p.position <= 3).map((p) => p.horse)
+function AccuracyBadge({ predictions, entries }: { predictions: VerifyEntry[]; entries: VerifyEntry[] }) {
+  const hasPosition = (entry: VerifyEntry): entry is VerifyEntry & { position: number } => entry.position !== null
+  const predictedTop3 = predictions.filter(hasPosition).filter((p) => p.position <= 3).map((p) => p.horse)
   const actualTop3 = entries
+    .filter(hasPosition)
     .filter((e) => e.position <= 3)
-    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    .sort((a, b) => a.position - b.position)
     .map((e) => e.horse)
 
   const hits = predictedTop3.filter((horse) => actualTop3.includes(horse)).length
@@ -219,16 +253,16 @@ function AccuracyBadge({ predictions, entries }: { predictions: any[]; entries: 
   return (
     <div className="mt-4 flex flex-wrap gap-2">
       {winnerHit && (
-        <span className="rounded-lg border border-emerald-800 bg-emerald-900/20 px-3 py-1.5 text-xs font-medium text-emerald-300">
+        <span className="rounded-lg border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">
           ✓ Winner predicted correctly
         </span>
       )}
       {!winnerHit && (
-        <span className="rounded-lg border border-red-900 bg-red-900/20 px-3 py-1.5 text-xs font-medium text-red-300">
+        <span className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800">
           ✗ Winner missed
         </span>
       )}
-      <span className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-400">
+      <span className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
         Podium hits: {hits}/3
       </span>
     </div>

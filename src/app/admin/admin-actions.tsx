@@ -4,37 +4,26 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 const actions = [
-  { path: '/api/admin/scrape', label: 'Scrape Upcoming Races', detail: 'Import upcoming races from public sources' },
-  { path: '/api/admin/scrape-results', label: 'Scrape Race Results', detail: 'Import results for completed races' },
-  { path: '/api/admin/predict', label: 'Run Prediction Model', detail: 'Generate predictions for upcoming races', mode: undefined },
-  { path: '/api/admin/predict', label: 'Run Consensus Model', detail: 'Generate predictions with cross-model consensus', mode: 'consensus' },
-  { path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
-  { path: '/api/admin/import-csv', label: 'Import Race CSV', detail: 'Upload Victoria race results as CSV' },
+  { id: 'scrape-races', path: '/api/admin/scrape', label: 'Scrape Upcoming Races', detail: 'Import upcoming races from public sources' },
+  { id: 'scrape-results', path: '/api/admin/scrape-results', label: 'Scrape Race Results', detail: 'Import results for completed races' },
+  { id: 'predict-contextual', path: '/api/admin/predict', label: 'Run Prediction Model', detail: 'Generate predictions for upcoming races', mode: undefined },
+  { id: 'predict-consensus', path: '/api/admin/predict', label: 'Run Consensus Model', detail: 'Generate predictions with cross-model consensus', mode: 'consensus' },
+  { id: 'backtest', path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
 ]
 
 export function AdminActions() {
   const router = useRouter()
-  const [pendingPath, setPendingPath] = useState<string>()
+  const [pendingActionId, setPendingActionId] = useState<string>()
   const [message, setMessage] = useState<string>()
   const [isError, setIsError] = useState(false)
 
-  async function runAction(path: string, mode?: string) {
-    setPendingPath(path)
+  async function runAction(actionId: string, path: string, mode?: string) {
+    setPendingActionId(actionId)
     setMessage(undefined)
 
     try {
-      let body: Record<string, unknown> = { raceId: '' }
+      const body: Record<string, unknown> = { raceId: '' }
       if (mode) body.mode = mode
-
-      if (path === '/api/admin/import-csv') {
-        const csv = typeof window !== 'undefined' ? window.prompt('Paste Victoria race CSV here:') : ''
-        if (!csv) {
-          setMessage('CSV import cancelled')
-          setPendingPath(undefined)
-          return
-        }
-        body = { csv }
-      }
 
       const response = await fetch(path, {
         method: 'POST',
@@ -49,7 +38,7 @@ export function AdminActions() {
       setIsError(true)
       setMessage('Could not reach the server')
     } finally {
-      setPendingPath(undefined)
+      setPendingActionId(undefined)
     }
   }
 
@@ -57,14 +46,14 @@ export function AdminActions() {
     <div className="space-y-3">
       {actions.map((action) => (
         <button
-          key={action.path}
+          key={action.id}
           type="button"
-          disabled={Boolean(pendingPath)}
-          onClick={() => runAction(action.path, action.mode)}
+          disabled={Boolean(pendingActionId)}
+          onClick={() => runAction(action.id, action.path, action.mode)}
           className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition disabled:cursor-wait disabled:opacity-60"
         >
           <span className="block font-medium text-slate-900">
-            {pendingPath === action.path ? 'Working…' : action.label}
+            {pendingActionId === action.id ? 'Working…' : action.label}
           </span>
           <span className="block text-xs text-slate-500 mt-1">{action.detail}</span>
         </button>
