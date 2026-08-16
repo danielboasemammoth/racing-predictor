@@ -32,15 +32,15 @@ function race(id: string, date: string, win: number, top3: number, secondWin: nu
 }
 
 describe('daily conservative picks', () => {
-  it('ranks all available races by certainty and identifies Melbourne-today races', () => {
+  it('ranks only Melbourne-today races by certainty', () => {
     const picks = getDailyPicks([
       race('strong', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2),
       race('weak', '2026-08-16T04:00:00Z', 0.18, 0.48, 0.16, 50),
       race('tomorrow', '2026-08-17T03:00:00Z', 0.6, 0.9, 0.1, 2),
     ], new Date('2026-08-16T01:00:00Z'))
 
-    expect(picks.map((pick) => pick.race.id)).toEqual(['tomorrow', 'strong', 'weak'])
-    expect(picks.map((pick) => pick.isToday)).toEqual([false, true, true])
+    expect(picks.map((pick) => pick.race.id)).toEqual(['strong', 'weak'])
+    expect(picks.every((pick) => pick.isToday)).toBe(true)
   })
 
   it('does not use payout odds when ranking picks', () => {

@@ -63,5 +63,5 @@ export function getDailyPicks(races: RaceWithPrediction[], now = new Date(), lim
     }]
   })
   const byCertainty = (left: DailyPick, right: DailyPick) => right.certaintyScore - left.certaintyScore
-  return candidates.sort(byCertainty).slice(0, limit)
+  return candidates.filter((pick) => pick.isToday).sort(byCertainty).slice(0, limit)
 }

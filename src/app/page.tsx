@@ -105,8 +105,8 @@ export default async function Home() {
                     <p className="mt-1 max-w-3xl text-sm text-slate-600">
                       Ranked by win and top-three probability, separation from the next runner, and pre-race form depth. Payout is not considered.
                     </p>
-                    {dailyPicks.some((pick) => !pick.isToday) && (
-                      <p className="mt-1 text-xs text-slate-500">Fewer than three races remain today, so the shortlist includes the strongest next available races.</p>
+                    {dailyPicks.length < 3 && (
+                      <p className="mt-1 text-xs text-slate-500">Only {dailyPicks.length} eligible {dailyPicks.length === 1 ? 'race remains' : 'races remain'} today.</p>
                     )}
                   </div>
                   <p className="text-xs text-slate-500">Relative model confidence, not a guarantee.</p>
@@ -118,9 +118,7 @@ export default async function Home() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-xs font-bold uppercase text-teal-700">
-                            {index === 0
-                              ? `${pick.isToday ? 'Today' : 'Next available'} · lowest risk`
-                              : `${pick.isToday ? 'Today' : 'Next available'} · rank ${index + 1}`}
+                            {index === 0 ? 'Today · lowest risk' : `Today · rank ${index + 1}`}
                           </p>
                           <h3 className="mt-1 text-lg font-bold text-slate-900">{pick.horse.horse_name}</h3>
                           <p className="mt-1 text-sm text-slate-600">
