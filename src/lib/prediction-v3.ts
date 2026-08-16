@@ -1,7 +1,8 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
+import { drawBiasScore } from '@/lib/victoria-draw-bias'
 
 export const CONTEXTUAL_MODEL_VERSION = 'v3.1-contextual-ranking'
-const PROBABILITY_TEMPERATURE = 2.5
+const PROBABILITY_TEMPERATURE = 1.8
 
 export interface RaceContext {
   id: string
@@ -63,6 +64,7 @@ interface Features {
   weightSuitability: number
   fitness: number
   historyStarts: number
+  drawBias: number
 }
 
 interface RankedEntry {
@@ -160,11 +162,11 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
   const recentStarts = horseHistory.slice(0, 5)
   const weights = [1, 0.85, 0.7, 0.55, 0.4]
   const weightTotal = recentStarts.reduce((sum, _, index) => sum + weights[index], 0) || 1
-  const recentForm = recentStarts.reduce((sum, start, index) => sum + resultScore(start) * weights[index], 0) / weightTotal
+  const recentForm = recentStarts.reduce((sum, start, index) => sum + resultScore(start) * Math.exp(-index / 4), 0)
   const contextualForm = recentStarts.reduce(
-    (sum, start, index) => sum + resultScore(start) * contextualSimilarity(start, target) * weights[index],
+    (sum, start, index) => sum + resultScore(start) * contextualSimilarity(start, target) * Math.exp(-index / 4),
     0,
-  ) / weightTotal
+  )
   const targetDistance = target.distanceM ?? 0
   const lastStart = recentStarts[0]
   const knownWeights = horseHistory.flatMap((start) => start.weight ? [start.weight] : [])
@@ -204,6 +206,7 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     weightSuitability: clamp(0.5 + (averageWeight - (entry.weight_carried ?? averageWeight)) * 0.12),
     fitness,
     historyStarts: horseHistory.length,
+    drawBias: drawBiasScore(target.racecourseId, entry.barrier_number),
   }
   return { features, recentStarts }
 }
@@ -222,6 +225,7 @@ function score(features: Features, fieldSize = 10) {
     + (features.barrierSuitability - 0.5) * 0.55
     + (features.weightSuitability - 0.5) * 0.7
     + (features.fitness - 0.5) * 0.65
+    + (features.drawBias - 0.5) * 0.5
     + fieldSizeAdjustment
 }
 
