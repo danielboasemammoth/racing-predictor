@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { AdminActions } from './admin-actions'
+import { CsvImporter } from './csv-importer'
 import { login, logout } from './actions'
 import { hasAdminSession, isAdminConfigured } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -126,6 +127,11 @@ export default async function AdminPage({
         <div className="bg-white rounded-xl border border-slate-200 p-6">
           <h2 className="text-lg font-semibold text-slate-900 mb-4">Actions</h2>
           <AdminActions />
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">Victoria Race CSV Importer</h2>
+          <CsvImporter />
         </div>
       </main>
     </div>

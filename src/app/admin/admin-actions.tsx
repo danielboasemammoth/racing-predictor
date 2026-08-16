@@ -9,6 +9,7 @@ const actions = [
   { path: '/api/admin/predict', label: 'Run Prediction Model', detail: 'Generate predictions for upcoming races', mode: undefined },
   { path: '/api/admin/predict', label: 'Run Consensus Model', detail: 'Generate predictions with cross-model consensus', mode: 'consensus' },
   { path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
+  { path: '/api/admin/import-csv', label: 'Import Race CSV', detail: 'Upload Victoria race results as CSV' },
 ]
 
 export function AdminActions() {
@@ -22,8 +23,18 @@ export function AdminActions() {
     setMessage(undefined)
 
     try {
-      const body: Record<string, string> = { raceId: '' }
+      let body: Record<string, unknown> = { raceId: '' }
       if (mode) body.mode = mode
+
+      if (path === '/api/admin/import-csv') {
+        const csv = typeof window !== 'undefined' ? window.prompt('Paste Victoria race CSV here:') : ''
+        if (!csv) {
+          setMessage('CSV import cancelled')
+          setPendingPath(undefined)
+          return
+        }
+        body = { csv }
+      }
 
       const response = await fetch(path, {
         method: 'POST',
