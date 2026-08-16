@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { Race, RaceWithPrediction, Prediction } from '@/lib/types'
+import { getDailyPicks } from '@/lib/daily-picks'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,6 +67,7 @@ function getConfidenceColor(conf: number) {
 
 export default async function Home() {
   const races = await getUpcomingRaces()
+  const dailyPicks = getDailyPicks(races)
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -94,6 +96,68 @@ export default async function Home() {
           </div>
         ) : (
           <div className="space-y-6">
+            {dailyPicks.length > 0 && (
+              <section aria-labelledby="daily-picks-title" className="border-y border-teal-200 bg-teal-50 px-4 py-6 sm:px-6">
+                <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-teal-800">Daily conservative shortlist</p>
+                    <h2 id="daily-picks-title" className="mt-1 text-xl font-bold text-slate-900">Today&apos;s highest-conviction picks</h2>
+                    <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                      Ranked by win and top-three probability, separation from the next runner, and pre-race form depth. Payout is not considered.
+                    </p>
+                    {dailyPicks.some((pick) => !pick.isToday) && (
+                      <p className="mt-1 text-xs text-slate-500">Fewer than three races remain today, so the shortlist includes the strongest next available races.</p>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">Relative model confidence, not a guarantee.</p>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  {dailyPicks.map((pick, index) => (
+                    <article key={pick.race.id} className="border border-teal-200 bg-white p-5 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase text-teal-700">
+                            {index === 0
+                              ? `${pick.isToday ? 'Today' : 'Next available'} · lowest risk`
+                              : `${pick.isToday ? 'Today' : 'Next available'} · rank ${index + 1}`}
+                          </p>
+                          <h3 className="mt-1 text-lg font-bold text-slate-900">{pick.horse.horse_name}</h3>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {pick.race.racecourses?.name} · Race {pick.race.race_number}
+                          </p>
+                        </div>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-700 text-sm font-bold text-white">
+                          {index + 1}
+                        </span>
+                      </div>
+
+                      <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3">
+                        <div>
+                          <dt className="text-xs text-slate-500">Win probability</dt>
+                          <dd className="mt-0.5 text-xl font-bold text-slate-900">{(pick.winProbability * 100).toFixed(0)}%</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-slate-500">Top-three probability</dt>
+                          <dd className="mt-0.5 text-xl font-bold text-teal-800">{(pick.top3Probability * 100).toFixed(0)}%</dd>
+                        </div>
+                      </dl>
+
+                      <div className="mt-3 space-y-1 text-xs text-slate-600">
+                        <p>{(pick.leadOverSecond * 100).toFixed(1)} percentage-point lead over the next runner</p>
+                        <p>{pick.historyStarts > 0 ? `${pick.historyStarts} prior starts analysed` : 'Limited prior-race history available'}</p>
+                        <p>{formatDateTime(pick.race.race_datetime)} · {formatDistance(pick.race.distance_m || 0)}</p>
+                      </div>
+
+                      <Link href={`/races/${pick.race.id}`} className="mt-4 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900">
+                        Review race details →
+                      </Link>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-900">Upcoming Races</h2>
               <span className="text-sm text-slate-600">{races.length} races</span>
