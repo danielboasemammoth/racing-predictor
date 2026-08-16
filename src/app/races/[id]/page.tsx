@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import type { Prediction, Race, RaceEntryWithHorse } from '@/lib/types'
+import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,20 +24,26 @@ async function getRaceData(raceId: string) {
 
   if (entriesError) throw entriesError
 
-  const { data: prediction, error: predictionError } = await supabase
+  const { data: predictionRows, error: predictionError } = await supabase
     .from('predictions')
     .select('*')
     .eq('race_id', raceId)
     .order('predicted_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
 
   if (predictionError) throw predictionError
+  const modelPredictions: Prediction[] = []
+  for (const prediction of (predictionRows ?? []) as Prediction[]) {
+    if (prediction.model_version.includes('retrospective')) continue
+    if (!CURRENT_MODEL_VERSIONS.includes(prediction.model_version)) continue
+    if (!modelPredictions.some((model) => model.model_version === prediction.model_version)) modelPredictions.push(prediction)
+  }
+  const prediction = modelPredictions.find((model) => model.model_version === 'v4.1-ensemble') ?? modelPredictions.find((model) => model.model_version === 'v4-ensemble') ?? modelPredictions[0] ?? null
 
   return {
     race: race as Race,
     entries: (entries ?? []) as RaceEntryWithHorse[],
-    prediction: prediction as Prediction | null
+    prediction,
+    modelPredictions,
   }
 }
 
@@ -72,7 +79,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
     )
   }
 
-  const { race, entries, prediction } = data
+  const { race, entries, prediction, modelPredictions } = data
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -103,6 +110,26 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
         {prediction && (
           <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
             <h2 className="text-lg font-semibold text-slate-900 mb-4">Prediction</h2>
+            {modelPredictions.length > 1 && (
+              <div className="mb-5">
+                <p className="mb-2 text-xs font-bold uppercase text-slate-600">Model confidence comparison</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {modelPredictions.sort((left, right) => left.model_version.localeCompare(right.model_version)).map((model) => {
+                    const winner = model.predictions.podium[0]
+                    return (
+                      <div key={model.model_version} className={`border p-3 ${model.model_version === 'v4.1-ensemble' ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                        <p className="text-xs font-semibold text-slate-500">{model.model_version}</p>
+                        <p className="mt-1 font-bold text-slate-900">{winner?.horse_name ?? 'No pick'}</p>
+                        <p className="text-sm text-slate-600">Winner confidence {((model.confidence_scores.winner ?? 0) * 100).toFixed(1)}%</p>
+                        {(model.confidence_scores.winner ?? 0) >= 0.25 && (
+                          <p className="mt-1 text-xs font-bold uppercase text-emerald-700">Lower-risk confidence band</p>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {prediction.predictions.podium.map((horse, idx) => (
                 <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>

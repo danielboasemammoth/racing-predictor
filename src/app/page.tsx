@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { Race, RaceWithPrediction, Prediction } from '@/lib/types'
 import { getDailyPicks } from '@/lib/daily-picks'
+import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,16 +30,24 @@ async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
   if (predictionsError) throw predictionsError
 
   const predictionMap = new Map<string, Prediction>()
+  const modelsByRace = new Map<string, Prediction[]>()
   ;(predictions as Prediction[] | null)?.forEach((prediction) => {
-    const existing = predictionMap.get(prediction.race_id)
-    if (!existing || new Date(prediction.predicted_at) > new Date(existing.predicted_at)) {
-      predictionMap.set(prediction.race_id, prediction)
-    }
+    if (prediction.model_version.includes('retrospective')) return
+    if (!CURRENT_MODEL_VERSIONS.includes(prediction.model_version)) return
+    const models = modelsByRace.get(prediction.race_id) ?? []
+    if (!models.some((model) => model.model_version === prediction.model_version)) models.push(prediction)
+    modelsByRace.set(prediction.race_id, models)
   })
+
+  for (const [raceId, models] of modelsByRace) {
+    const primary = models.find((model) => model.model_version === 'v4.1-ensemble') ?? models.find((model) => model.model_version === 'v4-ensemble') ?? models[0]
+    if (primary) predictionMap.set(raceId, primary)
+  }
 
   return typedRaces.map((race) => ({
     ...race,
-    prediction: predictionMap.get(race.id) || null
+    prediction: predictionMap.get(race.id) || null,
+    model_predictions: modelsByRace.get(race.id) ?? [],
   }))
 }
 
@@ -184,6 +193,28 @@ export default async function Home() {
 
                 {race.prediction ? (
                   <div className="border-t border-slate-100 pt-4">
+                    {race.model_predictions && race.model_predictions.length > 1 && (
+                      <div className="mb-4">
+                        <p className="mb-2 text-xs font-bold uppercase text-slate-600">Model confidence comparison</p>
+                        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                          {race.model_predictions
+                            .sort((left, right) => left.model_version.localeCompare(right.model_version))
+                            .map((model) => {
+                              const winner = model.predictions.podium[0]
+                              return (
+                                <div key={model.model_version} className={`border px-3 py-2 ${model.model_version === 'v4.1-ensemble' ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                                  <p className="truncate text-[11px] font-semibold text-slate-500" title={model.model_version}>{model.model_version.replace('v4-', '')}</p>
+                                  <p className="mt-1 truncate text-xs font-bold text-slate-900">{winner?.horse_name ?? 'No pick'}</p>
+                                  <p className="text-xs text-slate-600">{((model.confidence_scores.winner ?? 0) * 100).toFixed(1)}%</p>
+                                  {(model.confidence_scores.winner ?? 0) >= 0.25 && (
+                                    <p className="mt-1 text-[10px] font-bold uppercase text-emerald-700">Lower-risk band</p>
+                                  )}
+                                </div>
+                              )
+                            })}
+                        </div>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 mb-3">
                       <span className="text-xs font-medium text-slate-600">PREDICTED PODIUM</span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getConfidenceColor(race.prediction.confidence_scores?.overall || 0)}`}>

@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server'
-import {
-  CONTEXTUAL_MODEL_VERSION,
-  predictContextualRace,
-  type HistoricalStart,
-} from '@/lib/prediction-v3'
-import { predictConsensusRace } from '@/lib/prediction-consensus'
+import type { HistoricalStart } from '@/lib/prediction-v3'
+import { ALL_MODEL_CONFIGS, runConfiguredModel, runEnsemble } from '@/lib/prediction-suite'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { RaceEntryWithHorse } from '@/lib/types'
 import { hasAdminSession } from '@/lib/admin-auth'
@@ -13,7 +9,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 interface PredictionOptions {
   raceId?: string
-  mode?: 'retrospective' | 'consensus'
+  mode?: 'all' | 'ensemble' | 'retrospective'
 }
 
 interface HistoricalEntryRow {
@@ -63,7 +59,7 @@ async function readOptions(request: Request): Promise<PredictionOptions | null> 
   const raceId = 'raceId' in body ? body.raceId : undefined
   const mode = 'mode' in body ? body.mode : undefined
   if (raceId !== undefined && typeof raceId !== 'string') return null
-  if (mode !== undefined && !['retrospective', 'consensus'].includes(mode as string)) return null
+  if (mode !== undefined && !['all', 'ensemble', 'retrospective'].includes(mode as string)) return null
 
   return {
     raceId,
@@ -83,12 +79,7 @@ export async function POST(request: Request) {
     }
 
     const status = options.mode === 'retrospective' ? 'completed' : 'upcoming'
-    const useConsensus = options.mode === 'consensus'
-    const modelVersion = useConsensus
-      ? 'v3.2-consensus'
-      : options.mode === 'retrospective'
-        ? `${CONTEXTUAL_MODEL_VERSION}-retrospective`
-        : CONTEXTUAL_MODEL_VERSION
+    const runFullSuite = options.mode === 'all' || options.mode === 'retrospective'
 
     const supabase = createAdminClient()
     let raceQuery = supabase
@@ -96,7 +87,7 @@ export async function POST(request: Request) {
       .select('id, racecourse_id, race_datetime, distance_m, track_condition, race_class')
       .eq('status', status)
       .order('race_datetime', { ascending: status === 'upcoming' })
-    raceQuery = options.raceId ? raceQuery.eq('id', options.raceId) : raceQuery.limit(50)
+    raceQuery = options.raceId ? raceQuery.eq('id', options.raceId) : status === 'upcoming' ? raceQuery.limit(50) : raceQuery
 
     const { data: races, error: racesError } = await raceQuery
     if (racesError) throw racesError
@@ -104,16 +95,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, message: `No ${status} races to predict` }, { status: 404 })
     }
 
-    const { data: targetEntryRows, error: targetEntriesError } = await supabase
-      .from('race_entries')
-      .select('*, horses(*)')
-      .in('race_id', races.map((race) => race.id))
-    if (targetEntriesError) throw targetEntriesError
+    const targetEntryRows: RaceEntryWithHorse[] = []
+    const raceChunkSize = 40
+    for (let offset = 0; offset < races.length; offset += raceChunkSize) {
+      const { data: entryPage, error: targetEntriesError } = await supabase
+        .from('race_entries')
+        .select('*, horses(*)')
+        .in('race_id', races.slice(offset, offset + raceChunkSize).map((race) => race.id))
+      if (targetEntriesError) throw targetEntriesError
+      targetEntryRows.push(...((entryPage ?? []) as RaceEntryWithHorse[]))
+    }
     const entriesByRace = Map.groupBy(
-      (targetEntryRows ?? []) as RaceEntryWithHorse[],
+      targetEntryRows,
       (entry) => entry.race_id,
     )
-    const targetHorseIds = [...new Set((targetEntryRows ?? []).map((entry) => entry.horse_id))]
+    const targetHorseIds = [...new Set(targetEntryRows.map((entry) => entry.horse_id))]
 
     const historicalRows: HistoricalEntryRow[] = []
     const pageSize = 1_000
@@ -172,47 +168,32 @@ export async function POST(request: Request) {
 
       const oddsByHorse = Object.fromEntries(typedEntries.map((entry) => [entry.horse_id, bestOdds(entry)]))
 
-      let result
-      if (useConsensus) {
-        result = predictConsensusRace({
-          race: {
-            id: race.id,
-            racecourseId: race.racecourse_id,
-            raceDatetime: race.race_datetime,
-            distanceM: race.distance_m ?? undefined,
-            trackCondition: race.track_condition ?? undefined,
-            raceClass: race.race_class ?? undefined,
-          },
-          entries: typedEntries,
-          history,
-          oddsByHorse,
-          fieldSize: typedEntries.length,
-        })
-      } else {
-        result = predictContextualRace({
-          race: {
-            id: race.id,
-            racecourseId: race.racecourse_id,
-            raceDatetime: race.race_datetime,
-            distanceM: race.distance_m ?? undefined,
-            trackCondition: race.track_condition ?? undefined,
-            raceClass: race.race_class ?? undefined,
-          },
-          entries: typedEntries,
-          history,
-          oddsByHorse,
-          fieldSize: typedEntries.length,
-        })
+      const input = {
+        race: {
+          id: race.id,
+          racecourseId: race.racecourse_id,
+          raceDatetime: race.race_datetime,
+          distanceM: race.distance_m ?? undefined,
+          trackCondition: race.track_condition ?? undefined,
+          raceClass: race.race_class ?? undefined,
+        },
+        entries: typedEntries,
+        history,
+        oddsByHorse,
+        fieldSize: typedEntries.length,
       }
-
-      const { error: predictionError } = await supabase.from('predictions').upsert({
-        race_id: race.id,
-        model_version: modelVersion,
-        predictions: result.predictions,
-        confidence_scores: result.confidence_scores,
-        predicted_times: result.predicted_times,
-        predicted_at: new Date().toISOString(),
-      }, { onConflict: 'race_id,model_version' })
+      const results = runFullSuite
+        ? [...ALL_MODEL_CONFIGS.map((config) => runConfiguredModel(input, config)), runEnsemble(input)]
+        : [runEnsemble(input)]
+      const suffix = options.mode === 'retrospective' ? '-retrospective' : ''
+      const { error: predictionError } = await supabase.from('predictions').upsert(results.map((result) => ({
+          race_id: race.id,
+          model_version: `${result.modelVersion}${suffix}`,
+          predictions: result.predictions,
+          confidence_scores: result.confidence_scores,
+          predicted_times: result.predicted_times,
+          predicted_at: new Date().toISOString(),
+        })), { onConflict: 'race_id,model_version' })
 
       if (predictionError) throw predictionError
       created += 1
@@ -222,8 +203,8 @@ export async function POST(request: Request) {
       success: true,
       created,
       skipped,
-      modelVersion,
-      message: `Generated predictions for ${created} races`,
+      modelVersion: runFullSuite ? 'v4-model-suite' : 'v4.1-ensemble',
+      message: `Generated ${runFullSuite ? 'all model variants' : 'ensemble predictions'} for ${created} races`,
     })
   } catch (error) {
     console.error('Prediction run failed', error)

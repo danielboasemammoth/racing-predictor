@@ -102,6 +102,18 @@ export interface PredictionPayload {
     value_edge: number
   }>
   feature_snapshots?: Record<string, JsonValue>
+  model_components?: Array<{
+    model_version: string
+    winner_horse_id: string
+    winner_horse_name: string
+    winner_confidence: number
+    podium_horse_ids: string[]
+  }>
+  model_agreement?: {
+    winner_votes: number
+    model_count: number
+    unanimous: boolean
+  }
 }
 
 export interface Prediction {
@@ -147,4 +159,5 @@ export interface DataSource {
 
 export type RaceWithPrediction = Race & {
   prediction: Prediction | null
+  model_predictions?: Prediction[]
 }

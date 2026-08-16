@@ -34,9 +34,10 @@ async function loadRaces(page: number) {
     supabase
       .from('races')
       .select('id, race_datetime, distance_m, track_condition, race_class, status, racecourses(id, name)')
+      .eq('status', 'completed')
       .order('race_datetime', { ascending: false })
       .range(from, to),
-    supabase.from('races').select('*', { count: 'exact', head: true }),
+    supabase.from('races').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
   ])
 
   if (racesResult.error) throw racesResult.error

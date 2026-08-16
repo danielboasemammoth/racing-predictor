@@ -18,15 +18,19 @@ export async function POST() {
 
   try {
     const supabase = createAdminClient()
-    const { data: racesData, error: racesError } = await supabase
-      .from('races')
-      .select('id, race_datetime')
-      .eq('status', 'completed')
-      .order('race_datetime', { ascending: false })
-      .limit(500)
-
-    if (racesError) throw racesError
-    const races = (racesData ?? []) as CompletedRace[]
+    const races: CompletedRace[] = []
+    const pageSize = 1_000
+    for (let offset = 0; ; offset += pageSize) {
+      const { data: racePage, error: racesError } = await supabase
+        .from('races')
+        .select('id, race_datetime')
+        .eq('status', 'completed')
+        .order('race_datetime', { ascending: false })
+        .range(offset, offset + pageSize - 1)
+      if (racesError) throw racesError
+      races.push(...((racePage ?? []) as CompletedRace[]))
+      if (!racePage || racePage.length < pageSize) break
+    }
     if (!races.length) {
       return NextResponse.json({ success: false, message: 'No completed races to backtest' }, { status: 404 })
     }
@@ -45,7 +49,8 @@ export async function POST() {
         supabase
           .from('predictions')
           .select('id, race_id, model_version, predicted_at, predictions, confidence_scores, predicted_times')
-          .in('race_id', chunk),
+          .in('race_id', chunk)
+          .order('predicted_at', { ascending: false }),
       ])
       if (entriesResult.error) throw entriesResult.error
       if (predictionsResult.error) throw predictionsResult.error
@@ -79,6 +84,10 @@ export async function POST() {
       winnerBrierScore: number
       winnerLogLoss: number
     }>>()
+    const scoredPredictions: Array<PredictionRow & {
+      actual_results: Record<string, unknown>
+      accuracy_score: number
+    }> = []
 
     for (const prediction of latestPredictions.values()) {
       const outcome = evaluatePrediction(
@@ -89,21 +98,18 @@ export async function POST() {
       const raceDate = raceDateById.get(prediction.race_id)
       if (!outcome || !raceDate) continue
 
-      const { error: updateError } = await supabase
-        .from('predictions')
-        .update({
-          actual_results: {
+      scoredPredictions.push({
+        ...prediction,
+        actual_results: {
             podium: outcome.actualPodium,
             winner_top3: outcome.winnerTop3,
             podium_overlap: outcome.podiumOverlap,
             ordered_trifecta: outcome.orderedTrifecta,
             winner_brier_score: outcome.winnerBrierScore,
             winner_log_loss: outcome.winnerLogLoss,
-          },
-          accuracy_score: outcome.accuracyScore,
-        })
-        .eq('id', prediction.id)
-      if (updateError) throw updateError
+        },
+        accuracy_score: outcome.accuracyScore,
+      })
 
       const modelOutcomes = outcomesByModel.get(prediction.model_version) ?? []
       modelOutcomes.push({
@@ -119,6 +125,14 @@ export async function POST() {
         winnerLogLoss: outcome.winnerLogLoss,
       })
       outcomesByModel.set(prediction.model_version, modelOutcomes)
+    }
+
+    const updateChunkSize = 100
+    for (let offset = 0; offset < scoredPredictions.length; offset += updateChunkSize) {
+      const { error: updateError } = await supabase
+        .from('predictions')
+        .upsert(scoredPredictions.slice(offset, offset + updateChunkSize), { onConflict: 'id' })
+      if (updateError) throw updateError
     }
 
     for (const [modelVersion, outcomes] of outcomesByModel) {
@@ -152,8 +166,10 @@ export async function POST() {
 
     const metrics = Object.fromEntries([...outcomesByModel].map(([modelVersion, outcomes]) => [modelVersion, {
       races: outcomes.length,
+      winnerAccuracy: outcomes.filter((outcome) => outcome.correctWinner).length / outcomes.length,
       winnerTop3Accuracy: outcomes.filter((outcome) => outcome.winnerTop3).length / outcomes.length,
       averagePodiumOverlap: outcomes.reduce((sum, outcome) => sum + outcome.podiumOverlap, 0) / outcomes.length,
+      anyOrderPodiumAccuracy: outcomes.filter((outcome) => outcome.correctPodium).length / outcomes.length,
       orderedTrifectaAccuracy: outcomes.filter((outcome) => outcome.orderedTrifecta).length / outcomes.length,
       winnerBrierScore: outcomes.reduce((sum, outcome) => sum + outcome.winnerBrierScore, 0) / outcomes.length,
       winnerLogLoss: outcomes.reduce((sum, outcome) => sum + outcome.winnerLogLoss, 0) / outcomes.length,

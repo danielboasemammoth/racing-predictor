@@ -31,12 +31,16 @@ See `supabase/schema.sql` — run this in Supabase SQL Editor after creating you
 Run a bounded manual import with `npm run ingest`, or use the protected actions in `/admin`.
 
 ## Prediction Model
-- Current: v3.1 contextual ranking (last-five form weighted by class, distance, condition, and course; speed, jockey/trainer form, barrier, weight, fitness, and temperature-calibrated probabilities)
+- Current primary model: `v4.1-ensemble`, averaging the held-out best `v4-optimized` and `v4-connections` probability models
+- Features: margin-adjusted recent/contextual form, distance, condition, course, class movement, trainer, jockey, trainer-jockey partnership, benchmark-relative weight, barrier history, and fitness
+- Runner-time speed is disabled because the source usually provides one race-level time for the full field
 - Win/place prices are captured only to calculate possible returns and model-value signals; they are never prediction inputs
 - Trifecta probabilities use an ordered Plackett-Luce calculation; displayed returns are model-fair estimates, not guaranteed pool dividends
 - Backtesting scores winners, exact podiums, and finishing-time error by model version
 - Future: ML model trained on historical race outcomes
 - Confidence calibration is tracked against actual results
 - Continuous improvement via backtesting
+
+Across 645 completed races, the v4.1 ensemble selected the winner 17.8% of the time and its selected winner finished top three 46.8% of the time. At 25%+ model confidence, historical winner accuracy was 26.6% and top-three accuracy was 60.1%. These are relative risk bands, not guarantees.
 
 Use `npm run ingest:history` to refresh the 60-day historical form window used by the contextual model.

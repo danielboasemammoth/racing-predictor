@@ -32,7 +32,7 @@ Build an Australian horse race prediction app that uses historical race data to 
 - ✅ Database schema defined in `supabase/schema.sql`
 - ✅ Pages scaffolded: `/`, `/races/[id]`, `/accuracy`, `/admin`
 - ✅ Admin API routes protected by an HttpOnly session and server-only key
-- ✅ Leakage-safe `v3-contextual-ranking` model with last-five context, speed, class, course, jockey/trainer, barrier, weight, and fitness features
+- ✅ Leakage-safe `v4.1-ensemble` with contextual form, class, course, jockey/trainer partnership, barrier, benchmark weight, and fitness features
 - ✅ Win/place payout metadata and value signals kept separate from prediction features
 - ✅ Ordered trifecta probability and model-fair return estimates
 - ✅ Walk-forward probability metrics including Brier score and log loss
@@ -143,7 +143,7 @@ Get the Supabase values from Supabase Dashboard → Settings → API. Never expo
 - Store raw HTML/snapshots for debugging if structure changes
 
 ### Priority 2: Prediction Model
-**Current:** `v3-contextual-ranking` in `src/lib/prediction-v3.ts` — last-five starts are weighted by recency and similarity in class, distance, condition, and course, then combined with speed, jockey/trainer, barrier, weight, and fitness features. Odds are excluded from ranking and used only for payout/value display.
+**Current:** `v4.1-ensemble` combines the held-out best optimized and connections-focused contextual models. Last-five starts are weighted by recency, margin, and similarity in class, distance, condition, and course, then combined with jockey, trainer, partnership, barrier, benchmark-relative weight, and fitness features. Runner-time speed is disabled because the source lacks runner-specific times. Odds remain excluded from ranking and are used only for payout/value display.
 
 **Tasks:**
 1. Improve heuristic model with more features:

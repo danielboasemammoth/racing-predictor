@@ -6,8 +6,8 @@ import { useRouter } from 'next/navigation'
 const actions = [
   { id: 'scrape-races', path: '/api/admin/scrape', label: 'Scrape Upcoming Races', detail: 'Import upcoming races from public sources' },
   { id: 'scrape-results', path: '/api/admin/scrape-results', label: 'Scrape Race Results', detail: 'Import results for completed races' },
-  { id: 'predict-contextual', path: '/api/admin/predict', label: 'Run Prediction Model', detail: 'Generate predictions for upcoming races', mode: undefined },
-  { id: 'predict-consensus', path: '/api/admin/predict', label: 'Run Consensus Model', detail: 'Generate predictions with cross-model consensus', mode: 'consensus' },
+  { id: 'predict-contextual', path: '/api/admin/predict', label: 'Run Prediction Models', detail: 'Generate every model variant for upcoming races', mode: 'all' },
+  { id: 'predict-consensus', path: '/api/admin/predict', label: 'Run Ensemble Model', detail: 'Generate probability-averaged ensemble predictions', mode: 'ensemble' },
   { id: 'backtest', path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
 ]
 
@@ -22,7 +22,7 @@ export function AdminActions() {
     setMessage(undefined)
 
     try {
-      const body: Record<string, unknown> = { raceId: '' }
+      const body: Record<string, unknown> = {}
       if (mode) body.mode = mode
 
       const response = await fetch(path, {

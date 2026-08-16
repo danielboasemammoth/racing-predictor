@@ -1,12 +1,12 @@
 import 'dotenv/config'
 import { config } from 'dotenv'
-config({ path: '.env.local' })
-
 import { evaluatePrediction, type BacktestOutcome } from '../src/lib/backtest'
-import { predictContextualRace, type HistoricalStart } from '../src/lib/prediction-v3'
-import { predictConsensusRace } from '../src/lib/prediction-consensus'
+import { MODEL_CONFIGS, type HistoricalStart, type PredictionModelConfig } from '../src/lib/prediction-v3'
+import { runConfiguredModel, runEnsemble } from '../src/lib/prediction-suite'
 import type { RaceEntryWithHorse } from '../src/lib/types'
 import { createScriptClient } from './supabase-client'
+
+config({ path: '.env.local' })
 
 interface CompletedRace {
   id: string
@@ -17,106 +17,117 @@ interface CompletedRace {
   racecourse_id: string
 }
 
-interface HistoricalRow {
-  race_id: string
-  horse_id: string
-  finishing_position: number | null
-  finishing_time: number | null
-  margin: number | null
-  barrier_number: number | null
-  weight_carried: number | null
-  jockey: string | null
-  trainer: string | null
-  races: {
-    racecourse_id: string
-    race_datetime: string
-    distance_m: number | null
-    track_condition: string | null
-    race_class: string | null
-    field: Array<{ count: number }>
-  }
+interface ModelOutcome extends BacktestOutcome {
+  confidence: number
 }
-
-type ModelOutcome = BacktestOutcome & { raceId: string; confidence: number }
 
 const supabase = createScriptClient()
 
-async function loadCompletedRaces(limit = 200) {
-  const { data: races, error } = await supabase
-    .from('races')
-    .select('id, race_datetime, distance_m, track_condition, race_class, racecourse_id')
-    .eq('status', 'completed')
-    .order('race_datetime', { ascending: false })
-    .limit(limit)
-
-  if (error) throw error
-  return (races ?? []) as CompletedRace[]
-}
-
-async function loadEntriesForRaces(raceIds: string[]) {
-  const { data: entries, error } = await supabase
-    .from('race_entries')
-    .select('race_id, horse_id, finishing_position, finishing_time, margin, barrier_number, weight_carried, jockey, trainer, status, horses(*)')
-    .in('race_id', raceIds)
-
-  if (error) throw error
-  return (entries ?? []) as unknown as RaceEntryWithHorse[]
-}
-
-async function loadHistoryForHorses(horseIds: string[]) {
-  const pageSize = 1000
-  const chunkSize = 40
-  const rows: HistoricalRow[] = []
-
-  for (let offset = 0; offset < horseIds.length; offset += chunkSize) {
-    const horseIdsChunk = horseIds.slice(offset, offset + chunkSize)
-    for (let page = 0; ; page += pageSize) {
-      const { data, error } = await supabase
-        .from('race_entries')
-        .select(`
-          race_id, horse_id, finishing_position, finishing_time, margin,
-          barrier_number, weight_carried, jockey, trainer, status,
-          races!inner(
-            id, racecourse_id, race_datetime, distance_m, track_condition, race_class, status,
-            field:race_entries(count)
-          )
-        `)
-        .eq('races.status', 'completed')
-        .neq('status', 'scratched')
-        .in('horse_id', horseIdsChunk)
-        .range(page, page + pageSize - 1)
-
-      if (error) throw error
-      rows.push(...((data ?? []) as unknown as HistoricalRow[]))
-      if (!data || data.length < pageSize) break
-    }
+async function loadCompletedRaces() {
+  const races: CompletedRace[] = []
+  for (let offset = 0; ; offset += 1_000) {
+    const { data, error } = await supabase
+      .from('races')
+      .select('id, race_datetime, distance_m, track_condition, race_class, racecourse_id')
+      .eq('status', 'completed')
+      .order('race_datetime', { ascending: true })
+      .range(offset, offset + 999)
+    if (error) throw error
+    races.push(...((data ?? []) as CompletedRace[]))
+    if (!data || data.length < 1_000) break
   }
-
-  return rows.map((row) => ({
-    raceId: row.race_id,
-    horseId: row.horse_id,
-    racecourseId: row.races.racecourse_id,
-    raceDatetime: row.races.race_datetime,
-    distanceM: row.races.distance_m ?? undefined,
-    trackCondition: row.races.track_condition ?? undefined,
-    raceClass: row.races.race_class ?? undefined,
-    finishingPosition: row.finishing_position ?? undefined,
-    fieldSize: row.races.field[0]?.count ?? 0,
-    finishingTime: row.finishing_time ?? undefined,
-    margin: row.margin ?? undefined,
-    barrier: row.barrier_number ?? undefined,
-    weight: row.weight_carried ?? undefined,
-    jockey: row.jockey ?? undefined,
-    trainer: row.trainer ?? undefined,
-  })) as HistoricalStart[]
+  return races
 }
 
-function runModel(model: 'contextual' | 'consensus', entries: RaceEntryWithHorse[], race: CompletedRace, history: HistoricalStart[]) {
-  const typedEntries = entries
-    .filter((entry) => entry.status !== 'scratched')
+async function loadEntries(raceIds: string[]) {
+  const entries: RaceEntryWithHorse[] = []
+  for (let offset = 0; offset < raceIds.length; offset += 40) {
+    const { data, error } = await supabase
+      .from('race_entries')
+      .select('*, horses(*)')
+      .in('race_id', raceIds.slice(offset, offset + 40))
+    if (error) throw error
+    entries.push(...((data ?? []) as RaceEntryWithHorse[]))
+  }
+  return entries
+}
 
-  if (model === 'consensus') {
-    return predictConsensusRace({
+function historicalStart(entry: RaceEntryWithHorse, race: CompletedRace, fieldSize: number): HistoricalStart {
+  return {
+    raceId: race.id,
+    horseId: entry.horse_id,
+    racecourseId: race.racecourse_id,
+    raceDatetime: race.race_datetime,
+    distanceM: race.distance_m ?? undefined,
+    trackCondition: race.track_condition ?? undefined,
+    raceClass: race.race_class ?? undefined,
+    finishingPosition: entry.finishing_position,
+    fieldSize,
+    finishingTime: entry.finishing_time,
+    margin: entry.margin,
+    barrier: entry.barrier_number,
+    weight: entry.weight_carried,
+    jockey: entry.jockey,
+    trainer: entry.trainer,
+  }
+}
+
+function metrics(outcomes: ModelOutcome[]) {
+  const total = outcomes.length
+  return {
+    races: total,
+    winnerAccuracy: outcomes.filter((outcome) => outcome.correctWinner).length / total,
+    winnerTop3Accuracy: outcomes.filter((outcome) => outcome.winnerTop3).length / total,
+    podiumOverlap: outcomes.reduce((sum, outcome) => sum + outcome.podiumOverlap, 0) / total,
+    exactPodiumAccuracy: outcomes.filter((outcome) => outcome.correctPodium).length / total,
+    orderedTrifectaAccuracy: outcomes.filter((outcome) => outcome.orderedTrifecta).length / total,
+    brier: outcomes.reduce((sum, outcome) => sum + outcome.winnerBrierScore, 0) / total,
+    logLoss: outcomes.reduce((sum, outcome) => sum + outcome.winnerLogLoss, 0) / total,
+    averageConfidence: outcomes.reduce((sum, outcome) => sum + outcome.confidence, 0) / total,
+  }
+}
+
+async function compareModels() {
+  const races = await loadCompletedRaces()
+  const entries = await loadEntries(races.map((race) => race.id))
+  const entriesByRace = Map.groupBy(entries, (entry) => entry.race_id)
+  const validRaces = races.filter((race) => {
+    const field = (entriesByRace.get(race.id) ?? []).filter((entry) => entry.status !== 'scratched')
+    return field.length >= 4 && field.filter((entry) => entry.finishing_position === 1).length === 1
+  })
+  const splitIndex = Math.floor(validRaces.length * 0.7)
+  const evaluationRaces = validRaces.slice(splitIndex)
+  const firstEvaluationTime = new Date(evaluationRaces[0]?.race_datetime ?? 0).getTime()
+  const history: HistoricalStart[] = validRaces.slice(0, splitIndex).flatMap((race) => {
+    const field = (entriesByRace.get(race.id) ?? []).filter((entry) => entry.status !== 'scratched')
+    return field.map((entry) => historicalStart(entry, race, field.length))
+  })
+
+  const configs: PredictionModelConfig[] = [
+    ...Object.values(MODEL_CONFIGS),
+    {
+      version: 'experiment-recent-context',
+      temperature: 2.2,
+      weights: { ...MODEL_CONFIGS.contextual.weights, recentForm: 3.4, contextualForm: 4.2, trainerForm: 1.3, partnershipForm: 1.1 },
+    },
+    {
+      version: 'experiment-balanced',
+      temperature: 2.5,
+      weights: { ...MODEL_CONFIGS.connections.weights, recentForm: 2.8, contextualForm: 3.8, jockeyForm: 1.2, trainerForm: 1.4, partnershipForm: 1.2 },
+    },
+  ]
+  const outcomes = new Map<string, ModelOutcome[]>([
+    ...configs.map((model) => [model.version, []] as [string, ModelOutcome[]]),
+    ['experiment-ensemble-all', []],
+    ['experiment-ensemble-context-connections', []],
+    ['experiment-ensemble-optimized-connections', []],
+    ['experiment-ensemble-optimized-baseline', []],
+  ])
+
+  for (const race of evaluationRaces) {
+    const raceTime = new Date(race.race_datetime).getTime()
+    const field = (entriesByRace.get(race.id) ?? []).filter((entry) => entry.status !== 'scratched')
+    const input = {
       race: {
         id: race.id,
         racecourseId: race.racecourse_id,
@@ -125,91 +136,47 @@ function runModel(model: 'contextual' | 'consensus', entries: RaceEntryWithHorse
         trackCondition: race.track_condition ?? undefined,
         raceClass: race.race_class ?? undefined,
       },
-      entries: typedEntries,
-      history,
-      fieldSize: typedEntries.length,
-    })
-  }
+      entries: field,
+      history: history.filter((start) => new Date(start.raceDatetime).getTime() < raceTime),
+      fieldSize: field.length,
+    }
+    const configuredResults = configs.map((model) => runConfiguredModel(input, model))
+    const results = [
+      ...configuredResults,
+      { ...runEnsemble(input, configs), modelVersion: 'experiment-ensemble-all' },
+      { ...runEnsemble(input, [MODEL_CONFIGS.contextual, MODEL_CONFIGS.connections]), modelVersion: 'experiment-ensemble-context-connections' },
+      { ...runEnsemble(input, [MODEL_CONFIGS.optimized, MODEL_CONFIGS.connections]), modelVersion: 'experiment-ensemble-optimized-connections' },
+      { ...runEnsemble(input, [MODEL_CONFIGS.optimized, MODEL_CONFIGS.baseline]), modelVersion: 'experiment-ensemble-optimized-baseline' },
+    ]
 
-  return predictContextualRace({
-    race: {
-      id: race.id,
-      racecourseId: race.racecourse_id,
-      raceDatetime: race.race_datetime,
-      distanceM: race.distance_m ?? undefined,
-      trackCondition: race.track_condition ?? undefined,
-      raceClass: race.race_class ?? undefined,
-    },
-    entries: typedEntries,
-    history,
-    fieldSize: typedEntries.length,
-  })
-}
-
-async function compareModels() {
-  const races = await loadCompletedRaces(200)
-  const entries = await loadEntriesForRaces(races.map((r) => r.id))
-  const horseIds = [...new Set(entries.map((e) => e.horse_id))]
-  const history = await loadHistoryForHorses(horseIds)
-
-  const entriesByRace = new Map<string, RaceEntryWithHorse[]>()
-  for (const entry of entries) {
-    const existing = entriesByRace.get(entry.race_id) ?? []
-    existing.push(entry)
-    entriesByRace.set(entry.race_id, existing)
-  }
-
-  const models: Array<{ name: string; key: 'contextual' | 'consensus'; outcomes: ModelOutcome[] }> = [
-    { name: 'v3.1 contextual', key: 'contextual', outcomes: [] },
-    { name: 'v3.2 consensus', key: 'consensus', outcomes: [] },
-  ]
-
-  for (const race of races) {
-    const raceEntries = entriesByRace.get(race.id) ?? []
-    if (!raceEntries.length) continue
-
-    for (const model of models) {
-      const result = runModel(model.key, raceEntries, race, history)
+    for (const result of results) {
       const outcome = evaluatePrediction(
         result.predictions,
         result.predicted_times,
-        raceEntries.map((e) => ({
-          horse_id: e.horse_id,
-          finishing_position: e.finishing_position ?? null,
-          finishing_time: e.finishing_time ?? null,
+        field.map((entry) => ({
+          horse_id: entry.horse_id,
+          finishing_position: entry.finishing_position ?? null,
+          finishing_time: entry.finishing_time ?? null,
         })),
       )
-
-      if (!outcome) continue
-      model.outcomes.push({
-        raceId: race.id,
-        ...outcome,
-        confidence: result.confidence_scores.winner,
-      })
+      if (outcome) outcomes.get(result.modelVersion)?.push({ ...outcome, confidence: result.confidence_scores.winner })
     }
+    history.push(...field.map((entry) => historicalStart(entry, race, field.length)))
   }
 
-  console.log('\n=== Model Backtest Comparison ===\n')
-  for (const model of models) {
-    const total = model.outcomes.length
-    if (!total) continue
-    const winners = model.outcomes.filter((o) => o.correctWinner).length
-    const podiums = model.outcomes.filter((o) => o.correctPodium).length
-    const avgConf = model.outcomes.reduce((sum, o) => sum + (o.confidence ?? 0), 0) / total
-    const timeErrors = model.outcomes.flatMap((o) => o.timeErrors ?? [])
-    const avgTimeError = timeErrors.length ? timeErrors.reduce((sum, e) => sum + e, 0) / timeErrors.length : 0
+  const report = [...outcomes].map(([model, modelOutcomes]) => ({ model, ...metrics(modelOutcomes) }))
+    .sort((left, right) => right.winnerAccuracy - left.winnerAccuracy || right.winnerTop3Accuracy - left.winnerTop3Accuracy || left.logLoss - right.logLoss)
 
-    console.log(`${model.name}`)
-    console.log(`  Races: ${total}`)
-    console.log(`  Winner accuracy: ${((winners / total) * 100).toFixed(1)}%`)
-    console.log(`  Podium accuracy: ${((podiums / total) * 100).toFixed(1)}%`)
-    console.log(`  Avg confidence: ${(avgConf * 100).toFixed(1)}%`)
-    console.log(`  Avg time error: ${avgTimeError.toFixed(2)}s`)
-    console.log()
-  }
+  console.log(JSON.stringify({
+    totalValidRaces: validRaces.length,
+    trainingRaces: splitIndex,
+    evaluationRaces: evaluationRaces.length,
+    evaluationFrom: new Date(firstEvaluationTime).toISOString(),
+    report,
+  }, null, 2))
 }
 
-compareModels().catch((error) => {
+compareModels().catch((error: unknown) => {
   console.error('Comparator failed', error)
-  process.exit(1)
+  process.exitCode = 1
 })

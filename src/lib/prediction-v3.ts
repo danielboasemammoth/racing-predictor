@@ -1,7 +1,91 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
 
 export const CONTEXTUAL_MODEL_VERSION = 'v3.1-contextual-ranking'
-const PROBABILITY_TEMPERATURE = 1.8
+
+export interface PredictionModelConfig {
+  version: string
+  temperature: number
+  weights: Omit<Features, 'historyStarts'>
+}
+
+export const MODEL_CONFIGS = {
+  baseline: {
+    version: 'v4-baseline',
+    temperature: 1.8,
+    weights: {
+      recentForm: 2.2,
+      contextualForm: 2.8,
+      distanceSuitability: 1.1,
+      conditionSuitability: 1.1,
+      courseSuitability: 0.7,
+      classMovement: 0.6,
+      speedRating: 0,
+      jockeyForm: 0.8,
+      trainerForm: 0.8,
+      partnershipForm: 0.6,
+      barrierSuitability: 0.55,
+      weightSuitability: 0.7,
+      fitness: 0.65,
+    },
+  },
+  contextual: {
+    version: 'v4-context-form',
+    temperature: 2.1,
+    weights: {
+      recentForm: 2.8,
+      contextualForm: 3.6,
+      distanceSuitability: 1.2,
+      conditionSuitability: 0.8,
+      courseSuitability: 0.6,
+      classMovement: 0.8,
+      speedRating: 0,
+      jockeyForm: 1,
+      trainerForm: 1.1,
+      partnershipForm: 0.9,
+      barrierSuitability: 0.25,
+      weightSuitability: 0.9,
+      fitness: 0.5,
+    },
+  },
+  connections: {
+    version: 'v4-connections',
+    temperature: 2.2,
+    weights: {
+      recentForm: 2.2,
+      contextualForm: 3.2,
+      distanceSuitability: 0.9,
+      conditionSuitability: 0.7,
+      courseSuitability: 0.5,
+      classMovement: 0.7,
+      speedRating: 0,
+      jockeyForm: 1.5,
+      trainerForm: 1.7,
+      partnershipForm: 1.6,
+      barrierSuitability: 0.2,
+      weightSuitability: 1,
+      fitness: 0.45,
+    },
+  },
+  optimized: {
+    version: 'v4-optimized',
+    temperature: 2.2,
+    weights: {
+      recentForm: 1.7,
+      contextualForm: 2.6,
+      distanceSuitability: 0.9,
+      conditionSuitability: 0.7,
+      courseSuitability: 0.5,
+      classMovement: 0.7,
+      speedRating: 0,
+      jockeyForm: 1.5,
+      trainerForm: 1.7,
+      partnershipForm: 1.6,
+      barrierSuitability: 0.2,
+      weightSuitability: 1,
+      fitness: 0.45,
+    },
+  },
+} satisfies Record<string, PredictionModelConfig>
 
 export interface RaceContext {
   id: string
@@ -49,7 +133,7 @@ export interface ContextualPredictionResult {
   predicted_times: Record<string, number>
 }
 
-interface Features {
+export interface Features {
   recentForm: number
   contextualForm: number
   distanceSuitability: number
@@ -59,6 +143,7 @@ interface Features {
   speedRating: number
   jockeyForm: number
   trainerForm: number
+  partnershipForm: number
   barrierSuitability: number
   weightSuitability: number
   fitness: number
@@ -101,7 +186,10 @@ function classRating(value?: string) {
 
 function resultScore(start: HistoricalStart) {
   if (!start.finishingPosition || start.fieldSize < 2) return 0
-  return clamp(1 - (start.finishingPosition - 1) / (start.fieldSize - 1))
+  const positionScore = clamp(1 - (start.finishingPosition - 1) / (start.fieldSize - 1))
+  if (start.margin === undefined || start.finishingPosition === 1) return positionScore
+  const marginScore = Math.exp(-Math.max(0, start.margin) / 5)
+  return positionScore * 0.75 + marginScore * 0.25
 }
 
 function contextualSimilarity(start: HistoricalStart, target: RaceContext) {
@@ -133,6 +221,20 @@ function strikeRate(
   return (weighted.reduce((sum, item) => sum + item.placed * item.weight, 0) + 0.75) / (totalWeight + 1.5)
 }
 
+function partnershipRate(starts: HistoricalStart[], jockey: string | undefined, trainer: string | undefined, target: RaceContext) {
+  if (!jockey || !trainer) return 0.5
+  const matching = starts.filter((start) => start.jockey === jockey && start.trainer === trainer && start.finishingPosition)
+  if (!matching.length) return 0.5
+  const targetTime = new Date(target.raceDatetime).getTime()
+  const weighted = matching.map((start) => ({
+    placed: start.finishingPosition! <= 3 ? 1 : 0,
+    weight: contextualSimilarity(start, target)
+      * Math.exp(-(targetTime - new Date(start.raceDatetime).getTime()) / (180 * 86_400_000)),
+  }))
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0)
+  return (weighted.reduce((sum, item) => sum + item.placed * item.weight, 0) + 0.75) / (totalWeight + 1.5)
+}
+
 function suitability(starts: HistoricalStart[], predicate: (start: HistoricalStart) => boolean) {
   const matching = starts.filter((start) => predicate(start) && start.finishingPosition)
   if (!matching.length) return 0.5
@@ -151,7 +253,12 @@ function normalizedSpeed(starts: HistoricalStart[]) {
   return clamp((speeds.reduce((sum, speed) => sum + speed, 0) / speeds.length - 12) / 6)
 }
 
-function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistory: HistoricalStart[]) {
+function buildFeatures(
+  entry: RaceEntryWithHorse,
+  target: RaceContext,
+  allHistory: HistoricalStart[],
+  fieldAverageWeight: number | undefined,
+) {
   const targetTime = new Date(target.raceDatetime).getTime()
   const availableHistory = allHistory.filter((start) => new Date(start.raceDatetime).getTime() < targetTime)
   const horseHistory = availableHistory
@@ -199,31 +306,35 @@ function buildFeatures(entry: RaceEntryWithHorse, target: RaceContext, allHistor
     speedRating: normalizedSpeed(recentStarts),
     jockeyForm: strikeRate(availableHistory, 'jockey', entry.jockey, target),
     trainerForm: strikeRate(availableHistory, 'trainer', entry.trainer, target),
+    partnershipForm: partnershipRate(availableHistory, entry.jockey, entry.trainer, target),
     barrierSuitability: suitability(sameBarrierBand, () => true),
-    weightSuitability: clamp(0.5 + (averageWeight - (entry.weight_carried ?? averageWeight)) * 0.12),
+    weightSuitability: /bm\s*\d+/i.test(target.raceClass ?? '') && fieldAverageWeight !== undefined && entry.weight_carried !== undefined
+      ? clamp(0.5 + (entry.weight_carried - fieldAverageWeight) * 0.08)
+      : clamp(0.5 + (averageWeight - (entry.weight_carried ?? averageWeight)) * 0.04),
     fitness,
     historyStarts: horseHistory.length,
   }
   return { features, recentStarts }
 }
 
-function score(features: Features) {
-  return (features.recentForm - 0.5) * 2.2
-    + (features.contextualForm - 0.5) * 2.8
-    + (features.distanceSuitability - 0.5) * 1.1
-    + (features.conditionSuitability - 0.5) * 1.1
-    + (features.courseSuitability - 0.5) * 0.7
-    + (features.classMovement - 0.5) * 0.6
-    + (features.speedRating - 0.5) * 1.2
-    + (features.jockeyForm - 0.5) * 0.8
-    + (features.trainerForm - 0.5) * 0.8
-    + (features.barrierSuitability - 0.5) * 0.55
-    + (features.weightSuitability - 0.5) * 0.7
-    + (features.fitness - 0.5) * 0.65
+function score(features: Features, weights: PredictionModelConfig['weights']) {
+  return (features.recentForm - 0.5) * weights.recentForm
+    + (features.contextualForm - 0.5) * weights.contextualForm
+    + (features.distanceSuitability - 0.5) * weights.distanceSuitability
+    + (features.conditionSuitability - 0.5) * weights.conditionSuitability
+    + (features.courseSuitability - 0.5) * weights.courseSuitability
+    + (features.classMovement - 0.5) * weights.classMovement
+    + (features.speedRating - 0.5) * weights.speedRating
+    + (features.jockeyForm - 0.5) * weights.jockeyForm
+    + (features.trainerForm - 0.5) * weights.trainerForm
+    + (features.partnershipForm - 0.5) * weights.partnershipForm
+    + (features.barrierSuitability - 0.5) * weights.barrierSuitability
+    + (features.weightSuitability - 0.5) * weights.weightSuitability
+    + (features.fitness - 0.5) * weights.fitness
 }
 
-function placeProbabilities(scores: number[]) {
-  const calibratedScores = scores.map((value) => value / PROBABILITY_TEMPERATURE)
+function placeProbabilities(scores: number[], temperature: number) {
+  const calibratedScores = scores.map((value) => value / temperature)
   const maximum = Math.max(...calibratedScores, 0)
   const strengths = calibratedScores.map((value) => Math.exp(value - maximum))
   const total = strengths.reduce((sum, strength) => sum + strength, 0)
@@ -244,26 +355,29 @@ function placeProbabilities(scores: number[]) {
   return { win, top3: top3.map((value) => clamp(value)) }
 }
 
-export function predictContextualRace(input: ContextualPredictionInput): ContextualPredictionResult {
+export function predictContextualRace(
+  input: ContextualPredictionInput,
+  config: PredictionModelConfig = MODEL_CONFIGS.baseline,
+): ContextualPredictionResult {
+  const knownFieldWeights = input.entries.flatMap((entry) => entry.weight_carried !== undefined ? [entry.weight_carried] : [])
+  const fieldAverageWeight = knownFieldWeights.length
+    ? knownFieldWeights.reduce((sum, weight) => sum + weight, 0) / knownFieldWeights.length
+    : undefined
   const ranked: RankedEntry[] = input.entries
     .filter((entry): entry is RaceEntryWithHorse & { horses: NonNullable<RaceEntryWithHorse['horses']> } => Boolean(entry.horses))
     .map((entry) => {
-      const { features, recentStarts } = buildFeatures(entry, input.race, input.history)
-      const timedStarts = recentStarts.filter((start) => start.finishingTime && start.distanceM)
-      const predictedTime = input.race.distanceM && timedStarts.length
-        ? timedStarts.reduce((sum, start) => sum + input.race.distanceM! / (start.distanceM! / start.finishingTime!), 0) / timedStarts.length
-        : undefined
+      const { features, recentStarts } = buildFeatures(entry, input.race, input.history, fieldAverageWeight)
       return {
         horseId: entry.horse_id,
         horseName: entry.horses.name,
-        score: score(features),
+        score: score(features, config.weights),
         features,
         recentStarts,
-        predictedTime,
+        predictedTime: undefined,
         odds: input.oddsByHorse?.[entry.horse_id] ?? {},
       }
     })
-  const probabilities = placeProbabilities(ranked.map((entry) => entry.score))
+  const probabilities = placeProbabilities(ranked.map((entry) => entry.score), config.temperature)
   const scored = ranked.map((entry, index) => ({
     ...entry,
     winProbability: probabilities.win[index],
