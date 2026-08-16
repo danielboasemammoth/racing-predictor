@@ -18,7 +18,6 @@ async function main() {
     const summary = await ingestRacingCom(supabase, today, {
       daysBack,
       daysForward: 0,
-      maxMeetings: 60,
     })
     for (const key of Object.keys(total) as Array<keyof IngestionSummary>) total[key] += summary[key]
     console.log(`${daysBack}-day lookback: ${summary.meetings} meetings, ${summary.races} races`)

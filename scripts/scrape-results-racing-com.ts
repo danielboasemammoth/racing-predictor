@@ -12,7 +12,7 @@ const today = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 }).format(new Date())
 
-ingestRacingCom(createScriptClient(), today, { daysBack: 7, daysForward: 0, maxMeetings: 60 })
+ingestRacingCom(createScriptClient(), today, { daysBack: 7, daysForward: 0 })
   .then((summary) => console.log(JSON.stringify(summary, null, 2)))
   .catch((error: unknown) => {
     console.error('Results ingestion failed', error)

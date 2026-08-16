@@ -101,6 +101,10 @@ export interface IngestionSummary {
   skippedMeetings: number
 }
 
+export function selectMeetings(meetings: RacingMeeting[], maxMeetings?: number) {
+  return maxMeetings === undefined ? meetings : meetings.slice(0, Math.max(0, maxMeetings))
+}
+
 async function graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const response = await fetch(ENDPOINT, {
     method: 'POST',
@@ -194,7 +198,7 @@ export async function ingestRacingCom(
   const meetings = await fetchMeetings(userDate, options.daysBack ?? 1, options.daysForward ?? 3)
   const summary: IngestionSummary = { meetings: 0, races: 0, horses: 0, entries: 0, skippedMeetings: 0 }
 
-  for (const meeting of meetings.slice(0, options.maxMeetings ?? 12)) {
+  for (const meeting of selectMeetings(meetings, options.maxMeetings)) {
     const { data: existingCourse, error: courseReadError } = await supabase
       .from('racecourses')
       .select('id')

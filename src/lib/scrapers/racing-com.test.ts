@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseDistance, parseFinishingTime, parsePrice, parseWeight, totalPrizeMoney } from '@/lib/scrapers/racing-com'
+import { parseDistance, parseFinishingTime, parsePrice, parseWeight, selectMeetings, totalPrizeMoney } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
   it('normalizes race measurements', () => {
@@ -17,5 +17,20 @@ describe('Racing.com normalization', () => {
       '{"Position":2,"Value":"6600.00"}',
       'invalid',
     ])).toBe(28050)
+  })
+
+  it('keeps every Victorian meeting unless an explicit cap is supplied', () => {
+    const meetings = Array.from({ length: 15 }, (_, index) => ({
+      id: String(index),
+      venue: `Country Course ${index}`,
+      date: '2026-08-16',
+      state: 'VIC',
+      isTrial: false,
+      isJumpOut: false,
+      meetUrl: `https://example.com/${index}`,
+    }))
+
+    expect(selectMeetings(meetings)).toHaveLength(15)
+    expect(selectMeetings(meetings, 12)).toHaveLength(12)
   })
 })

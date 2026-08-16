@@ -13,7 +13,7 @@ async function main() {
     day: '2-digit',
   }).format(new Date())
   const supabase = createScriptClient()
-  const results = await ingestRacingCom(supabase, today, { daysBack: 7, daysForward: 0, maxMeetings: 60 })
+  const results = await ingestRacingCom(supabase, today, { daysBack: 7, daysForward: 0 })
   const upcoming = await ingestRacingCom(supabase, today, { daysBack: 0, daysForward: 3 })
   console.log(JSON.stringify({ results, upcoming }, null, 2))
 }
