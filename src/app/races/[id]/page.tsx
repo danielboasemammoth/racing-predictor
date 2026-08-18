@@ -20,7 +20,8 @@ async function getRaceData(raceId: string) {
     .from('race_entries')
     .select('*, horses(*)')
     .eq('race_id', raceId)
-    .order('barrier_number', { ascending: true })
+    .neq('status', 'scratched')
+    .order(race.status === 'completed' ? 'finishing_position' : 'barrier_number', { ascending: true })
 
   if (entriesError) throw entriesError
 
