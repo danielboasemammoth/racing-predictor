@@ -82,6 +82,19 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
 
   const { race, entries, prediction, modelPredictions } = data
 
+  // Filter out scratched horses from prediction picks
+  const scratchedHorseIds = new Set(entries.filter(e => e.status === 'scratched').map(e => e.horse_id))
+  const filteredPrediction = prediction
+    ? {
+        ...prediction,
+        predictions: {
+          ...prediction.predictions,
+          podium: prediction.predictions.podium.filter(h => !scratchedHorseIds.has(h.horse_id)),
+          all_horses: prediction.predictions.all_horses?.filter(h => !scratchedHorseIds.has(h.horse_id)),
+        },
+      }
+    : prediction
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200">
@@ -108,7 +121,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
           </div>
         </div>
 
-        {prediction && (
+        {filteredPrediction && (
           <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
             <h2 className="text-lg font-semibold text-slate-900 mb-4">Prediction</h2>
             {modelPredictions.length > 1 && (
@@ -132,7 +145,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
               </div>
             )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {prediction.predictions.podium.map((horse, idx) => (
+              {filteredPrediction.predictions.podium.map((horse, idx) => (
                 <div key={horse.horse_id} className={`rounded-lg p-4 ${idx === 0 ? 'bg-amber-50 border-2 border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
                   <div className="flex items-center gap-2 mb-2">
                     <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${idx === 0 ? 'bg-amber-400 text-white' : 'bg-slate-300 text-slate-700'}`}>
@@ -153,12 +166,12 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                 </div>
               ))}
             </div>
-            {prediction.predictions.trifecta && (
+            {filteredPrediction.predictions.trifecta && (
               <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                 <p className="font-semibold text-slate-900">
-                  Trifecta: {prediction.predictions.trifecta.horse_names.join(' → ')} · {(prediction.predictions.trifecta.probability * 100).toFixed(1)}% model likelihood
+                  Trifecta: {filteredPrediction.predictions.trifecta.horse_names.join(' → ')} · {(filteredPrediction.predictions.trifecta.probability * 100).toFixed(1)}% model likelihood
                 </p>
-                <p className="mt-1">Model-fair $10 return approximately ${prediction.predictions.trifecta.fair_return_10.toFixed(0)}. Actual pool dividend will vary.</p>
+                <p className="mt-1">Model-fair $10 return approximately ${filteredPrediction.predictions.trifecta.fair_return_10.toFixed(0)}. Actual pool dividend will vary.</p>
               </div>
             )}
           </div>
