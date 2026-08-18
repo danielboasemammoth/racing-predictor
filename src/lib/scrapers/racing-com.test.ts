@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseDistance, parseFinishingTime, parsePrice, parseWeight, selectMeetings, totalPrizeMoney } from '@/lib/scrapers/racing-com'
+import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney } from '@lib/scrapers/racing-com'
+import type { RacingRace } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
   it('normalizes race measurements', () => {
@@ -29,8 +30,16 @@ describe('Racing.com normalization', () => {
       isJumpOut: false,
       meetUrl: `https://example.com/${index}`,
     }))
-
     expect(selectMeetings(meetings)).toHaveLength(15)
     expect(selectMeetings(meetings, 12)).toHaveLength(12)
+  })
+
+  it('parses API finishing positions, treating 109 as unplaced', () => {
+    expect(parsePosition(1)).toBe(1)
+    expect(parsePosition(8)).toBe(8)
+    expect(parsePosition(16)).toBe(16)
+    expect(parsePosition(109)).toBeNull()
+    expect(parsePosition(100)).toBeNull()
+    expect(parsePosition(null)).toBeNull()
   })
 })

@@ -140,6 +140,12 @@ export async function fetchRaces(meetCode: string) {
   return data.getRacesForMeet
 }
 
+export function parsePosition(value: number | null): number | null {
+  if (value === null) return null
+  if (value > 50) return null // API codes like 109 = unplaced/DNF
+  return value
+}
+
 export function parseDistance(value: string) {
   const distance = Number.parseInt(value.replace(/[^0-9]/g, ''), 10)
   return Number.isFinite(distance) ? distance : null
@@ -181,7 +187,7 @@ export function totalPrizeMoney(values: string[] | null) {
 function raceStatus(race: RacingRace): 'upcoming' | 'live' | 'completed' | 'cancelled' {
   const status = race.raceStatus.toLowerCase()
   if (status.includes('abandon') || status.includes('cancel')) return 'cancelled'
-  if (race.formRaceEntries.some((entry) => entry.position !== null) || status.includes('result')) return 'completed'
+  if (race.formRaceEntries.some((entry) => parsePosition(entry.position) !== null) || status.includes('result')) return 'completed'
   if (status.includes('running') || status.includes('interim')) return 'live'
   return 'upcoming'
 }
@@ -283,7 +289,7 @@ export async function ingestRacingCom(
           weight_carried: parseWeight(entry.weight),
           jockey: entry.jockeyName,
           trainer: entry.trainerName,
-          finishing_position: entry.position,
+          finishing_position: parsePosition(entry.position),
           finishing_time: parseFinishingTime(entry.winningTime ?? race.raceTime),
           sectional_times: {
             odds: entry.odds.map((quote) => ({
@@ -294,7 +300,7 @@ export async function ingestRacingCom(
             captured_at: updatedAt,
           },
           margin: typeof entry.margin === 'string' ? Number.parseFloat(entry.margin) || null : entry.margin,
-          status: entry.scratched ? 'scratched' : entry.position !== null ? 'finished' : 'running',
+          status: entry.scratched ? 'scratched' : parsePosition(entry.position) !== null ? 'finished' : 'running',
           updated_at: updatedAt,
       }]
     })
