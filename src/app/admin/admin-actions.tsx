@@ -8,6 +8,7 @@ const actions = [
   { id: 'scrape-results', path: '/api/admin/scrape-results', label: 'Scrape Race Results', detail: 'Import results for completed races' },
   { id: 'predict-contextual', path: '/api/admin/predict', label: 'Run Prediction Models', detail: 'Generate every model variant for upcoming races', mode: 'all' },
   { id: 'predict-consensus', path: '/api/admin/predict', label: 'Run Ensemble Model', detail: 'Generate probability-averaged ensemble predictions', mode: 'ensemble' },
+  { id: 'predict-retro', path: '/api/admin/predict', label: 'Regenerate Retrospective Predictions', detail: 'Re-run predictions for today\'s completed races (filters scratched)', mode: 'retrospective' },
   { id: 'backtest', path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
 ]
 
