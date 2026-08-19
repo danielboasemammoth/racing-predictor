@@ -136,14 +136,35 @@ async function graphql<T>(query: string, variables: Record<string, unknown>): Pr
   return payload.data
 }
 
-export async function fetchMeetings(userDate: string, daysBack = 1, daysForward = 3) {
-  const data = await graphql<{ GetRaceMeetingsByStateNew: RacingMeeting[] }>(MEETINGS_QUERY, {
-    states: 'VIC',
-    daysBack,
-    daysForward,
-    userDate,
-  })
-  return data.GetRaceMeetingsByStateNew.filter((meeting) => !meeting.isTrial && !meeting.isJumpOut)
+export const AUSTRALIAN_STATES = ['VIC', 'NSW', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'] as const
+
+export const STATE_REGIONS: Record<string, string> = {
+  VIC: 'Victoria',
+  NSW: 'New South Wales',
+  QLD: 'Queensland',
+  SA: 'South Australia',
+  WA: 'Western Australia',
+  TAS: 'Tasmania',
+  NT: 'Northern Territory',
+  ACT: 'Australian Capital Territory',
+}
+
+export async function fetchMeetings(userDate: string, daysBack = 1, daysForward = 3, states: readonly string[] = AUSTRALIAN_STATES) {
+  // The API always folds VIC meetings into every response regardless of the requested state, so dedupe by id.
+  const meetingsById = new Map<string, RacingMeeting>()
+  for (const state of states) {
+    const data = await graphql<{ GetRaceMeetingsByStateNew: RacingMeeting[] }>(MEETINGS_QUERY, {
+      states: state,
+      daysBack,
+      daysForward,
+      userDate,
+    })
+    for (const meeting of data.GetRaceMeetingsByStateNew) {
+      if (!meeting.isTrial && !meeting.isJumpOut) meetingsById.set(meeting.id, meeting)
+    }
+    await delay(200)
+  }
+  return [...meetingsById.values()]
 }
 
 export async function fetchRaces(meetCode: string) {
@@ -210,9 +231,9 @@ async function delay(milliseconds: number) {
 export async function ingestRacingCom(
   supabase: SupabaseClient,
   userDate: string,
-  options: { daysBack?: number; daysForward?: number; maxMeetings?: number } = {},
+  options: { daysBack?: number; daysForward?: number; maxMeetings?: number; states?: readonly string[] } = {},
 ): Promise<IngestionSummary> {
-  const meetings = await fetchMeetings(userDate, options.daysBack ?? 1, options.daysForward ?? 3)
+  const meetings = await fetchMeetings(userDate, options.daysBack ?? 1, options.daysForward ?? 3, options.states)
   const summary: IngestionSummary = { meetings: 0, races: 0, horses: 0, entries: 0, skippedMeetings: 0 }
 
   for (const meeting of selectMeetings(meetings, options.maxMeetings)) {
@@ -228,7 +249,7 @@ export async function ingestRacingCom(
     if (!racecourseId) {
       const { data: course, error: courseError } = await supabase
         .from('racecourses')
-        .insert({ name: meeting.venue, state: meeting.state, region: 'Victoria' })
+        .insert({ name: meeting.venue, state: meeting.state, region: STATE_REGIONS[meeting.state] ?? meeting.state })
         .select('id')
         .single()
       if (courseError) throw courseError

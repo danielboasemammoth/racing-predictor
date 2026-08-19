@@ -6,15 +6,48 @@ import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 
 export const dynamic = 'force-dynamic'
 
+function melbourneUtcOffsetMinutes(reference: Date) {
+  const offsetName = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Australia/Melbourne',
+    timeZoneName: 'longOffset',
+  }).formatToParts(reference).find((part) => part.type === 'timeZoneName')?.value ?? 'GMT+10:00'
+  const match = /GMT([+-]\d{2}):?(\d{2})?/.exec(offsetName)
+  if (!match) return 600
+  const hours = Number(match[1])
+  const minutes = Number(match[2] ?? '0')
+  return hours * 60 + (hours < 0 ? -minutes : minutes)
+}
+
+/** UTC instant of local midnight in Melbourne for the given YYYY-MM-DD date, accounting for daylight saving. */
+function melbourneMidnightUtc(dateKey: string, reference: Date) {
+  const [year, month, day] = dateKey.split('-').map(Number)
+  const offsetMinutes = melbourneUtcOffsetMinutes(reference)
+  return new Date(Date.UTC(year, month - 1, day) - offsetMinutes * 60_000)
+}
+
 async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
   const supabase = await createClient()
+
+  // National racing volume can exceed a simple row cap, so bound the window to "through tomorrow"
+  // (Melbourne time) instead, with a high safety-net limit rather than an arbitrary small count.
+  const now = new Date()
+  const dayAfterTomorrow = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000)
+  const dayAfterTomorrowKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Melbourne',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(dayAfterTomorrow)
+  const endOfTomorrow = melbourneMidnightUtc(dayAfterTomorrowKey, now)
+
   const { data: races, error: racesError } = await supabase
     .from('races')
     .select('*, racecourses(*)')
     .eq('status', 'upcoming')
-    .gte('race_datetime', new Date().toISOString())
+    .gte('race_datetime', now.toISOString())
+    .lt('race_datetime', endOfTomorrow.toISOString())
     .order('race_datetime', { ascending: true })
-    .limit(40)
+    .limit(300)
 
   if (racesError) throw racesError
 

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace } from '@/lib/scrapers/racing-com'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace, fetchMeetings } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
   it('normalizes race measurements', () => {
@@ -51,5 +51,31 @@ describe('Racing.com normalization', () => {
     expect(grouped.get('race-1')).toEqual(['horse-a', 'horse-b'])
     expect(grouped.get('race-2')).toEqual(['horse-c'])
     expect(grouped.get('race-3')).toBeUndefined()
+  })
+})
+
+describe('fetchMeetings across states', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('merges meetings from every requested state and dedupes the VIC meetings every response repeats', async () => {
+    const responsesByState: Record<string, Array<{ id: string; venue: string; state: string; isTrial: boolean; isJumpOut: boolean }>> = {
+      VIC: [{ id: 'vic-1', venue: 'Flemington', state: 'VIC', isTrial: false, isJumpOut: false }],
+      NSW: [
+        { id: 'vic-1', venue: 'Flemington', state: 'VIC', isTrial: false, isJumpOut: false },
+        { id: 'nsw-1', venue: 'Randwick', state: 'NSW', isTrial: false, isJumpOut: false },
+        { id: 'nsw-trial', venue: 'Randwick', state: 'NSW', isTrial: true, isJumpOut: false },
+      ],
+    }
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { variables: { states: string } }
+      return new Response(JSON.stringify({ data: { GetRaceMeetingsByStateNew: responsesByState[body.variables.states] ?? [] } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const meetings = await fetchMeetings('2026-08-19', 0, 2, ['VIC', 'NSW'])
+
+    expect(meetings.map((meeting) => meeting.id).sort()).toEqual(['nsw-1', 'vic-1'])
   })
 })
