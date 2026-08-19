@@ -105,6 +105,17 @@ export function selectMeetings(meetings: RacingMeeting[], maxMeetings?: number) 
   return maxMeetings === undefined ? meetings : meetings.slice(0, Math.max(0, maxMeetings))
 }
 
+/** Groups the horse IDs that belong to each race in the current fetch, used to remove stale entries left by earlier syncs. */
+export function groupValidHorseIdsByRace(entryRows: Array<{ race_id: string; horse_id: string }>) {
+  const map = new Map<string, string[]>()
+  for (const row of entryRows) {
+    const horseIds = map.get(row.race_id) ?? []
+    horseIds.push(row.horse_id)
+    map.set(row.race_id, horseIds)
+  }
+  return map
+}
+
 async function graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const response = await fetch(ENDPOINT, {
     method: 'POST',
@@ -309,6 +320,18 @@ export async function ingestRacingCom(
       .upsert(entryRows, { onConflict: 'race_id,horse_id' })
     if (entryError) throw entryError
     summary.entries += entryRows.length
+
+    // Remove entries left behind when a horse drops out of the field entirely (not just marked scratched)
+    // between syncs, so races never accumulate more runners than actually contest them.
+    for (const [raceId, validHorseIds] of groupValidHorseIdsByRace(entryRows)) {
+      if (!validHorseIds.length) continue
+      const { error: cleanupError } = await supabase
+        .from('race_entries')
+        .delete()
+        .eq('race_id', raceId)
+        .not('horse_id', 'in', `(${validHorseIds.join(',')})`)
+      if (cleanupError) throw cleanupError
+    }
 
     await delay(300)
   }

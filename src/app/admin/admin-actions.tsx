@@ -1,64 +1,129 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-const actions = [
-  { id: 'scrape-races', path: '/api/admin/scrape', label: 'Scrape Upcoming Races', detail: 'Import upcoming races from public sources' },
-  { id: 'scrape-results', path: '/api/admin/scrape-results', label: 'Scrape Race Results', detail: 'Import results for completed races' },
-  { id: 'predict-contextual', path: '/api/admin/predict', label: 'Run Prediction Models', detail: 'Generate every model variant for upcoming races', mode: 'all' },
-  { id: 'predict-consensus', path: '/api/admin/predict', label: 'Run Ensemble Model', detail: 'Generate probability-averaged ensemble predictions', mode: 'ensemble' },
-  { id: 'predict-retro', path: '/api/admin/predict', label: 'Regenerate Retrospective Predictions', detail: 'Re-run predictions for today\'s completed races (filters scratched)', mode: 'retrospective' },
-  { id: 'backtest', path: '/api/admin/backtest', label: 'Run Backtest', detail: 'Score predictions against actual results' },
+interface ActionStep {
+  path: string
+  mode?: string
+  label: string
+}
+
+interface AdminAction {
+  id: string
+  label: string
+  detail: string
+  steps: ActionStep[]
+}
+
+const actions: AdminAction[] = [
+  {
+    id: 'scrape-races',
+    label: 'Sync Upcoming Races',
+    detail: 'Import upcoming Victorian race fields from Racing.com',
+    steps: [{ path: '/api/admin/scrape', label: 'Importing upcoming races' }],
+  },
+  {
+    id: 'sync-results',
+    label: 'Sync Results & Backfill Predictions',
+    detail: 'Import finished race results, then regenerate predictions for every completed race so Backtest has fresh data to score',
+    steps: [
+      { path: '/api/admin/scrape-results', label: 'Importing race results' },
+      { path: '/api/admin/predict', mode: 'retrospective', label: 'Backfilling predictions for completed races' },
+    ],
+  },
+  {
+    id: 'predict-upcoming',
+    label: 'Generate Predictions',
+    detail: 'Run every model variant plus the ensemble for upcoming races',
+    steps: [{ path: '/api/admin/predict', mode: 'all', label: 'Generating predictions' }],
+  },
+  {
+    id: 'backtest',
+    label: 'Run Backtest',
+    detail: 'Score stored predictions against actual results for every completed race',
+    steps: [{ path: '/api/admin/backtest', label: 'Scoring predictions' }],
+  },
 ]
 
 export function AdminActions() {
   const router = useRouter()
   const [pendingActionId, setPendingActionId] = useState<string>()
+  const [stepLabel, setStepLabel] = useState<string>()
+  const [stepProgress, setStepProgress] = useState<{ index: number; total: number }>()
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [message, setMessage] = useState<string>()
   const [isError, setIsError] = useState(false)
 
-  async function runAction(actionId: string, path: string, mode?: string) {
-    setPendingActionId(actionId)
+  useEffect(() => {
+    if (!pendingActionId) return
+
+    const start = Date.now()
+    const interval = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - start) / 1000)), 1000)
+    return () => clearInterval(interval)
+  }, [pendingActionId])
+
+  async function runAction(action: AdminAction) {
+    setPendingActionId(action.id)
     setMessage(undefined)
+    setElapsedSeconds(0)
 
     try {
-      const body: Record<string, unknown> = {}
-      if (mode) body.mode = mode
+      let lastPayload: { message?: string } = {}
+      for (const [index, step] of action.steps.entries()) {
+        setStepLabel(step.label)
+        setStepProgress(action.steps.length > 1 ? { index: index + 1, total: action.steps.length } : undefined)
 
-      const response = await fetch(path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const payload = await response.json() as { message?: string }
-      setIsError(!response.ok)
-      setMessage(payload.message ?? (response.ok ? 'Action completed' : 'Action failed'))
-      if (response.ok) router.refresh()
+        const body: Record<string, unknown> = {}
+        if (step.mode) body.mode = step.mode
+
+        const response = await fetch(step.path, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        const payload = await response.json() as { message?: string }
+        if (!response.ok) {
+          setIsError(true)
+          setMessage(`${step.label} failed: ${payload.message ?? 'Action failed'}`)
+          return
+        }
+        lastPayload = payload
+      }
+      setIsError(false)
+      setMessage(lastPayload.message ?? 'Action completed')
+      router.refresh()
     } catch {
       setIsError(true)
       setMessage('Could not reach the server')
     } finally {
       setPendingActionId(undefined)
+      setStepLabel(undefined)
+      setStepProgress(undefined)
     }
   }
 
   return (
     <div className="space-y-3">
-      {actions.map((action) => (
-        <button
-          key={action.id}
-          type="button"
-          disabled={Boolean(pendingActionId)}
-          onClick={() => runAction(action.id, action.path, action.mode)}
-          className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition disabled:cursor-wait disabled:opacity-60"
-        >
-          <span className="block font-medium text-slate-900">
-            {pendingActionId === action.id ? 'Working…' : action.label}
-          </span>
-          <span className="block text-xs text-slate-500 mt-1">{action.detail}</span>
-        </button>
-      ))}
+      {actions.map((action) => {
+        const isPending = pendingActionId === action.id
+        return (
+          <button
+            key={action.id}
+            type="button"
+            disabled={Boolean(pendingActionId)}
+            onClick={() => runAction(action)}
+            className="w-full text-left px-4 py-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition disabled:cursor-wait disabled:opacity-60"
+          >
+            <span className="block font-medium text-slate-900">
+              {isPending
+                ? `${stepLabel}${stepProgress ? ` (step ${stepProgress.index}/${stepProgress.total})` : ''} · ${elapsedSeconds}s elapsed`
+                : action.label}
+            </span>
+            <span className="block text-xs text-slate-500 mt-1">{action.detail}</span>
+          </button>
+        )
+      })}
       {message && (
         <p
           role="status"

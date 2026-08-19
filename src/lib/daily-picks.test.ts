@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDailyPicks } from '@/lib/daily-picks'
+import { getDailyPicks, getTomorrowPicks } from '@/lib/daily-picks'
 import type { Prediction, RaceWithPrediction } from '@/lib/types'
 
 function race(id: string, date: string, win: number, top3: number, secondWin: number, odds: number): RaceWithPrediction {
@@ -40,7 +40,6 @@ describe('daily conservative picks', () => {
     ], new Date('2026-08-16T01:00:00Z'))
 
     expect(picks.map((pick) => pick.race.id)).toEqual(['strong', 'weak'])
-    expect(picks.every((pick) => pick.isToday)).toBe(true)
   })
 
   it('does not use payout odds when ranking picks', () => {
@@ -51,5 +50,15 @@ describe('daily conservative picks', () => {
     lowOdds.prediction!.predictions.podium[0].win_odds = 500
     highOdds.prediction!.predictions.podium[0].win_odds = 1.01
     expect(getDailyPicks([lowOdds, highOdds], new Date('2026-08-16T01:00:00Z'))[0].race.id).toBe('alpha')
+  })
+
+  it('ranks tomorrow\'s Melbourne races separately from today\'s', () => {
+    const picks = getTomorrowPicks([
+      race('today', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2),
+      race('tomorrow-strong', '2026-08-17T03:00:00Z', 0.4, 0.8, 0.1, 3),
+      race('tomorrow-weak', '2026-08-17T05:00:00Z', 0.2, 0.5, 0.18, 20),
+    ], new Date('2026-08-16T01:00:00Z'))
+
+    expect(picks.map((pick) => pick.race.id)).toEqual(['tomorrow-strong', 'tomorrow-weak'])
   })
 })

@@ -8,7 +8,6 @@ export interface DailyPick {
   leadOverSecond: number
   historyStarts: number
   certaintyScore: number
-  isToday: boolean
 }
 
 function melbourneDateKey(value: Date | string) {
@@ -30,11 +29,10 @@ function historyStarts(race: RaceWithPrediction, horseId: string) {
   return typeof features?.historyStarts === 'number' ? features.historyStarts : 0
 }
 
-export function getDailyPicks(races: RaceWithPrediction[], now = new Date(), limit = 3): DailyPick[] {
-  const today = melbourneDateKey(now)
-
+function candidatesForDate(races: RaceWithPrediction[], dateKey: string): DailyPick[] {
   const candidates = races.flatMap((race) => {
     if (!race.prediction) return []
+    if (melbourneDateKey(race.race_datetime) !== dateKey) return []
     const horse = race.prediction.predictions.podium[0]
     if (!horse) return []
 
@@ -59,9 +57,17 @@ export function getDailyPicks(races: RaceWithPrediction[], now = new Date(), lim
       leadOverSecond,
       historyStarts: starts,
       certaintyScore,
-      isToday: melbourneDateKey(race.race_datetime) === today,
     }]
   })
   const byCertainty = (left: DailyPick, right: DailyPick) => right.certaintyScore - left.certaintyScore
-  return candidates.filter((pick) => pick.isToday).sort(byCertainty).slice(0, limit)
+  return candidates.sort(byCertainty)
+}
+
+export function getDailyPicks(races: RaceWithPrediction[], now = new Date(), limit = 3): DailyPick[] {
+  return candidatesForDate(races, melbourneDateKey(now)).slice(0, limit)
+}
+
+export function getTomorrowPicks(races: RaceWithPrediction[], now = new Date(), limit = 3): DailyPick[] {
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+  return candidatesForDate(races, melbourneDateKey(tomorrow)).slice(0, limit)
 }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney } from '@lib/scrapers/racing-com'
-import type { RacingRace } from '@/lib/scrapers/racing-com'
+import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
   it('normalizes race measurements', () => {
@@ -41,5 +40,16 @@ describe('Racing.com normalization', () => {
     expect(parsePosition(109)).toBeNull()
     expect(parsePosition(100)).toBeNull()
     expect(parsePosition(null)).toBeNull()
+  })
+
+  it('groups the current fetch\'s horse ids per race so stale entries from earlier syncs can be identified', () => {
+    const grouped = groupValidHorseIdsByRace([
+      { race_id: 'race-1', horse_id: 'horse-a' },
+      { race_id: 'race-1', horse_id: 'horse-b' },
+      { race_id: 'race-2', horse_id: 'horse-c' },
+    ])
+    expect(grouped.get('race-1')).toEqual(['horse-a', 'horse-b'])
+    expect(grouped.get('race-2')).toEqual(['horse-c'])
+    expect(grouped.get('race-3')).toBeUndefined()
   })
 })
