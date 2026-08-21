@@ -32,13 +32,23 @@ async function getRaceData(raceId: string) {
     .order('predicted_at', { ascending: false })
 
   if (predictionError) throw predictionError
+  // Completed races must use the retrospective predictions (built only from pre-race history,
+  // with scratched horses excluded at generation time) - the live, non-retrospective predictions
+  // for that same race are frozen from whenever they were last generated pre-race and can go
+  // stale (e.g. still including a horse that was scratched afterwards).
+  const wantsRetrospective = race.status === 'completed'
   const modelPredictions: Prediction[] = []
   for (const prediction of (predictionRows ?? []) as Prediction[]) {
-    if (prediction.model_version.includes('retrospective')) continue
-    if (!CURRENT_MODEL_VERSIONS.includes(prediction.model_version)) continue
-    if (!modelPredictions.some((model) => model.model_version === prediction.model_version)) modelPredictions.push(prediction)
+    const isRetrospective = prediction.model_version.includes('retrospective')
+    if (isRetrospective !== wantsRetrospective) continue
+    const baseVersion = prediction.model_version.replace('-retrospective', '')
+    if (!CURRENT_MODEL_VERSIONS.includes(baseVersion)) continue
+    if (!modelPredictions.some((model) => model.model_version.replace('-retrospective', '') === baseVersion)) modelPredictions.push(prediction)
   }
-  const prediction = modelPredictions.find((model) => model.model_version === 'v4.1-ensemble') ?? modelPredictions.find((model) => model.model_version === 'v4-ensemble') ?? modelPredictions[0] ?? null
+  const prediction = modelPredictions.find((model) => model.model_version.replace('-retrospective', '') === 'v4.1-ensemble')
+    ?? modelPredictions.find((model) => model.model_version.replace('-retrospective', '') === 'v4-ensemble')
+    ?? modelPredictions[0]
+    ?? null
 
   return {
     race: race as Race,
@@ -130,9 +140,10 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {modelPredictions.sort((left, right) => left.model_version.localeCompare(right.model_version)).map((model) => {
                     const winner = model.predictions.podium[0]
+                    const baseVersion = model.model_version.replace('-retrospective', '')
                     return (
-                      <div key={model.model_version} className={`border p-3 ${model.model_version === 'v4.1-ensemble' ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
-                        <p className="text-xs font-semibold text-slate-500">{model.model_version}</p>
+                      <div key={model.model_version} className={`border p-3 ${baseVersion === 'v4.1-ensemble' ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                        <p className="text-xs font-semibold text-slate-500">{baseVersion}</p>
                         <p className="mt-1 font-bold text-slate-900">{winner?.horse_name ?? 'No pick'}</p>
                         <p className="text-sm text-slate-600">Winner confidence {((model.confidence_scores.winner ?? 0) * 100).toFixed(1)}%</p>
                         {(model.confidence_scores.winner ?? 0) >= 0.25 && (
