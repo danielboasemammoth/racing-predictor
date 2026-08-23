@@ -76,6 +76,9 @@ create table public.race_entries (
 );
 
 -- Predictions
+-- Immutable history: one row per generation (predicted_at), never overwritten, so
+-- prediction and market movement can be analysed over time. Callers must select the
+-- latest row per (race_id, model_version) rather than relying on a unique constraint.
 create table public.predictions (
   id uuid default uuid_generate_v4() primary key,
   race_id uuid references public.races(id) on delete cascade not null,
@@ -86,9 +89,10 @@ create table public.predictions (
   predicted_times jsonb not null,
   actual_results jsonb,
   accuracy_score numeric,
-  created_at timestamptz default now() not null,
-  unique(race_id, model_version)
+  created_at timestamptz default now() not null
 );
+
+create index idx_predictions_race_model_latest on public.predictions (race_id, model_version, predicted_at desc);
 
 -- Accuracy log (daily/weekly aggregates)
 create table public.accuracy_log (

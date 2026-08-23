@@ -186,14 +186,28 @@ export async function POST(request: Request) {
         ? [...ALL_MODEL_CONFIGS.map((config) => runConfiguredModel(input, config)), runEnsemble(input)]
         : [runEnsemble(input)]
       const suffix = options.mode === 'retrospective' ? '-retrospective' : ''
-      const { error: predictionError } = await supabase.from('predictions').upsert(results.map((result) => ({
+      const rows = results.map((result) => ({
           race_id: race.id,
           model_version: `${result.modelVersion}${suffix}`,
           predictions: result.predictions,
           confidence_scores: result.confidence_scores,
           predicted_times: result.predicted_times,
           predicted_at: new Date().toISOString(),
-        })), { onConflict: 'race_id,model_version' })
+        }))
+
+      if (options.mode === 'retrospective') {
+        // A completed race's history never changes day-to-day, so retrospective reruns
+        // replace the prior row instead of growing unbounded duplicate history.
+        const { error: deleteError } = await supabase
+          .from('predictions')
+          .delete()
+          .eq('race_id', race.id)
+          .in('model_version', rows.map((row) => row.model_version))
+        if (deleteError) throw deleteError
+      }
+      // Live/upcoming predictions are inserted as a new immutable snapshot every run,
+      // so prediction and market movement can be analysed over time (never overwritten).
+      const { error: predictionError } = await supabase.from('predictions').insert(rows)
 
       if (predictionError) throw predictionError
       created += 1
