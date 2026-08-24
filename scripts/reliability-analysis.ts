@@ -22,11 +22,15 @@ import {
   isAgeRestricted,
   isCountryBoosted,
   isSexRestricted,
+  marketImpliedProbability,
+  modelEdge,
+  modelEdgeBand,
   predictionGapBand,
   probabilityBand,
 } from '../src/lib/reliability-analysis'
 import { CURRENT_MODEL_VERSIONS } from '../src/lib/prediction-suite'
 import { computeReliabilityScore, type CalibrationTable } from '../src/lib/reliability-score'
+import { flatStakeReport } from '../src/lib/roi-analysis'
 import { createScriptClient } from './supabase-client'
 
 config({ path: '.env.local' })
@@ -50,6 +54,7 @@ interface EntryRow {
   barrier_number: number | null
   finishing_position: number | null
   status: string
+  sectional_times: { odds?: Array<{ win?: number | string | null }> } | null
 }
 
 interface PredictionRow {
@@ -75,6 +80,8 @@ interface RaceAnalysisRow {
   gap: number
   agreeing: number
   totalBaseModels: number
+  /** Best recorded win price from Racing.com's own feed - NOT a confirmed TAB/Betfair price. */
+  bestRecordedOdds: number | null
 }
 
 async function loadCompletedRaces(): Promise<RaceRow[]> {
@@ -105,7 +112,7 @@ async function loadEntries(raceIds: string[]): Promise<EntryRow[]> {
   return loadInChunks(raceIds, async (chunk) => {
     const { data, error } = await supabase
       .from('race_entries')
-      .select('race_id, horse_id, barrier_number, finishing_position, status')
+      .select('race_id, horse_id, barrier_number, finishing_position, status, sectional_times')
       .in('race_id', chunk)
     if (error) throw error
     return (data ?? []) as EntryRow[]
@@ -155,6 +162,12 @@ function buildAnalysisRows(races: RaceRow[], entries: EntryRow[], predictions: P
     const probability = predictedWinner.win_probability ?? predictedWinner.confidence
     const secondProbability = second ? (second.win_probability ?? second.confidence) : 0
 
+    const winnerEntry = raceEntries.find((entry) => entry.horse_id === predictedWinner.horse_id)
+    const recordedPrices = (winnerEntry?.sectional_times?.odds ?? [])
+      .map((quote) => Number(quote.win))
+      .filter((price) => Number.isFinite(price) && price > 0)
+    const bestRecordedOdds = recordedPrices.length ? Math.max(...recordedPrices) : null
+
     return [{
       raceId: race.id,
       raceDatetime: race.race_datetime,
@@ -172,6 +185,7 @@ function buildAnalysisRows(races: RaceRow[], entries: EntryRow[], predictions: P
       gap: Math.max(0, probability - secondProbability),
       agreeing,
       totalBaseModels: baseModelPicks.length,
+      bestRecordedOdds,
     }]
   })
 }
@@ -255,6 +269,44 @@ function reportCalibrationMonotonicity(rows: RaceAnalysisRow[], calibration: Cal
   }
 }
 
+/**
+ * Spec sections 25-26: flat-stake profitability, overall and by Model Edge band. IMPORTANT:
+ * odds here are the best price recorded in Racing.com's own feed, not a confirmed TAB Fixed Win
+ * or Betfair SP - this project has no market-data integration yet. Treat as an approximation.
+ */
+function reportProfitability(rows: RaceAnalysisRow[], calibration: CalibrationTable) {
+  const withOdds = rows.filter((r): r is RaceAnalysisRow & { bestRecordedOdds: number } => r.bestRecordedOdds !== null)
+  console.log(`\n## Flat-stake profitability (${withOdds.length}/${rows.length} races had a recorded price; NOT confirmed TAB/Betfair)`)
+
+  const overall = flatStakeReport(withOdds.map((r) => ({ won: r.correctWinner, odds: r.bestRecordedOdds })))
+  console.log(
+    `  Overall: ${overall.bets} bets, ROI ${(overall.roi * 100).toFixed(1)}%, profit factor ${overall.profitFactor?.toFixed(2) ?? 'n/a'},`
+    + ` max drawdown ${overall.maxDrawdown.toFixed(1)} units, longest losing streak ${overall.longestLosingStreak}`,
+  )
+
+  console.log('\n  By Model Edge (model probability - implied probability from recorded price):')
+  const edgeGroups = Map.groupBy(withOdds, (r) => modelEdgeBand(modelEdge(r.probability, marketImpliedProbability(r.bestRecordedOdds))))
+  for (const [label, group] of edgeGroups) {
+    if (group.length < 5) continue
+    const report = flatStakeReport(group.map((r) => ({ won: r.correctWinner, odds: r.bestRecordedOdds })))
+    console.log(`    ${label.padEnd(14)} n=${String(group.length).padEnd(5)} ROI ${(report.roi * 100).toFixed(1)}%`)
+  }
+
+  console.log('\n  By Reliability Score band:')
+  const scoreGroups = Map.groupBy(withOdds, (r) => {
+    const score = computeReliabilityScore({ probability: r.probability, gap: r.gap, agreeing: r.agreeing, totalBaseModels: r.totalBaseModels }, calibration).score
+    if (score >= 80) return '80+'
+    if (score >= 65) return '65-79'
+    if (score >= 50) return '50-64'
+    return '<50'
+  })
+  for (const [label, group] of scoreGroups) {
+    if (group.length < 5) continue
+    const report = flatStakeReport(group.map((r) => ({ won: r.correctWinner, odds: r.bestRecordedOdds })))
+    console.log(`    ${label.padEnd(14)} n=${String(group.length).padEnd(5)} ROI ${(report.roi * 100).toFixed(1)}%`)
+  }
+}
+
 async function main() {
   console.log('Loading completed races, entries, and retrospective predictions...')
   const races = await loadCompletedRaces()
@@ -309,6 +361,7 @@ async function main() {
   console.log('\nWrote scripts/output/reliability-calibration.json (production calibration table: probability/gap/agreement only).')
 
   reportCalibrationMonotonicity(rows, calibration)
+  reportProfitability(rows, calibration)
 
   const historyPayload = { generatedAt: new Date().toISOString(), trainEnd, validationEnd, rows }
   writeFileSync(
