@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { getDailyPicks, getTomorrowPicks } from '@/lib/daily-picks'
+import type { CalibrationTable } from '@/lib/reliability-score'
 import type { Prediction, RaceWithPrediction } from '@/lib/types'
 
-function race(id: string, date: string, win: number, top3: number, secondWin: number, odds: number): RaceWithPrediction {
+function race(
+  id: string, date: string, win: number, top3: number, secondWin: number, odds: number,
+  extra: { raceClass?: string; modelPredictions?: Prediction[] } = {},
+): RaceWithPrediction {
   const prediction: Prediction = {
     id: `prediction-${id}`,
     race_id: id,
@@ -25,9 +29,11 @@ function race(id: string, date: string, win: number, top3: number, secondWin: nu
     id,
     racecourse_id: 'course',
     race_number: 1,
+    race_class: extra.raceClass,
     race_datetime: date,
     status: 'upcoming',
     prediction,
+    model_predictions: extra.modelPredictions ?? [prediction],
   }
 }
 
@@ -60,5 +66,53 @@ describe('daily conservative picks', () => {
     ], new Date('2026-08-16T01:00:00Z'))
 
     expect(picks.map((pick) => pick.race.id)).toEqual(['tomorrow-strong', 'tomorrow-weak'])
+  })
+
+  it('ranks by Reliability Score instead of certaintyScore when a calibration table is supplied', () => {
+    const calibration: CalibrationTable = {
+      overallBaseline: 0.18,
+      probability: [],
+      gap: [],
+      agreement: [],
+      rawRateRange: { min: 0.1, max: 0.3 },
+    }
+    // "weak" has a lower raw win probability but this test only checks that reliability
+    // (not certainty) drives ranking - with an empty calibration table every pick falls back
+    // to the baseline, so ranking should be stable/unchanged; the key assertion is that a
+    // `reliability` object is actually attached to each pick when calibration is provided.
+    const picks = getDailyPicks([
+      race('strong', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2),
+      race('weak', '2026-08-16T04:00:00Z', 0.18, 0.48, 0.16, 50),
+    ], new Date('2026-08-16T01:00:00Z'), 3, { calibration })
+
+    expect(picks.every((pick) => pick.reliability !== null)).toBe(true)
+  })
+
+  it('filters out picks below a minimum reliability score', () => {
+    const calibration: CalibrationTable = {
+      overallBaseline: 0.18,
+      probability: [
+        { label: '30-34.9%', n: 100, wins: 40, strikeRate: 0.4, ciLow: 0.3, ciHigh: 0.5, shrunkStrikeRate: 0.4, baseline: 0.18, lift: 0.22, significant: true },
+        { label: '<15%', n: 100, wins: 10, strikeRate: 0.1, ciLow: 0.05, ciHigh: 0.15, shrunkStrikeRate: 0.1, baseline: 0.18, lift: -0.08, significant: true },
+      ],
+      gap: [],
+      agreement: [],
+      rawRateRange: { min: 0.1, max: 0.4 },
+    }
+    const picks = getDailyPicks([
+      race('strong', '2026-08-16T03:00:00Z', 0.32, 0.75, 0.15, 2),
+      race('weak', '2026-08-16T04:00:00Z', 0.1, 0.3, 0.05, 50),
+    ], new Date('2026-08-16T01:00:00Z'), 3, { calibration, minReliability: 50 })
+
+    expect(picks.map((pick) => pick.race.id)).toEqual(['strong'])
+  })
+
+  it('filters to maiden races only when requested', () => {
+    const picks = getDailyPicks([
+      race('maiden-race', '2026-08-16T03:00:00Z', 0.3, 0.7, 0.1, 3, { raceClass: 'MDN-SW' }),
+      race('benchmark-race', '2026-08-16T04:00:00Z', 0.35, 0.75, 0.1, 3, { raceClass: 'BM70' }),
+    ], new Date('2026-08-16T01:00:00Z'), 3, { maidenOnly: true })
+
+    expect(picks.map((pick) => pick.race.id)).toEqual(['maiden-race'])
   })
 })

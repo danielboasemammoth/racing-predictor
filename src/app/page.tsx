@@ -1,8 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { Race, RaceWithPrediction, Prediction } from '@/lib/types'
-import { getDailyPicks, getTomorrowPicks } from '@/lib/daily-picks'
+import { getDailyPicks, getTomorrowPicks, type DailyPicksFilterOptions } from '@/lib/daily-picks'
 import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
+import { loadReliabilityContext } from '@/lib/reliability-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -107,10 +108,28 @@ function getConfidenceColor(conf: number) {
   return 'text-red-700 bg-red-50'
 }
 
-export default async function Home() {
-  const races = await getUpcomingRaces()
-  const dailyPicks = getDailyPicks(races)
-  const tomorrowPicks = getTomorrowPicks(races)
+export default async function Home({ searchParams }: { searchParams: Promise<{ minReliability?: string; maidenOnly?: string }> }) {
+  const params = await searchParams
+  const filters: DailyPicksFilterOptions = {
+    minReliability: params.minReliability ? Number(params.minReliability) : undefined,
+    maidenOnly: params.maidenOnly === '1',
+  }
+
+  const supabase = await createClient()
+  const [races, reliabilityContext] = await Promise.all([getUpcomingRaces(), loadReliabilityContext(supabase)])
+  filters.calibration = reliabilityContext?.calibration ?? null
+
+  const dailyPicks = getDailyPicks(races, new Date(), 3, filters)
+  const tomorrowPicks = getTomorrowPicks(races, new Date(), 3, filters)
+
+  function filterLink(overrides: Partial<{ minReliability?: string; maidenOnly?: string }>) {
+    const next = new URLSearchParams()
+    const merged = { ...params, ...overrides }
+    if (merged.minReliability) next.set('minReliability', merged.minReliability)
+    if (merged.maidenOnly) next.set('maidenOnly', merged.maidenOnly)
+    const query = next.toString()
+    return query ? `/?${query}` : '/'
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -139,6 +158,27 @@ export default async function Home() {
           </div>
         ) : (
           <div className="space-y-6">
+            {reliabilityContext && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold text-slate-600">Filters:</span>
+                <Link
+                  href={filterLink({ minReliability: params.minReliability === '80' ? undefined : '80' })}
+                  className={`rounded-full border px-3 py-1 font-medium ${params.minReliability === '80' ? 'border-teal-600 bg-teal-600 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}
+                >
+                  Reliability ≥ 80
+                </Link>
+                <Link
+                  href={filterLink({ maidenOnly: params.maidenOnly === '1' ? undefined : '1' })}
+                  className={`rounded-full border px-3 py-1 font-medium ${params.maidenOnly === '1' ? 'border-teal-600 bg-teal-600 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}
+                >
+                  Maiden races only
+                </Link>
+                {(params.minReliability || params.maidenOnly) && (
+                  <Link href="/" className="text-slate-500 underline hover:text-slate-700">Clear filters</Link>
+                )}
+              </div>
+            )}
+
             {dailyPicks.length > 0 && (
               <section aria-labelledby="daily-picks-title" className="border-y border-teal-200 bg-teal-50 px-4 py-6 sm:px-6">
                 <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
@@ -172,6 +212,12 @@ export default async function Home() {
                           {index + 1}
                         </span>
                       </div>
+
+                      {pick.reliability && (
+                        <p className="mt-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          Reliability {pick.reliability.score}/100 · {pick.reliability.classification}
+                        </p>
+                      )}
 
                       <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3">
                         <div>
@@ -228,6 +274,12 @@ export default async function Home() {
                           {index + 1}
                         </span>
                       </div>
+
+                      {pick.reliability && (
+                        <p className="mt-2 inline-block rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          Reliability {pick.reliability.score}/100 · {pick.reliability.classification}
+                        </p>
+                      )}
 
                       <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-200 py-3">
                         <div>

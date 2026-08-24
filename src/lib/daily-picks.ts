@@ -1,4 +1,6 @@
 import type { JsonValue, PredictedHorse, RaceWithPrediction } from '@/lib/types'
+import { classifyRaceType } from '@/lib/reliability-analysis'
+import { computeReliabilityScore, type CalibrationTable, type ReliabilityResult } from '@/lib/reliability-score'
 
 export interface DailyPick {
   race: RaceWithPrediction
@@ -8,6 +10,15 @@ export interface DailyPick {
   leadOverSecond: number
   historyStarts: number
   certaintyScore: number
+  raceType: string
+  reliability: ReliabilityResult | null
+}
+
+export interface DailyPicksFilterOptions {
+  /** When provided, picks are ranked by Reliability Score instead of the simpler certaintyScore. */
+  calibration?: CalibrationTable | null
+  minReliability?: number
+  maidenOnly?: boolean
 }
 
 function melbourneDateKey(value: Date | string) {
@@ -29,7 +40,7 @@ function historyStarts(race: RaceWithPrediction, horseId: string) {
   return typeof features?.historyStarts === 'number' ? features.historyStarts : 0
 }
 
-function candidatesForDate(races: RaceWithPrediction[], dateKey: string): DailyPick[] {
+function candidatesForDate(races: RaceWithPrediction[], dateKey: string, options: DailyPicksFilterOptions = {}): DailyPick[] {
   const candidates = races.flatMap((race) => {
     if (!race.prediction) return []
     if (melbourneDateKey(race.race_datetime) !== dateKey) return []
@@ -49,6 +60,12 @@ function candidatesForDate(races: RaceWithPrediction[], dateKey: string): DailyP
       + separationScore * 0.12
       + evidenceScore * 0.08
 
+    const otherModels = (race.model_predictions ?? []).filter((model) => model.model_version !== race.prediction?.model_version)
+    const agreeing = otherModels.filter((model) => model.predictions.podium[0]?.horse_id === horse.horse_id).length
+    const reliability = options.calibration
+      ? computeReliabilityScore({ probability: winProbability, gap: leadOverSecond, agreeing, totalBaseModels: otherModels.length }, options.calibration)
+      : null
+
     return [{
       race,
       horse,
@@ -57,17 +74,28 @@ function candidatesForDate(races: RaceWithPrediction[], dateKey: string): DailyP
       leadOverSecond,
       historyStarts: starts,
       certaintyScore,
+      raceType: classifyRaceType(race.race_class),
+      reliability,
     }]
   })
-  const byCertainty = (left: DailyPick, right: DailyPick) => right.certaintyScore - left.certaintyScore
-  return candidates.sort(byCertainty)
+
+  const filtered = candidates.filter((pick) => {
+    if (options.minReliability !== undefined && (pick.reliability?.score ?? -1) < options.minReliability) return false
+    if (options.maidenOnly && pick.raceType !== 'maiden' && pick.raceType !== 'super-maiden') return false
+    return true
+  })
+
+  // Reliability Score (when available) is a better-evidenced ranking than the simpler
+  // certaintyScore, which only looks at this one prediction with no historical calibration.
+  const rank = (pick: DailyPick) => pick.reliability ? pick.reliability.score : pick.certaintyScore * 100
+  return filtered.sort((left, right) => rank(right) - rank(left))
 }
 
-export function getDailyPicks(races: RaceWithPrediction[], now = new Date(), limit = 3): DailyPick[] {
-  return candidatesForDate(races, melbourneDateKey(now)).slice(0, limit)
+export function getDailyPicks(races: RaceWithPrediction[], now = new Date(), limit = 3, options: DailyPicksFilterOptions = {}): DailyPick[] {
+  return candidatesForDate(races, melbourneDateKey(now), options).slice(0, limit)
 }
 
-export function getTomorrowPicks(races: RaceWithPrediction[], now = new Date(), limit = 3): DailyPick[] {
+export function getTomorrowPicks(races: RaceWithPrediction[], now = new Date(), limit = 3, options: DailyPicksFilterOptions = {}): DailyPick[] {
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
-  return candidatesForDate(races, melbourneDateKey(tomorrow)).slice(0, limit)
+  return candidatesForDate(races, melbourneDateKey(tomorrow), options).slice(0, limit)
 }
