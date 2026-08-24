@@ -19,6 +19,10 @@ export interface HistoricalRaceFeatures {
   probability?: number
   /** Best recorded win price from Racing.com's own feed - NOT a confirmed TAB/Betfair price. */
   bestRecordedOdds?: number | null
+  /** Probability gap and model agreement - needed for the Reliability Score calibration table (spec section 28). */
+  gap?: number
+  agreeing?: number
+  totalBaseModels?: number
 }
 
 export interface SimilarRaceQuery {

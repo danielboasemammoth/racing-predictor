@@ -29,7 +29,7 @@ import {
   probabilityBand,
 } from '../src/lib/reliability-analysis'
 import { CURRENT_MODEL_VERSIONS } from '../src/lib/prediction-suite'
-import { computeReliabilityScore, type CalibrationTable } from '../src/lib/reliability-score'
+import { computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '../src/lib/reliability-score'
 import { flatStakeReport } from '../src/lib/roi-analysis'
 import { createScriptClient } from './supabase-client'
 
@@ -242,30 +242,10 @@ function analyzeSlice(label: string, rows: RaceAnalysisRow[]) {
 
 /** Spec section 28: verify higher Reliability Scores correspond to genuinely higher strike rates. */
 function reportCalibrationMonotonicity(rows: RaceAnalysisRow[], calibration: CalibrationTable) {
-  const scored = rows.map((row) => ({
-    row,
-    result: computeReliabilityScore(
-      { probability: row.probability, gap: row.gap, agreeing: row.agreeing, totalBaseModels: row.totalBaseModels },
-      calibration,
-    ),
-  }))
-
-  const bands = [
-    { label: '90-100', min: 90, max: 101 },
-    { label: '80-89', min: 80, max: 90 },
-    { label: '70-79', min: 70, max: 80 },
-    { label: '60-69', min: 60, max: 70 },
-    { label: '50-59', min: 50, max: 60 },
-    { label: '<50', min: 0, max: 50 },
-  ]
-
   console.log('\n## Reliability Score calibration (spec section 28 - should read monotonically top to bottom)')
   console.log('  Band       Races   Wins   Strike Rate')
-  for (const band of bands) {
-    const inBand = scored.filter((s) => s.result.score >= band.min && s.result.score < band.max)
-    if (!inBand.length) continue
-    const wins = inBand.filter((s) => s.row.correctWinner).length
-    console.log(`  ${band.label.padEnd(10)} ${String(inBand.length).padEnd(7)} ${String(wins).padEnd(6)} ${((wins / inBand.length) * 100).toFixed(1)}%`)
+  for (const band of reliabilityCalibrationBands(rows, calibration)) {
+    console.log(`  ${band.label.padEnd(10)} ${String(band.n).padEnd(7)} ${String(band.wins).padEnd(6)} ${(band.strikeRate * 100).toFixed(1)}%`)
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyReliability, computeReliabilityScore, type CalibrationTable } from '@/lib/reliability-score'
+import { classifyReliability, computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '@/lib/reliability-score'
 import { summarizeBucket } from '@/lib/reliability-analysis'
 
 const baseline = 0.18
@@ -64,5 +64,27 @@ describe('computeReliabilityScore', () => {
       expect(factor.sampleSize).toBeGreaterThan(0)
       expect(typeof factor.label).toBe('string')
     }
+  })
+})
+
+describe('reliabilityCalibrationBands', () => {
+  it('reports the actual strike rate observed within each Reliability Score band', () => {
+    const calibration = calibrationFixture()
+    // Strong-condition rows should mostly land in a high score band; weak-condition rows in a low one.
+    const rows = [
+      ...Array.from({ length: 20 }, (_, i) => ({ correctWinner: i % 2 === 0, probability: 0.42, gap: 0.16, agreeing: 4, totalBaseModels: 4 })),
+      ...Array.from({ length: 20 }, (_, i) => ({ correctWinner: i % 10 === 0, probability: 0.1, gap: 0.01, agreeing: 4, totalBaseModels: 4 })),
+    ]
+    const bands = reliabilityCalibrationBands(rows, calibration)
+    expect(bands.length).toBeGreaterThan(0)
+    for (const band of bands) {
+      expect(band.strikeRate).toBeCloseTo(band.wins / band.n)
+    }
+  })
+
+  it('omits bands with no races rather than reporting a false zero', () => {
+    const calibration = calibrationFixture()
+    const bands = reliabilityCalibrationBands([{ correctWinner: true, probability: 0.42, gap: 0.16, agreeing: 4, totalBaseModels: 4 }], calibration)
+    expect(bands.every((band) => band.n > 0)).toBe(true)
   })
 })

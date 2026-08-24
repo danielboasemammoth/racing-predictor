@@ -142,6 +142,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
             </div>
             <div className="flex gap-3">
               <Link href="/accuracy" className="text-sm font-medium text-teal-700 hover:text-teal-800">Accuracy</Link>
+              <Link href="/analytics" className="text-sm font-medium text-teal-700 hover:text-teal-800">Analytics</Link>
               <Link href="/results" className="text-sm font-medium text-teal-700 hover:text-teal-800">Results</Link>
               <Link href="/verify" className="text-sm font-medium text-teal-700 hover:text-teal-800">Verify</Link>
               <Link href="/admin" className="text-sm font-medium text-slate-600 hover:text-slate-900">Admin</Link>

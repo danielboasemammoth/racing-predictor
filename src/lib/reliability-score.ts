@@ -11,7 +11,7 @@
  * it answers "how has the model actually performed in races like this one", per the spec's own
  * definition of reliability.
  */
-import { agreementBand, predictionGapBand, probabilityBand, MIN_CREDIBLE_SAMPLE, type BucketStats } from './reliability-analysis'
+import { agreementBand, predictionGapBand, probabilityBand, wilsonInterval, MIN_CREDIBLE_SAMPLE, type BucketStats } from './reliability-analysis'
 
 export interface CalibrationTable {
   overallBaseline: number
@@ -102,4 +102,43 @@ export function computeReliabilityScore(input: ReliabilityInput, calibration: Ca
       liftVsBaseline: factor.bucket.lift,
     })),
   }
+}
+
+export interface ReliabilityCalibrationBand {
+  label: string
+  n: number
+  wins: number
+  strikeRate: number
+  ciLow: number
+  ciHigh: number
+}
+
+const RELIABILITY_BANDS = [
+  { label: '90-100', min: 90, max: 101 },
+  { label: '80-89', min: 80, max: 90 },
+  { label: '70-79', min: 70, max: 80 },
+  { label: '60-69', min: 60, max: 70 },
+  { label: '50-59', min: 50, max: 60 },
+  { label: '<50', min: 0, max: 50 },
+]
+
+/** Spec section 28: buckets historical races by their Reliability Score and reports the actual strike rate in each band - should read monotonically. */
+export function reliabilityCalibrationBands(
+  rows: Array<{ correctWinner: boolean; probability: number; gap: number; agreeing: number; totalBaseModels: number }>,
+  calibration: CalibrationTable,
+): ReliabilityCalibrationBand[] {
+  const scored = rows.map((row) => ({
+    correctWinner: row.correctWinner,
+    score: computeReliabilityScore(
+      { probability: row.probability, gap: row.gap, agreeing: row.agreeing, totalBaseModels: row.totalBaseModels },
+      calibration,
+    ).score,
+  }))
+  return RELIABILITY_BANDS.flatMap((band) => {
+    const inBand = scored.filter((s) => s.score >= band.min && s.score < band.max)
+    if (!inBand.length) return []
+    const wins = inBand.filter((s) => s.correctWinner).length
+    const [ciLow, ciHigh] = wilsonInterval(wins, inBand.length)
+    return [{ label: band.label, n: inBand.length, wins, strikeRate: wins / inBand.length, ciLow, ciHigh }]
+  })
 }
