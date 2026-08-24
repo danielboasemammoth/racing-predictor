@@ -234,7 +234,7 @@ export function totalPrizeMoney(values: string[] | null) {
   }, 0)
 }
 
-function raceStatus(race: RacingRace): 'upcoming' | 'live' | 'completed' | 'cancelled' {
+export function raceStatus(race: RacingRace): 'upcoming' | 'live' | 'completed' | 'cancelled' {
   const status = race.raceStatus.toLowerCase()
   if (status.includes('abandon') || status.includes('cancel')) return 'cancelled'
   if (race.formRaceEntries.some((entry) => parsePosition(entry.position) !== null) || status.includes('result')) return 'completed'
@@ -396,4 +396,133 @@ export async function ingestRacingCom(
   if (sourceResult.error) throw sourceResult.error
 
   return summary
+}
+
+/** Picks the one race in a refetched meeting matching a stored external_id - never a race_number guess. */
+export function findMatchingRace(races: RacingRace[], externalId: string): RacingRace | undefined {
+  return races.find((race) => `racing-com:race:${race.id}` === externalId)
+}
+
+export interface RefreshRaceResult {
+  found: boolean
+  raceId: string
+  status?: 'upcoming' | 'live' | 'completed' | 'cancelled'
+  horses: number
+  entries: number
+}
+
+/**
+ * Refreshes exactly one race's own fields, runners, and odds from Racing.com, without touching
+ * any other race. Racing.com's API is queried per-meeting, so this refetches that one race's
+ * meeting but only writes rows for the single matched race (see findMatchingRace).
+ */
+export async function refreshSingleRace(supabase: SupabaseClient, raceId: string): Promise<RefreshRaceResult> {
+  const { data: race, error: raceError } = await supabase
+    .from('races')
+    .select('id, external_id, race_datetime, racecourses(name, state)')
+    .eq('id', raceId)
+    .maybeSingle()
+  if (raceError) throw raceError
+  const racecourseRelation = race?.racecourses as { name: string; state: string } | { name: string; state: string }[] | null
+  const racecourse = Array.isArray(racecourseRelation) ? racecourseRelation[0] : racecourseRelation
+  if (!race?.external_id || !racecourse) return { found: false, raceId, horses: 0, entries: 0 }
+
+  const userDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Melbourne',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(race.race_datetime))
+
+  const meetings = await fetchMeetings(userDate, 1, 1, [racecourse.state])
+  const meeting = meetings.find((candidate) => candidate.venue === racecourse.name)
+  if (!meeting) return { found: false, raceId, horses: 0, entries: 0 }
+
+  const meetingRaces = await fetchRaces(meeting.id)
+  const matched = findMatchingRace(meetingRaces, race.external_id)
+  if (!matched) return { found: false, raceId, horses: 0, entries: 0 }
+
+  const updatedAt = new Date().toISOString()
+  const status = raceStatus(matched)
+
+  const { error: raceUpdateError } = await supabase
+    .from('races')
+    .update({
+      race_name: matched.name,
+      distance_m: parseDistance(matched.distance),
+      track_condition: [matched.meet.trackCondition, matched.meet.trackRating].filter(Boolean).join(' '),
+      weather_condition: matched.meet.weather,
+      race_class: matched.class ?? matched.rdcClass,
+      prize_money: totalPrizeMoney(matched.prizeMoney),
+      race_datetime: matched.time,
+      status,
+      updated_at: updatedAt,
+    })
+    .eq('id', race.id)
+  if (raceUpdateError) throw raceUpdateError
+
+  const sourceEntries = matched.formRaceEntries.filter((entry) => entry.horseCode && entry.horseName)
+  const horseRows = sourceEntries.map((entry) => {
+    const career = entry.horse?.stats?.[0]
+    return {
+      external_id: `racing-com:horse:${entry.horseCode}`,
+      name: entry.horseName,
+      trainer: entry.trainerName,
+      career_runs: Number.parseInt(career?.starts ?? '0', 10) || 0,
+      career_wins: Number.parseInt(career?.firsts ?? '0', 10) || 0,
+      career_places: (Number.parseInt(career?.seconds ?? '0', 10) || 0)
+        + (Number.parseInt(career?.thirds ?? '0', 10) || 0),
+      updated_at: updatedAt,
+    }
+  })
+  const { data: storedHorses, error: horseError } = await supabase
+    .from('horses')
+    .upsert(horseRows, { onConflict: 'external_id' })
+    .select('id, external_id')
+  if (horseError) throw horseError
+  const horseIds = new Map((storedHorses ?? []).map((horse) => [horse.external_id, horse.id]))
+
+  const entryRows = sourceEntries.flatMap((entry) => {
+    const horseId = horseIds.get(`racing-com:horse:${entry.horseCode}`)
+    if (!horseId) return []
+    return [{
+      race_id: race.id,
+      horse_id: horseId,
+      barrier_number: entry.barrierNumber,
+      weight_carried: parseWeight(entry.weight),
+      jockey: entry.jockeyName,
+      trainer: entry.trainerName,
+      finishing_position: parsePosition(entry.position),
+      finishing_time: parseFinishingTime(entry.winningTime ?? matched.raceTime),
+      sectional_times: {
+        odds: entry.odds.map((quote) => ({
+          provider: quote.providerCode,
+          win: parsePrice(quote.oddsWin),
+          place: parsePrice(quote.oddsPlace),
+        })),
+        captured_at: updatedAt,
+      },
+      margin: typeof entry.margin === 'string' ? Number.parseFloat(entry.margin) || null : entry.margin,
+      status: entry.scratched ? 'scratched' : parsePosition(entry.position) !== null ? 'finished' : 'running',
+      updated_at: updatedAt,
+    }]
+  })
+
+  const { error: entryError } = await supabase
+    .from('race_entries')
+    .upsert(entryRows, { onConflict: 'race_id,horse_id' })
+  if (entryError) throw entryError
+
+  // Same ghost-entry cleanup as the bulk ingestion, scoped to just this race's own rows.
+  for (const [scopedRaceId, validHorseIds] of groupValidHorseIdsByRace(entryRows)) {
+    if (!validHorseIds.length) continue
+    const { error: cleanupError } = await supabase
+      .from('race_entries')
+      .delete()
+      .eq('race_id', scopedRaceId)
+      .not('horse_id', 'in', `(${validHorseIds.join(',')})`)
+    if (cleanupError) throw cleanupError
+  }
+
+  return { found: true, raceId: race.id, status, horses: horseRows.length, entries: entryRows.length }
 }

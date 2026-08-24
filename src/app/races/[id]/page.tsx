@@ -3,6 +3,8 @@ import Link from 'next/link'
 import type { Prediction, Race, RaceEntryWithHorse } from '@/lib/types'
 import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 import { computeRaceReliability, loadReliabilityContext } from '@/lib/reliability-context'
+import { hasAdminSession } from '@/lib/admin-auth'
+import { RefreshRaceButton } from './refresh-race-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -85,7 +87,7 @@ function formatDistance(m: number) {
 
 export default async function RaceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const data = await getRaceData(id)
+  const [data, isAdmin] = await Promise.all([getRaceData(id), hasAdminSession()])
 
   if (!data) {
     return (
@@ -122,7 +124,10 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
               <h1 className="text-2xl font-bold text-slate-900">{race.racecourses?.name}</h1>
               <p className="text-sm text-slate-600 mt-1">Race {race.race_number} — {race.race_name}</p>
             </div>
-            <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Back</Link>
+            <div className="flex items-center gap-4">
+              {isAdmin && <RefreshRaceButton raceId={race.id} />}
+              <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Back</Link>
+            </div>
           </div>
         </div>
       </header>

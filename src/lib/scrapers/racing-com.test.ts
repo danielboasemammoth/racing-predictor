@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace, fetchMeetings } from '@/lib/scrapers/racing-com'
+import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace, fetchMeetings, findMatchingRace, type RacingRace } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
   it('normalizes race measurements', () => {
@@ -51,6 +51,23 @@ describe('Racing.com normalization', () => {
     expect(grouped.get('race-1')).toEqual(['horse-a', 'horse-b'])
     expect(grouped.get('race-2')).toEqual(['horse-c'])
     expect(grouped.get('race-3')).toBeUndefined()
+  })
+})
+
+describe('findMatchingRace', () => {
+  function fakeRace(id: string): RacingRace {
+    return { id } as RacingRace
+  }
+
+  it('picks only the race whose external_id matches, ignoring every other race in the meeting', () => {
+    const meetingRaces = [fakeRace('111'), fakeRace('222'), fakeRace('333')]
+    const match = findMatchingRace(meetingRaces, 'racing-com:race:222')
+    expect(match?.id).toBe('222')
+  })
+
+  it('returns undefined when no race in the meeting matches (e.g. race removed from the feed)', () => {
+    const meetingRaces = [fakeRace('111'), fakeRace('222')]
+    expect(findMatchingRace(meetingRaces, 'racing-com:race:999')).toBeUndefined()
   })
 })
 
