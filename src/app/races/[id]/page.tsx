@@ -59,12 +59,33 @@ async function getRaceData(raceId: string) {
     ? computeRaceReliability(race, typedEntries, prediction, modelPredictions, reliabilityContext)
     : null
 
+  // Every prediction run inserts a new immutable snapshot rather than overwriting, so the full
+  // history of how this pick evolved (right up to jump time) is just a filter + sort away.
+  const predictionHistory = prediction
+    ? ((predictionRows ?? []) as Prediction[])
+        .filter((row) => row.model_version === prediction.model_version)
+        .sort((left, right) => new Date(left.predicted_at).getTime() - new Date(right.predicted_at).getTime())
+        .map((row) => {
+          const winner = row.predictions.podium[0]
+          const second = row.predictions.podium[1]
+          const winnerProbability = winner ? (winner.win_probability ?? winner.confidence) : 0
+          const secondProbability = second ? (second.win_probability ?? second.confidence) : 0
+          return {
+            predictedAt: row.predicted_at,
+            topPick: winner?.horse_name ?? 'No pick',
+            probability: winnerProbability,
+            gap: Math.max(0, winnerProbability - secondProbability),
+          }
+        })
+    : []
+
   return {
     race: race as Race,
     entries: typedEntries,
     prediction,
     modelPredictions,
     raceReliability,
+    predictionHistory,
   }
 }
 
@@ -100,7 +121,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
     )
   }
 
-  const { race, entries, prediction, modelPredictions, raceReliability } = data
+  const { race, entries, prediction, modelPredictions, raceReliability, predictionHistory } = data
 
   // Filter out scratched horses from prediction picks
   const scratchedHorseIds = new Set(entries.filter(e => e.status === 'scratched').map(e => e.horse_id))
@@ -281,6 +302,37 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
               </p>
             )}
           </div>
+        )}
+
+        {predictionHistory.length > 1 && (
+          <details className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
+            <summary className="cursor-pointer text-lg font-semibold text-slate-900">
+              Prediction History <span className="text-sm font-normal text-slate-500">({predictionHistory.length} snapshots)</span>
+            </summary>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <th className="py-2 pr-4">Predicted at</th>
+                    <th className="py-2 pr-4">Top selection</th>
+                    <th className="py-2 pr-4">Win probability</th>
+                    <th className="py-2 pr-4">Gap to #2</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {predictionHistory.map((snapshot) => (
+                    <tr key={snapshot.predictedAt} className="border-b border-slate-100">
+                      <td className="py-2 pr-4 text-slate-600">{formatDateTime(snapshot.predictedAt)}</td>
+                      <td className="py-2 pr-4 font-medium text-slate-900">{snapshot.topPick}</td>
+                      <td className="py-2 pr-4">{(snapshot.probability * 100).toFixed(0)}%</td>
+                      <td className="py-2 pr-4">{(snapshot.gap * 100).toFixed(1)}pts</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">Shows whether the model&apos;s pick and confidence converged or diverged as new data came in.</p>
+          </details>
         )}
 
         <div className="bg-white rounded-xl border border-slate-200 p-6">
