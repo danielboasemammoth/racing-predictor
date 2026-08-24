@@ -1,3 +1,12 @@
+/**
+ * Superseded by scripts/reliability-analysis.ts, which covers everything this script does
+ * (distance/track/confidence patterns) plus proper statistics (Wilson confidence intervals,
+ * empirical-Bayes shrinkage for small samples, a chronological discovery/holdout split so
+ * patterns are validated out-of-sample, and all Australian states rather than a Victoria-only
+ * whitelist), and publishes results for the live Reliability Score/analytics dashboard to use.
+ * Kept only for ad-hoc console exploration - prefer reliability-analysis.ts for anything that
+ * should inform the production model.
+ */
 import { createClient } from '@supabase/supabase-js'
 import { config } from 'dotenv'
 config({ path: '.env.local' })
@@ -224,7 +233,7 @@ async function analyzePatterns() {
     })
   }
 
-  console.log(`\n=== Pattern Analysis (${results.length} races) ===`)
+  console.log(`\n=== Pattern Analysis (${results.length} races, ${predictedRaces} had a usable prediction) ===`)
   console.log(`Overall score: ${totalScore}/${maxScore} (${((totalScore / maxScore) * 100).toFixed(1)}%)`)
 
   console.log('\n--- By Distance ---')
