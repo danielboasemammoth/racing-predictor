@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import type { Prediction, Race, RaceEntryWithHorse } from '@/lib/types'
 import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
+import { computeRaceReliability, loadReliabilityContext } from '@/lib/reliability-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,11 +51,18 @@ async function getRaceData(raceId: string) {
     ?? modelPredictions[0]
     ?? null
 
+  const typedEntries = (entries ?? []) as RaceEntryWithHorse[]
+  const reliabilityContext = await loadReliabilityContext(supabase)
+  const raceReliability = reliabilityContext
+    ? computeRaceReliability(race, typedEntries, prediction, modelPredictions, reliabilityContext)
+    : null
+
   return {
     race: race as Race,
-    entries: (entries ?? []) as RaceEntryWithHorse[],
+    entries: typedEntries,
     prediction,
     modelPredictions,
+    raceReliability,
   }
 }
 
@@ -90,7 +98,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
     )
   }
 
-  const { race, entries, prediction, modelPredictions } = data
+  const { race, entries, prediction, modelPredictions, raceReliability } = data
 
   // Filter out scratched horses from prediction picks
   const scratchedHorseIds = new Set(entries.filter(e => e.status === 'scratched').map(e => e.horse_id))
@@ -185,6 +193,49 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                 <p className="mt-1">Model-fair $10 return approximately ${filteredPrediction.predictions.trifecta.fair_return_10.toFixed(0)}. Actual pool dividend will vary.</p>
               </div>
             )}
+          </div>
+        )}
+
+        {raceReliability && (
+          <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Prediction Reliability</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  How closely this race resembles historical conditions where the model has performed reliably - not a guarantee.
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-3xl font-bold text-slate-900">{raceReliability.reliability.score}<span className="text-base font-medium text-slate-500">/100</span></p>
+                <p className="text-sm font-semibold text-teal-700">{raceReliability.reliability.classification}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {raceReliability.reliability.factors.map((factor) => (
+                <div key={factor.label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <p className="font-semibold text-slate-900">{factor.label}</p>
+                  <p className="mt-0.5">
+                    Historical strike rate {(factor.observedStrikeRate * 100).toFixed(1)}%
+                    {' '}({factor.liftVsBaseline >= 0 ? '+' : ''}{(factor.liftVsBaseline * 100).toFixed(1)}pts vs baseline, n={factor.sampleSize})
+                  </p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Evidence confidence: <span className="font-semibold">{raceReliability.reliability.evidenceConfidence}</span> (based on {raceReliability.reliability.evidenceSampleSize} comparable historical races)
+            </p>
+
+            <div className="mt-5 border-t border-slate-100 pt-4">
+              <p className="text-xs font-bold uppercase text-slate-600">Similar historical races</p>
+              <p className="mt-1 text-sm text-slate-700">
+                <span className="font-semibold">{raceReliability.similarRaces.n}</span> comparable races (matched on {raceReliability.similarRaces.criteriaUsed.join(', ')}) ·{' '}
+                <span className="font-semibold">{raceReliability.similarRaces.wins}</span> wins ·{' '}
+                strike rate {(raceReliability.similarRaces.strikeRate * 100).toFixed(1)}% vs {(raceReliability.similarRaces.baseline * 100).toFixed(1)}% baseline
+                {' '}({raceReliability.similarRaces.lift >= 0 ? '+' : ''}{(raceReliability.similarRaces.lift * 100).toFixed(1)}pts)
+              </p>
+              <p className="mt-1 text-xs text-slate-500">Evidence confidence: {raceReliability.similarRaces.evidenceConfidence}</p>
+            </div>
           </div>
         )}
 

@@ -123,6 +123,15 @@ create table public.data_sources (
   created_at timestamptz default now() not null
 );
 
+-- Reliability/similarity analysis artifacts (calibration table, historical feature rows),
+-- refreshed wholesale by scripts/reliability-analysis.ts. One row per "kind".
+create table public.analysis_snapshots (
+  id uuid default uuid_generate_v4() primary key,
+  kind text not null unique,
+  payload jsonb not null,
+  generated_at timestamptz not null default now()
+);
+
 -- Indexes
 create index idx_races_racecourse_id on public.races(racecourse_id);
 create index idx_races_race_datetime on public.races(race_datetime);
@@ -142,6 +151,7 @@ alter table public.race_entries enable row level security;
 alter table public.predictions enable row level security;
 alter table public.accuracy_log enable row level security;
 alter table public.data_sources enable row level security;
+alter table public.analysis_snapshots enable row level security;
 
 create policy "Public racecourse read access" on public.racecourses for select using (true);
 create policy "Public race read access" on public.races for select using (true);
@@ -149,3 +159,4 @@ create policy "Public horse read access" on public.horses for select using (true
 create policy "Public race entry read access" on public.race_entries for select using (true);
 create policy "Public prediction read access" on public.predictions for select using (true);
 create policy "Public accuracy read access" on public.accuracy_log for select using (true);
+create policy "Public analysis snapshot read access" on public.analysis_snapshots for select using (true);
