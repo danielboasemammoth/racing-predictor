@@ -239,6 +239,45 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
           </div>
         )}
 
+        {raceReliability?.modelEdge && (
+          <div className="bg-white rounded-xl border border-slate-200 p-6 mb-6">
+            <h2 className="text-lg font-semibold text-slate-900">Model Edge</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              A separate question from Reliability: is this pick priced attractively, not just likely to win.
+              Uses the best price recorded in Racing.com&apos;s own feed - not a confirmed TAB Fixed Win or Betfair SP.
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div>
+                <p className="text-xs text-slate-500">Best recorded price</p>
+                <p className="mt-0.5 text-lg font-bold text-slate-900">${raceReliability.modelEdge.bestRecordedOdds.toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Market-implied probability</p>
+                <p className="mt-0.5 text-lg font-bold text-slate-900">{(raceReliability.modelEdge.marketImpliedProbability * 100).toFixed(1)}%</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Model Edge</p>
+                <p className={`mt-0.5 text-lg font-bold ${raceReliability.modelEdge.edge >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                  {raceReliability.modelEdge.edge >= 0 ? '+' : ''}{(raceReliability.modelEdge.edge * 100).toFixed(1)}pts
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Historical ROI ({raceReliability.modelEdge.edgeBand})</p>
+                <p className="mt-0.5 text-lg font-bold text-slate-900">
+                  {raceReliability.modelEdge.historicalRoi
+                    ? `${raceReliability.modelEdge.historicalRoi.roi >= 0 ? '+' : ''}${(raceReliability.modelEdge.historicalRoi.roi * 100).toFixed(1)}%`
+                    : 'Not enough data'}
+                </p>
+              </div>
+            </div>
+            {raceReliability.modelEdge.historicalRoi && (
+              <p className="mt-2 text-xs text-slate-500">
+                Based on {raceReliability.modelEdge.historicalRoi.bets} historical flat-stake bets in this edge band. A positive Model Edge does not guarantee a positive ROI - always check this figure.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="bg-white rounded-xl border border-slate-200 p-6">
           <h2 className="text-lg font-semibold text-slate-900 mb-4">Field</h2>
           <div className="overflow-x-auto">

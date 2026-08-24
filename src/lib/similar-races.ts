@@ -15,6 +15,10 @@ export interface HistoricalRaceFeatures {
   fieldSize: number
   trackCondition: string | null
   barrierThird: 'inside' | 'middle' | 'outside' | null
+  /** Model's own win probability for its predicted horse - needed to reconstruct historical Model Edge bands. */
+  probability?: number
+  /** Best recorded win price from Racing.com's own feed - NOT a confirmed TAB/Betfair price. */
+  bestRecordedOdds?: number | null
 }
 
 export interface SimilarRaceQuery {

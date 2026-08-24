@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { classifyRaceType, barrierThird as computeBarrierThird } from '@/lib/reliability-analysis'
+import { classifyRaceType, barrierThird as computeBarrierThird, marketImpliedProbability, modelEdge, modelEdgeBand } from '@/lib/reliability-analysis'
 import { computeReliabilityScore, type CalibrationTable, type ReliabilityResult } from '@/lib/reliability-score'
 import { findSimilarRaces, type HistoricalRaceFeatures, type SimilarRacesResult } from '@/lib/similar-races'
+import { extractBestWinOdds, flatStakeReport } from '@/lib/roi-analysis'
 import type { Prediction, RaceEntryWithHorse } from '@/lib/types'
 
 interface HistoryPayload {
@@ -31,6 +32,16 @@ export async function loadReliabilityContext(supabase: SupabaseClient): Promise<
 export interface RaceReliability {
   reliability: ReliabilityResult
   similarRaces: SimilarRacesResult
+  modelEdge: RaceModelEdge | null
+}
+
+export interface RaceModelEdge {
+  bestRecordedOdds: number
+  marketImpliedProbability: number
+  edge: number
+  edgeBand: string
+  /** Historical ROI for this edge band - NOT the same signal as Reliability, deliberately kept separate (see spec section 29). */
+  historicalRoi: { roi: number; bets: number } | null
 }
 
 /** Computes the Reliability Score and Similar Historical Races summary for a race's top prediction. */
@@ -71,5 +82,25 @@ export function computeRaceReliability(
     context.history,
   )
 
-  return { reliability, similarRaces }
+  const bestRecordedOdds = extractBestWinOdds(entries.find((entry) => entry.horse_id === predictedWinner.horse_id)?.sectional_times)
+  const modelEdgeResult = bestRecordedOdds ? computeModelEdge(probability, bestRecordedOdds, context.history) : null
+
+  return { reliability, similarRaces, modelEdge: modelEdgeResult }
+}
+
+function computeModelEdge(probability: number, bestRecordedOdds: number, history: HistoricalRaceFeatures[]): RaceModelEdge {
+  const impliedProbability = marketImpliedProbability(bestRecordedOdds)
+  const edge = modelEdge(probability, impliedProbability)
+  const edgeBand = modelEdgeBand(edge)
+
+  const comparableBets = history.filter(
+    (r): r is HistoricalRaceFeatures & { bestRecordedOdds: number; probability: number } =>
+      Boolean(r.bestRecordedOdds) && typeof r.probability === 'number'
+      && modelEdgeBand(modelEdge(r.probability, marketImpliedProbability(r.bestRecordedOdds!))) === edgeBand,
+  )
+  const historicalRoi = comparableBets.length >= 5
+    ? { roi: flatStakeReport(comparableBets.map((r) => ({ won: r.correctWinner, odds: r.bestRecordedOdds }))).roi, bets: comparableBets.length }
+    : null
+
+  return { bestRecordedOdds, marketImpliedProbability: impliedProbability, edge, edgeBand, historicalRoi }
 }

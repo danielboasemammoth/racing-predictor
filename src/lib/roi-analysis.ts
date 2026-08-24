@@ -12,6 +12,17 @@ export interface FlatStakeBet {
   odds: number
 }
 
+/** Best win price recorded across providers in Racing.com's own odds feed - NOT a confirmed TAB/Betfair price. */
+export function extractBestWinOdds(sectionalTimes: unknown): number | null {
+  if (!sectionalTimes || typeof sectionalTimes !== 'object' || Array.isArray(sectionalTimes)) return null
+  const quotes = (sectionalTimes as { odds?: unknown }).odds
+  if (!Array.isArray(quotes)) return null
+  const prices = quotes
+    .map((quote) => (quote && typeof quote === 'object' ? Number((quote as { win?: unknown }).win) : NaN))
+    .filter((price) => Number.isFinite(price) && price > 0)
+  return prices.length ? Math.max(...prices) : null
+}
+
 export interface FlatStakeReport {
   bets: number
   totalStaked: number
@@ -32,9 +43,7 @@ export interface FlatStakeReport {
 
 function mean(values: number[]) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
-}
-
-function median(values: number[]) {
+}function median(values: number[]) {
   if (!values.length) return null
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
