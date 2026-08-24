@@ -237,16 +237,41 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {raceReliability.reliability.factors.map((factor) => (
-                <div key={factor.label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                  <p className="font-semibold text-slate-900">{factor.label}</p>
-                  <p className="mt-0.5">
-                    Historical strike rate {(factor.observedStrikeRate * 100).toFixed(1)}%
-                    {' '}({factor.liftVsBaseline >= 0 ? '+' : ''}{(factor.liftVsBaseline * 100).toFixed(1)}pts vs baseline, n={factor.sampleSize})
-                  </p>
-                </div>
-              ))}
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <p className="text-xs font-bold uppercase text-emerald-700">Positive Factors</p>
+                {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline >= 0).length ? (
+                  <ul className="mt-2 space-y-2">
+                    {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline >= 0).map((factor) => (
+                      <li key={factor.label} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-slate-700">
+                        <p className="font-semibold text-slate-900">{factor.label}</p>
+                        <p className="mt-0.5">
+                          {(factor.observedStrikeRate * 100).toFixed(1)}% historical strike rate (+{(factor.liftVsBaseline * 100).toFixed(1)}pts vs baseline, n={factor.sampleSize})
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">None of the validated factors favour this pick.</p>
+                )}
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase text-red-700">Negative Factors</p>
+                {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline < 0).length ? (
+                  <ul className="mt-2 space-y-2">
+                    {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline < 0).map((factor) => (
+                      <li key={factor.label} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-slate-700">
+                        <p className="font-semibold text-slate-900">{factor.label}</p>
+                        <p className="mt-0.5">
+                          {(factor.observedStrikeRate * 100).toFixed(1)}% historical strike rate ({(factor.liftVsBaseline * 100).toFixed(1)}pts vs baseline, n={factor.sampleSize})
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">None of the validated factors count against this pick.</p>
+                )}
+              </div>
             </div>
             <p className="mt-3 text-xs text-slate-500">
               Evidence confidence: <span className="font-semibold">{raceReliability.reliability.evidenceConfidence}</span> (based on {raceReliability.reliability.evidenceSampleSize} comparable historical races)
