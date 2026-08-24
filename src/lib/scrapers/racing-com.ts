@@ -117,23 +117,41 @@ export function groupValidHorseIdsByRace(entryRows: Array<{ race_id: string; hor
 }
 
 async function graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-  const response = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'user-agent': 'RacingPredictor/1.0 (+https://github.com/danielboasemammoth/racing-predictor)',
-      'x-api-key': process.env.RACING_COM_API_KEY ?? PUBLIC_API_KEY,
-    },
-    body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(15_000),
-  })
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'user-agent': 'RacingPredictor/1.0 (+https://github.com/danielboasemammoth/racing-predictor)',
+          'x-api-key': process.env.RACING_COM_API_KEY ?? PUBLIC_API_KEY,
+        },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(15_000),
+      })
 
-  if (!response.ok) throw new Error(`Racing.com returned HTTP ${response.status}`)
-  const payload = await response.json() as { data?: T; errors?: Array<{ message: string }> }
-  if (payload.errors?.length || !payload.data) {
-    throw new Error(payload.errors?.map(({ message }) => message).join('; ') || 'Racing.com returned no data')
+      // Retry transient upstream failures (Cloudflare 502/503/504) rather than aborting an
+      // entire multi-minute ingestion run over a single blip.
+      if (!response.ok) {
+        if ([502, 503, 504].includes(response.status) && attempt < 3) {
+          lastError = new Error(`Racing.com returned HTTP ${response.status}`)
+          await delay(1000 * attempt)
+          continue
+        }
+        throw new Error(`Racing.com returned HTTP ${response.status}`)
+      }
+      const payload = await response.json() as { data?: T; errors?: Array<{ message: string }> }
+      if (payload.errors?.length || !payload.data) {
+        throw new Error(payload.errors?.map(({ message }) => message).join('; ') || 'Racing.com returned no data')
+      }
+      return payload.data
+    } catch (error) {
+      lastError = error
+      if (attempt < 3) await delay(1000 * attempt)
+    }
   }
-  return payload.data
+  throw lastError
 }
 
 export const AUSTRALIAN_STATES = ['VIC', 'NSW', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'] as const

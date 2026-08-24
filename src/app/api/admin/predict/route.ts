@@ -7,6 +7,20 @@ import { hasAdminSession } from '@/lib/admin-auth'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+/** Retries a Supabase call a couple of times so a single transient network blip doesn't fail a long-running batch. */
+async function withRetry<T>(fn: () => PromiseLike<T>, attempts = 3, delayMs = 1000): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs * attempt))
+    }
+  }
+  throw lastError
+}
+
 interface PredictionOptions {
   raceId?: string
   mode?: 'all' | 'ensemble' | 'retrospective'
@@ -157,6 +171,9 @@ export async function POST(request: Request) {
 
     let created = 0
     let skipped = 0
+    const allRows: Array<{ race_id: string; model_version: string; predictions: unknown; confidence_scores: unknown; predicted_times: unknown; predicted_at: string }> = []
+    const predictedRaceIds: string[] = []
+    const suffix = options.mode === 'retrospective' ? '-retrospective' : ''
 
     for (const race of races) {
       const typedEntries = (entriesByRace.get(race.id) ?? [])
@@ -185,32 +202,41 @@ export async function POST(request: Request) {
       const results = runFullSuite
         ? [...ALL_MODEL_CONFIGS.map((config) => runConfiguredModel(input, config)), runEnsemble(input)]
         : [runEnsemble(input)]
-      const suffix = options.mode === 'retrospective' ? '-retrospective' : ''
-      const rows = results.map((result) => ({
+      allRows.push(...results.map((result) => ({
           race_id: race.id,
           model_version: `${result.modelVersion}${suffix}`,
           predictions: result.predictions,
           confidence_scores: result.confidence_scores,
           predicted_times: result.predicted_times,
           predicted_at: new Date().toISOString(),
-        }))
+        })))
+      predictedRaceIds.push(race.id)
+      created += 1
+    }
 
-      if (options.mode === 'retrospective') {
-        // A completed race's history never changes day-to-day, so retrospective reruns
-        // replace the prior row instead of growing unbounded duplicate history.
-        const { error: deleteError } = await supabase
+    // Batching (instead of one delete+insert round trip per race) turns what was ~2 x N
+    // sequential Supabase calls into a handful, which is both far faster and far less exposed
+    // to a single transient network blip killing the whole run partway through.
+    const modelVersionsWritten = [...new Set(allRows.map((row) => row.model_version))]
+    if (options.mode === 'retrospective') {
+      // A completed race's history never changes day-to-day, so retrospective reruns replace
+      // the prior rows instead of growing unbounded duplicate history.
+      for (let offset = 0; offset < predictedRaceIds.length; offset += 40) {
+        const { error: deleteError } = await withRetry(() => supabase
           .from('predictions')
           .delete()
-          .eq('race_id', race.id)
-          .in('model_version', rows.map((row) => row.model_version))
+          .in('race_id', predictedRaceIds.slice(offset, offset + 40))
+          .in('model_version', modelVersionsWritten))
         if (deleteError) throw deleteError
       }
-      // Live/upcoming predictions are inserted as a new immutable snapshot every run,
-      // so prediction and market movement can be analysed over time (never overwritten).
-      const { error: predictionError } = await supabase.from('predictions').insert(rows)
-
+    }
+    // Live/upcoming predictions are inserted as a new immutable snapshot every run, so
+    // prediction and market movement can be analysed over time (never overwritten).
+    for (let offset = 0; offset < allRows.length; offset += 500) {
+      const { error: predictionError } = await withRetry(() => supabase
+        .from('predictions')
+        .insert(allRows.slice(offset, offset + 500)))
       if (predictionError) throw predictionError
-      created += 1
     }
 
     return NextResponse.json({
