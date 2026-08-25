@@ -1,9 +1,9 @@
-import Link from 'next/link'
 import { AdminActions } from './admin-actions'
 import { CsvImporter } from './csv-importer'
 import { login, logout } from './actions'
 import { hasAdminSession, isAdminConfigured } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { SiteNav } from '@/components/site-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +44,7 @@ export default async function AdminPage({
         <header className="bg-white border-b border-slate-200">
           <div className="max-w-3xl mx-auto px-4 py-6 flex items-center justify-between gap-4">
             <h1 className="text-2xl font-bold text-slate-900">Admin Access</h1>
-            <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Back to races</Link>
+            <SiteNav />
           </div>
         </header>
         <main className="max-w-md mx-auto px-4 py-16">
@@ -91,10 +91,10 @@ export default async function AdminPage({
               <p className="text-sm text-slate-600 mt-1">Data ingestion and model controls</p>
             </div>
             <div className="flex items-center gap-4">
-              <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Back to races</Link>
               <form action={logout}>
                 <button type="submit" className="text-sm font-medium text-slate-600 hover:text-slate-900">Sign out</button>
               </form>
+              <SiteNav />
             </div>
           </div>
         </div>

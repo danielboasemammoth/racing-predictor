@@ -1,6 +1,6 @@
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { loadReliabilityContext } from '@/lib/reliability-context'
+import { SiteNav } from '@/components/site-nav'
 import { reliabilityCalibrationBands } from '@/lib/reliability-score'
 import type { BucketStats } from '@/lib/reliability-analysis'
 
@@ -56,7 +56,7 @@ export default async function AnalyticsPage() {
             <h1 className="text-2xl font-bold text-slate-900">Model Analytics</h1>
             <p className="text-sm text-slate-600 mt-1">How the model has actually performed, broken down by the conditions that matter.</p>
           </div>
-          <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Home</Link>
+          <SiteNav />
         </div>
       </header>
 

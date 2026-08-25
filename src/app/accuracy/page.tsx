@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
+import { SiteNav } from '@/components/site-nav'
 import type { PredictionPayload } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -111,7 +111,7 @@ export default async function AccuracyPage() {
               <h1 className="text-2xl font-bold text-slate-900">Accuracy Dashboard</h1>
               <p className="text-sm text-slate-600 mt-1">Track model performance over time</p>
             </div>
-            <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Back to races</Link>
+            <SiteNav />
           </div>
         </div>
       </header>

@@ -21,7 +21,7 @@ export interface DailyPicksFilterOptions {
   maidenOnly?: boolean
 }
 
-function melbourneDateKey(value: Date | string) {
+export function melbourneDateKey(value: Date | string) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Australia/Melbourne',
     year: 'numeric',
@@ -40,7 +40,7 @@ function historyStarts(race: RaceWithPrediction, horseId: string) {
   return typeof features?.historyStarts === 'number' ? features.historyStarts : 0
 }
 
-function candidatesForDate(races: RaceWithPrediction[], dateKey: string, options: DailyPicksFilterOptions = {}): DailyPick[] {
+export function candidatesForDate(races: RaceWithPrediction[], dateKey: string, options: DailyPicksFilterOptions = {}): DailyPick[] {
   const candidates = races.flatMap((race) => {
     if (!race.prediction) return []
     if (melbourneDateKey(race.race_datetime) !== dateKey) return []

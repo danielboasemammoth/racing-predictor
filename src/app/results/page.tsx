@@ -1,7 +1,7 @@
 import { Suspense } from 'react'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import type { PredictionPayload } from '@/lib/types'
+import { SiteNav } from '@/components/site-nav'
 
 const PAGE_SIZE = 50
 
@@ -283,7 +283,7 @@ export default function RecentResultsPage() {
             Completed races with predictions vs actual results. Victoria races are highlighted.
           </p>
         </div>
-        <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">Home</Link>
+        <SiteNav />
       </div>
 
       <Suspense fallback={<div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">Loading races...</div>}>

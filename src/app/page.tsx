@@ -4,6 +4,7 @@ import { Race, RaceWithPrediction, Prediction } from '@/lib/types'
 import { getDailyPicks, getTomorrowPicks, type DailyPicksFilterOptions } from '@/lib/daily-picks'
 import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 import { loadReliabilityContext } from '@/lib/reliability-context'
+import { SiteNav } from '@/components/site-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -140,13 +141,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               <h1 className="text-2xl font-bold text-slate-900">Racing Predictor</h1>
               <p className="text-sm text-slate-600 mt-1">Australian horse race predictions powered by historical data</p>
             </div>
-            <div className="flex gap-3">
-              <Link href="/accuracy" className="text-sm font-medium text-teal-700 hover:text-teal-800">Accuracy</Link>
-              <Link href="/analytics" className="text-sm font-medium text-teal-700 hover:text-teal-800">Analytics</Link>
-              <Link href="/results" className="text-sm font-medium text-teal-700 hover:text-teal-800">Results</Link>
-              <Link href="/verify" className="text-sm font-medium text-teal-700 hover:text-teal-800">Verify</Link>
-              <Link href="/admin" className="text-sm font-medium text-slate-600 hover:text-slate-900">Admin</Link>
-            </div>
+            <SiteNav />
           </div>
         </div>
       </header>

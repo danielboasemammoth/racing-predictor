@@ -5,6 +5,7 @@ import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 import { computeRaceReliability, loadReliabilityContext } from '@/lib/reliability-context'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { RefreshRaceButton } from './refresh-race-button'
+import { SiteNav } from '@/components/site-nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -147,7 +148,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
             </div>
             <div className="flex items-center gap-4">
               {isAdmin && <RefreshRaceButton raceId={race.id} />}
-              <Link href="/" className="text-sm font-medium text-teal-700 hover:text-teal-800">← Back</Link>
+              <SiteNav />
             </div>
           </div>
         </div>

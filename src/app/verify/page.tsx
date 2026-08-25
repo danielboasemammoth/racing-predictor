@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
 import type { PredictedHorse } from '@/lib/types'
+import { SiteNav } from '@/components/site-nav'
 
 const PAGE_SIZE = 20
 
@@ -114,7 +114,7 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
             Cross-check our data against live Racing.com results. {total} races in database.
           </p>
         </div>
-        <Link href="/" className="text-sm font-semibold text-teal-700 hover:text-teal-900">Back to races</Link>
+        <SiteNav />
       </div>
 
       <div className="space-y-4">
