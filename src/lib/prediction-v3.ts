@@ -184,7 +184,7 @@ function classRating(value?: string) {
   return 3
 }
 
-function resultScore(start: HistoricalStart) {
+export function resultScore(start: HistoricalStart) {
   if (!start.finishingPosition || start.fieldSize < 2) return 0
   const positionScore = clamp(1 - (start.finishingPosition - 1) / (start.fieldSize - 1))
   if (start.margin === undefined || start.finishingPosition === 1) return positionScore
