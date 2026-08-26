@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { HistoricalStart } from '@/lib/prediction-v3'
 import { ALL_MODEL_CONFIGS, runConfiguredModel, runEnsemble } from '@/lib/prediction-suite'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { parseStandardTimeDifference } from '@/lib/sectional-speed'
 import type { RaceEntryWithHorse } from '@/lib/types'
 import { hasAdminSession } from '@/lib/admin-auth'
 
@@ -37,6 +38,7 @@ interface HistoricalEntryRow {
   jockey: string | null
   trainer: string | null
   status: string
+  speed_ratings: { standard_time_difference?: string | null } | null
   races: {
     id: string
     racecourse_id: string
@@ -135,7 +137,7 @@ export async function POST(request: Request) {
           .from('race_entries')
           .select(`
             race_id, horse_id, finishing_position, finishing_time, margin,
-            barrier_number, weight_carried, jockey, trainer, status,
+            barrier_number, weight_carried, jockey, trainer, status, speed_ratings,
             races!inner(
               id, racecourse_id, race_datetime, distance_m, track_condition, race_class, status,
               field:race_entries(count)
@@ -167,6 +169,7 @@ export async function POST(request: Request) {
       weight: row.weight_carried ?? undefined,
       jockey: row.jockey ?? undefined,
       trainer: row.trainer ?? undefined,
+      standardTimeDifference: parseStandardTimeDifference(row.speed_ratings?.standard_time_difference) ?? undefined,
     }))
 
     let created = 0

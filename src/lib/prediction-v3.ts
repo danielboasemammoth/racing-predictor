@@ -1,4 +1,5 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
+import { averageSectionalRating } from '@/lib/sectional-speed'
 
 export const CONTEXTUAL_MODEL_VERSION = 'v3.1-contextual-ranking'
 
@@ -112,6 +113,8 @@ export interface HistoricalStart {
   weight?: number
   jockey?: string
   trainer?: string
+  /** Lengths vs Racing.com's own benchmark time for that track/distance/class - see src/lib/sectional-speed.ts. */
+  standardTimeDifference?: number
 }
 
 export interface EntryOdds {
@@ -241,16 +244,17 @@ function suitability(starts: HistoricalStart[], predicate: (start: HistoricalSta
   return matching.reduce((sum, start) => sum + resultScore(start), 0) / matching.length
 }
 
-function normalizedSpeed(starts: HistoricalStart[]) {
-  const speeds = starts.flatMap((start) => start.finishingTime && start.distanceM
-    ? [(start.distanceM / start.finishingTime) * (
-        conditionGroup(start.trackCondition) === 'heavy' ? 1.06
-          : conditionGroup(start.trackCondition) === 'soft' ? 1.03
-            : 1
-      )]
-    : [])
-  if (!speeds.length) return 0.5
-  return clamp((speeds.reduce((sum, speed) => sum + speed, 0) / speeds.length - 12) / 6)
+/**
+ * Benchmarked-time speed rating (spec Phase 4), normalized to the same 0-1/0.5-neutral scale as
+ * every other feature - +/-10 lengths vs the track/distance/class standard maps to +/-0.5.
+ * Replaced the older normalizedSpeed() (raw distance/time with a track-condition fudge factor,
+ * not actually comparable across different tracks), which is why speedRating's weight had been
+ * left at 0 in every model config - validated via scripts/experiment-sectional-speed.ts and
+ * scripts/tune-sectional-weight.ts before giving it a nonzero weight.
+ */
+function sectionalSpeedRating(recentStarts: HistoricalStart[]) {
+  const rating = averageSectionalRating(recentStarts.map((start) => ({ standardTimeDifference: start.standardTimeDifference ?? null })))
+  return rating === null ? 0.5 : clamp(0.5 + rating / 20)
 }
 
 function buildFeatures(
@@ -303,7 +307,7 @@ function buildFeatures(
     conditionSuitability: suitability(horseHistory, (start) => conditionGroup(start.trackCondition) === conditionGroup(target.trackCondition)),
     courseSuitability: suitability(horseHistory, (start) => start.racecourseId === target.racecourseId),
     classMovement: lastStart ? clamp(0.5 + (classRating(lastStart.raceClass) - classRating(target.raceClass)) * 0.08) : 0.5,
-    speedRating: normalizedSpeed(recentStarts),
+    speedRating: sectionalSpeedRating(recentStarts),
     jockeyForm: strikeRate(availableHistory, 'jockey', entry.jockey, target),
     trainerForm: strikeRate(availableHistory, 'trainer', entry.trainer, target),
     partnershipForm: partnershipRate(availableHistory, entry.jockey, entry.trainer, target),
