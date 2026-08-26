@@ -44,18 +44,20 @@ async function main() {
     const chunk = raceIds.slice(offset, offset + CHUNK)
     const { data, error } = await supabase
       .from('race_entries')
-      .select('race_id, horse_id, finishing_position, status, sectional_times')
+      .select('race_id, horse_id, finishing_position, status, sectional_times, starting_price')
       .in('race_id', chunk)
     if (error) throw error
-    for (const entry of (data ?? []) as Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string; sectional_times: unknown }>) {
+    for (const entry of (data ?? []) as Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string; sectional_times: unknown; starting_price: number | null }>) {
       const raceDatetime = raceDatetimeById.get(entry.race_id)
       if (!raceDatetime) continue
       const list = startsByHorse.get(entry.horse_id) ?? []
+      // Prefer the official recorded starting price (newer column, backfilled for a recent window)
+      // and fall back to the earlier odds-snapshot extraction so older races are still usable.
       list.push({
         horseId: entry.horse_id,
         raceDatetime,
         finishingPosition: entry.finishing_position,
-        startingPrice: extractBestWinOdds(entry.sectional_times),
+        startingPrice: entry.starting_price ?? extractBestWinOdds(entry.sectional_times),
         status: entry.status,
       })
       startsByHorse.set(entry.horse_id, list)
