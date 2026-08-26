@@ -18,6 +18,10 @@ export interface Race {
   prize_money?: number
   race_datetime: string
   status: 'upcoming' | 'live' | 'completed' | 'cancelled'
+  stewards_report_html?: string | null
+  tempo?: string | null
+  track_straight_m?: number | null
+  track_circumference_m?: number | null
   racecourses?: Racecourse
 }
 
@@ -56,6 +60,12 @@ export interface RaceEntry {
   sectional_times?: JsonValue
   margin?: number
   status: string
+  speed_ratings?: JsonValue
+  running_positions?: JsonValue
+  stewards_comment?: string | null
+  gear_changes?: string | null
+  handicap_rating?: number | null
+  starting_price?: number | null
 }
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }

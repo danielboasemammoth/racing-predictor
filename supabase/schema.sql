@@ -27,6 +27,11 @@ create table public.races (
   prize_money numeric,
   race_datetime timestamptz not null,
   status text default 'upcoming' check (status in ('upcoming', 'live', 'completed', 'cancelled')),
+  -- Race-shape/sectional metadata, freely available from Racing.com's own API.
+  stewards_report_html text,
+  tempo text,
+  track_straight_m int,
+  track_circumference_m int,
   created_at timestamptz default now() not null,
   updated_at timestamptz default now() not null
 );
@@ -70,6 +75,13 @@ create table public.race_entries (
   sectional_times jsonb,
   margin numeric,
   status text default 'running' check (status in ('running', 'finished', 'scratched', 'did_not_finish')),
+  -- Sectional speed/pace/stewards data, freely available from Racing.com's own API.
+  speed_ratings jsonb,
+  running_positions jsonb,
+  stewards_comment text,
+  gear_changes text,
+  handicap_rating numeric,
+  starting_price numeric,
   created_at timestamptz default now() not null,
   updated_at timestamptz default now() not null,
   unique(race_id, horse_id)

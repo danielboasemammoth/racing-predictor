@@ -21,10 +21,18 @@ const RACES_QUERY = `
   query Races($meetCode: ID!) {
     getRacesForMeet(meetCode: $meetCode) {
       id condition rdcClass raceNumber raceStatus distance time raceTime class group name prizeMoney
+      tempo straight circumference
       meet { trackCondition trackRating weather state }
+      stewardsReport { htmlCode }
+      raceEntryTimes {
+        horseCode horseName avgSpeedEarly avgSpeedMid avgSpeedLate overallPeakSpeed overallAvgSpeed
+        sixHundredMetresTime standardTimeDifference
+        splitTimes { avgSpeed distance index position time }
+      }
       formRaceEntries {
         id position barrierNumber scratched raceEntryNumber weight horseName horseCountry horseCode
         trainerName jockeyName trainerCode jockeyCode margin winningTime
+        positionAt800 positionAt400 positionAtSettled commentStewards gearChanges handicapRating startingPrice
         odds { providerCode oddsWin oddsPlace }
         horse { id stats { starts firsts seconds thirds } }
       }
@@ -63,12 +71,40 @@ export interface RacingEntry {
   jockeyName: string | null
   margin: string | number | null
   winningTime: string | number | null
+  positionAt800: number | null
+  positionAt400: number | null
+  positionAtSettled: number | null
+  commentStewards: string | null
+  gearChanges: string | null
+  handicapRating: string | number | null
+  startingPrice: string | number | null
   odds: Array<{
     providerCode: string
     oddsWin: string | number | null
     oddsPlace: string | number | null
   }>
   horse: { id: string; stats: RacingStats[] } | null
+}
+
+export interface RacingSplitTime {
+  avgSpeed: number | null
+  distance: string
+  index: number
+  position: number | null
+  time: string | null
+}
+
+export interface RacingEntryTimes {
+  horseCode: string
+  horseName: string
+  avgSpeedEarly: number | null
+  avgSpeedMid: number | null
+  avgSpeedLate: number | null
+  overallPeakSpeed: number | null
+  overallAvgSpeed: number | null
+  sixHundredMetresTime: string | null
+  standardTimeDifference: string | null
+  splitTimes: RacingSplitTime[] | null
 }
 
 export interface RacingRace {
@@ -84,6 +120,11 @@ export interface RacingRace {
   group: string | null
   name: string
   prizeMoney: string[] | null
+  tempo: string | null
+  straight: string | null
+  circumference: string | null
+  stewardsReport: { htmlCode: string | null } | null
+  raceEntryTimes: RacingEntryTimes[] | null
   meet: {
     trackCondition: string | null
     trackRating: string | null
@@ -223,6 +264,95 @@ export function parseFinishingTime(value: string | number | null) {
   return parts[0] > 1_000 ? parts[0] / 100 : parts[0]
 }
 
+export function parseMetres(value: string | null) {
+  if (!value) return null
+  const metres = Number.parseInt(value.replace(/[^0-9]/g, ''), 10)
+  return Number.isFinite(metres) ? metres : null
+}
+
+export function parseRating(value: string | number | null) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (!value) return null
+  const rating = Number.parseFloat(value.replace(/[^0-9.-]/g, ''))
+  return Number.isFinite(rating) ? rating : null
+}
+
+/** Structures one runner's sectional splits/speed ratings for storage - null when Racing.com has no sectionals for this race yet. */
+export function buildSpeedRatings(entryTimes: RacingEntryTimes | undefined) {
+  if (!entryTimes) return null
+  return {
+    avg_speed_early: entryTimes.avgSpeedEarly,
+    avg_speed_mid: entryTimes.avgSpeedMid,
+    avg_speed_late: entryTimes.avgSpeedLate,
+    peak_speed: entryTimes.overallPeakSpeed,
+    overall_avg_speed: entryTimes.overallAvgSpeed,
+    six_hundred_time: entryTimes.sixHundredMetresTime,
+    standard_time_difference: entryTimes.standardTimeDifference,
+    splits: (entryTimes.splitTimes ?? []).map((split) => ({
+      distance: split.distance,
+      avg_speed: split.avgSpeed,
+      position: split.position,
+      time: split.time,
+    })),
+  }
+}
+
+/** Structures one runner's in-running positions - null until Racing.com has post-race data. */
+export function buildRunningPositions(entry: RacingEntry) {
+  if (entry.positionAt800 == null && entry.positionAt400 == null && entry.positionAtSettled == null) return null
+  return {
+    at_800m: entry.positionAt800,
+    at_400m: entry.positionAt400,
+    at_settled: entry.positionAtSettled,
+  }
+}
+
+/** Race-level fields shared between the bulk sync and the single-race refresh, so they can't drift apart. */
+function buildRaceFields(race: RacingRace) {
+  return {
+    race_name: race.name,
+    distance_m: parseDistance(race.distance),
+    track_condition: [race.meet.trackCondition, race.meet.trackRating].filter(Boolean).join(' '),
+    weather_condition: race.meet.weather,
+    race_class: race.class ?? race.rdcClass,
+    prize_money: totalPrizeMoney(race.prizeMoney),
+    race_datetime: race.time,
+    stewards_report_html: race.stewardsReport?.htmlCode ?? null,
+    tempo: race.tempo,
+    track_straight_m: parseMetres(race.straight),
+    track_circumference_m: parseMetres(race.circumference),
+  }
+}
+
+/** Per-runner fields shared between the bulk sync and the single-race refresh, so they can't drift apart. */
+function buildEntryFields(entry: RacingEntry, race: RacingRace, updatedAt: string, entryTimesByHorseCode: Map<string, RacingEntryTimes>) {
+  return {
+    barrier_number: entry.barrierNumber,
+    weight_carried: parseWeight(entry.weight),
+    jockey: entry.jockeyName,
+    trainer: entry.trainerName,
+    finishing_position: parsePosition(entry.position),
+    finishing_time: parseFinishingTime(entry.winningTime ?? race.raceTime),
+    sectional_times: {
+      odds: entry.odds.map((quote) => ({
+        provider: quote.providerCode,
+        win: parsePrice(quote.oddsWin),
+        place: parsePrice(quote.oddsPlace),
+      })),
+      captured_at: updatedAt,
+    },
+    speed_ratings: buildSpeedRatings(entryTimesByHorseCode.get(entry.horseCode)),
+    running_positions: buildRunningPositions(entry),
+    stewards_comment: entry.commentStewards || null,
+    gear_changes: entry.gearChanges || null,
+    handicap_rating: parseRating(entry.handicapRating),
+    starting_price: parsePrice(entry.startingPrice),
+    margin: typeof entry.margin === 'string' ? Number.parseFloat(entry.margin) || null : entry.margin,
+    status: entry.scratched ? 'scratched' : parsePosition(entry.position) !== null ? 'finished' : 'running',
+    updated_at: updatedAt,
+  }
+}
+
 export function totalPrizeMoney(values: string[] | null) {
   return (values ?? []).reduce((total, value) => {
     try {
@@ -285,16 +415,10 @@ export async function ingestRacingCom(
     const { data: storedRaces, error: raceError } = await supabase
       .from('races')
       .upsert(races.map((race) => ({
+          ...buildRaceFields(race),
           external_id: `racing-com:race:${race.id}`,
           racecourse_id: racecourseId,
           race_number: race.raceNumber,
-          race_name: race.name,
-          distance_m: parseDistance(race.distance),
-          track_condition: [race.meet.trackCondition, race.meet.trackRating].filter(Boolean).join(' '),
-          weather_condition: race.meet.weather,
-          race_class: race.class ?? race.rdcClass,
-          prize_money: totalPrizeMoney(race.prizeMoney),
-          race_datetime: race.time,
           status: raceStatus(race),
           updated_at: updatedAt,
         })), { onConflict: 'external_id' })
@@ -328,30 +452,16 @@ export async function ingestRacingCom(
     summary.horses += horseRows.size
     const horseIds = new Map((storedHorses ?? []).map((horse) => [horse.external_id, horse.id]))
 
+    const entryTimesByRace = new Map(races.map((race) => [race.id, new Map((race.raceEntryTimes ?? []).map((times) => [times.horseCode, times]))]))
     const entryRows = sourceEntries.flatMap(({ race, entry }) => {
       const raceId = raceIds.get(`racing-com:race:${race.id}`)
       const horseId = horseIds.get(`racing-com:horse:${entry.horseCode}`)
       if (!raceId || !horseId) return []
+      const entryTimesByHorseCode = entryTimesByRace.get(race.id) ?? new Map()
       return [{
           race_id: raceId,
           horse_id: horseId,
-          barrier_number: entry.barrierNumber,
-          weight_carried: parseWeight(entry.weight),
-          jockey: entry.jockeyName,
-          trainer: entry.trainerName,
-          finishing_position: parsePosition(entry.position),
-          finishing_time: parseFinishingTime(entry.winningTime ?? race.raceTime),
-          sectional_times: {
-            odds: entry.odds.map((quote) => ({
-              provider: quote.providerCode,
-              win: parsePrice(quote.oddsWin),
-              place: parsePrice(quote.oddsPlace),
-            })),
-            captured_at: updatedAt,
-          },
-          margin: typeof entry.margin === 'string' ? Number.parseFloat(entry.margin) || null : entry.margin,
-          status: entry.scratched ? 'scratched' : parsePosition(entry.position) !== null ? 'finished' : 'running',
-          updated_at: updatedAt,
+          ...buildEntryFields(entry, race, updatedAt, entryTimesByHorseCode),
       }]
     })
     const { error: entryError } = await supabase
@@ -448,13 +558,7 @@ export async function refreshSingleRace(supabase: SupabaseClient, raceId: string
   const { error: raceUpdateError } = await supabase
     .from('races')
     .update({
-      race_name: matched.name,
-      distance_m: parseDistance(matched.distance),
-      track_condition: [matched.meet.trackCondition, matched.meet.trackRating].filter(Boolean).join(' '),
-      weather_condition: matched.meet.weather,
-      race_class: matched.class ?? matched.rdcClass,
-      prize_money: totalPrizeMoney(matched.prizeMoney),
-      race_datetime: matched.time,
+      ...buildRaceFields(matched),
       status,
       updated_at: updatedAt,
     })
@@ -482,29 +586,14 @@ export async function refreshSingleRace(supabase: SupabaseClient, raceId: string
   if (horseError) throw horseError
   const horseIds = new Map((storedHorses ?? []).map((horse) => [horse.external_id, horse.id]))
 
+  const entryTimesByHorseCode = new Map((matched.raceEntryTimes ?? []).map((times) => [times.horseCode, times]))
   const entryRows = sourceEntries.flatMap((entry) => {
     const horseId = horseIds.get(`racing-com:horse:${entry.horseCode}`)
     if (!horseId) return []
     return [{
       race_id: race.id,
       horse_id: horseId,
-      barrier_number: entry.barrierNumber,
-      weight_carried: parseWeight(entry.weight),
-      jockey: entry.jockeyName,
-      trainer: entry.trainerName,
-      finishing_position: parsePosition(entry.position),
-      finishing_time: parseFinishingTime(entry.winningTime ?? matched.raceTime),
-      sectional_times: {
-        odds: entry.odds.map((quote) => ({
-          provider: quote.providerCode,
-          win: parsePrice(quote.oddsWin),
-          place: parsePrice(quote.oddsPlace),
-        })),
-        captured_at: updatedAt,
-      },
-      margin: typeof entry.margin === 'string' ? Number.parseFloat(entry.margin) || null : entry.margin,
-      status: entry.scratched ? 'scratched' : parsePosition(entry.position) !== null ? 'finished' : 'running',
-      updated_at: updatedAt,
+      ...buildEntryFields(entry, matched, updatedAt, entryTimesByHorseCode),
     }]
   })
 

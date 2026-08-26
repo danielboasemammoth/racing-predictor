@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace, fetchMeetings, findMatchingRace, type RacingRace } from '@/lib/scrapers/racing-com'
+import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, parseMetres, parseRating, buildSpeedRatings, buildRunningPositions, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace, fetchMeetings, findMatchingRace, type RacingRace, type RacingEntry, type RacingEntryTimes } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
   it('normalizes race measurements', () => {
@@ -9,6 +9,14 @@ describe('Racing.com normalization', () => {
     expect(parseFinishingTime('1:03.98')).toBeCloseTo(63.98)
     expect(parseFinishingTime('7114')).toBeCloseTo(71.14)
     expect(parseFinishingTime(31197)).toBeCloseTo(311.97)
+  })
+
+  it('parses track geometry and rating strings', () => {
+    expect(parseMetres('380m')).toBe(380)
+    expect(parseMetres(null)).toBeNull()
+    expect(parseRating('58.5')).toBe(58.5)
+    expect(parseRating(-5.1)).toBe(-5.1)
+    expect(parseRating(null)).toBeNull()
   })
 
   it('sums valid prize allocations and ignores malformed values', () => {
@@ -51,6 +59,69 @@ describe('Racing.com normalization', () => {
     expect(grouped.get('race-1')).toEqual(['horse-a', 'horse-b'])
     expect(grouped.get('race-2')).toEqual(['horse-c'])
     expect(grouped.get('race-3')).toBeUndefined()
+  })
+})
+
+describe('sectional/pace data structuring', () => {
+  function fakeEntryTimes(overrides: Partial<RacingEntryTimes> = {}): RacingEntryTimes {
+    return {
+      horseCode: 'h1',
+      horseName: 'Test Horse',
+      avgSpeedEarly: 16.5,
+      avgSpeedMid: 17.8,
+      avgSpeedLate: 15.9,
+      overallPeakSpeed: 18.2,
+      overallAvgSpeed: 16.8,
+      sixHundredMetresTime: '35.5',
+      standardTimeDifference: '-5.1L',
+      splitTimes: [{ avgSpeed: 18.2, distance: '800m-600m', index: 0, position: 3, time: '10.9' }],
+      ...overrides,
+    }
+  }
+
+  function fakeEntry(overrides: Partial<RacingEntry> = {}): RacingEntry {
+    return {
+      id: 'e1',
+      position: 1,
+      barrierNumber: 4,
+      scratched: false,
+      raceEntryNumber: 1,
+      weight: '58kg',
+      horseName: 'Test Horse',
+      horseCountry: null,
+      horseCode: 'h1',
+      trainerName: 'T Trainer',
+      jockeyName: 'J Jockey',
+      margin: 0,
+      winningTime: null,
+      positionAt800: null,
+      positionAt400: null,
+      positionAtSettled: null,
+      commentStewards: null,
+      gearChanges: null,
+      handicapRating: null,
+      startingPrice: null,
+      odds: [],
+      horse: null,
+      ...overrides,
+    }
+  }
+
+  it('structures a runner\'s sectional splits/speed ratings, or null when Racing.com has none yet', () => {
+    const ratings = buildSpeedRatings(fakeEntryTimes())
+    expect(ratings).toMatchObject({
+      avg_speed_early: 16.5,
+      avg_speed_late: 15.9,
+      standard_time_difference: '-5.1L',
+      splits: [{ distance: '800m-600m', avg_speed: 18.2, position: 3, time: '10.9' }],
+    })
+    expect(buildSpeedRatings(undefined)).toBeNull()
+  })
+
+  it('structures a runner\'s in-running positions, or null until any are known', () => {
+    expect(buildRunningPositions(fakeEntry({ positionAt800: 5, positionAt400: 3, positionAtSettled: 4 })))
+      .toEqual({ at_800m: 5, at_400m: 3, at_settled: 4 })
+    expect(buildRunningPositions(fakeEntry())).toBeNull()
   })
 })
 
