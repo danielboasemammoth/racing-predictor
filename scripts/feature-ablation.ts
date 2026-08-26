@@ -153,6 +153,20 @@ async function main() {
     validationResults: validationResults.map((row) => ({ ...row, deltaVsFull: row.objective - baselineObjective })),
     testResults,
   }, null, 2))
+
+  // Publish so /analytics can show this without re-running an expensive backtest on every load.
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    racesEvaluated: valid.length,
+    featureImportance: validationResults
+      .filter((row) => row.model !== 'full-model (current production)')
+      .map((row) => ({ label: row.model, deltaVsFull: row.objective - baselineObjective }))
+      .sort((left, right) => left.deltaVsFull - right.deltaVsFull),
+  }
+  const { error: publishError } = await supabase.from('analysis_snapshots')
+    .upsert({ kind: 'feature-ablation', payload, generated_at: payload.generatedAt }, { onConflict: 'kind' })
+  if (publishError) throw publishError
+  console.log('\nPublished to analysis_snapshots (kind: feature-ablation).')
 }
 
 main().catch((error) => {

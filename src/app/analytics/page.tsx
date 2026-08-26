@@ -57,6 +57,13 @@ async function getBaselineComparison(supabase: SupabaseClient, context: Reliabil
   return compareBaselines(races)
 }
 
+/** Reads the ranking published by scripts/feature-ablation.ts - not recomputed live, that backtest takes several minutes. */
+async function getFeatureImportance(supabase: SupabaseClient) {
+  const { data, error } = await supabase.from('analysis_snapshots').select('payload').eq('kind', 'feature-ablation').maybeSingle()
+  if (error) throw error
+  return data?.payload as { generatedAt: string; racesEvaluated: number; featureImportance: Array<{ label: string; deltaVsFull: number }> } | undefined
+}
+
 function BaselineRow({ label, report }: { label: string; report: FlatStakeReport }) {
   return (
     <tr className="border-b border-slate-100">
@@ -112,6 +119,7 @@ export default async function AnalyticsPage() {
   const supabase = await createClient()
   const context = await loadReliabilityContext(supabase)
   const baselines = context ? await getBaselineComparison(supabase, context) : null
+  const featureImportance = await getFeatureImportance(supabase)
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -163,6 +171,30 @@ export default async function AnalyticsPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {featureImportance && featureImportance.featureImportance.length > 0 && (
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h2 className="text-lg font-semibold text-slate-900">Feature importance</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  What happens to accuracy on held-out races when one feature group is switched off (spec section 34) - a bigger drop means that
+                  feature matters more. Based on {featureImportance.racesEvaluated} races.
+                </p>
+                <ul className="mt-4 space-y-2 text-sm">
+                  {featureImportance.featureImportance.map((row) => (
+                    <li key={row.label} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                      <span className="text-slate-800">{row.label.replace(/^no-/, 'Removing ')}</span>
+                      <span className={`font-semibold ${row.deltaVsFull < -0.001 ? 'text-red-700' : row.deltaVsFull > 0.001 ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {row.deltaVsFull >= 0 ? '+' : ''}{row.deltaVsFull.toFixed(4)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 text-xs text-slate-500">
+                  Negative = removing this feature hurts accuracy (it&apos;s pulling real weight). Near zero = this feature currently contributes
+                  little either way in this dataset.
+                </p>
               </div>
             )}
 
