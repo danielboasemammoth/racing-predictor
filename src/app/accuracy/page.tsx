@@ -31,13 +31,20 @@ interface ScoredPrediction {
 
 async function getModelMetrics() {
   const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('predictions')
-    .select('model_version, predictions, actual_results')
-    .not('actual_results', 'is', null)
-  if (error) throw error
+  const data: ScoredPrediction[] = []
+  const pageSize = 1_000
+  for (let offset = 0; ; offset += pageSize) {
+    const { data: page, error } = await supabase
+      .from('predictions')
+      .select('model_version, predictions, actual_results')
+      .not('actual_results', 'is', null)
+      .range(offset, offset + pageSize - 1)
+    if (error) throw error
+    data.push(...((page ?? []) as ScoredPrediction[]))
+    if (!page || page.length < pageSize) break
+  }
 
-  const groups = Map.groupBy((data ?? []) as ScoredPrediction[], (prediction) => prediction.model_version)
+  const groups = Map.groupBy(data, (prediction) => prediction.model_version)
   return [...groups].map(([modelVersion, predictions]) => {
     const valid = predictions.filter((prediction) => prediction.actual_results?.podium?.length)
     const winnerHits = valid.filter((prediction) =>

@@ -86,6 +86,32 @@ export const MODEL_CONFIGS = {
       fitness: 0.45,
     },
   },
+  // Weights fitted via gradient descent on a conditional-logit objective over all completed
+  // races (scripts/train-logit-weights.ts / train-logit-weights-kfold.ts), rather than
+  // hand-guessed. Validated via a 5-fold walk-forward comparison against the hand-tuned configs
+  // above: beat them on 3 of 5 folds with a better average objective (0.2672 vs 0.2654) - a real
+  // but modest edge, not an overwhelming one. Tracked as its own model version rather than
+  // replacing the production ensemble, so real accumulating accuracy data can confirm or deny
+  // the edge before it's ever considered for promotion.
+  trained: {
+    version: 'v5-trained',
+    temperature: 1,
+    weights: {
+      recentForm: 0.3223,
+      contextualForm: 0.1989,
+      distanceSuitability: 0.2447,
+      conditionSuitability: 0.1944,
+      courseSuitability: 0.1481,
+      classMovement: 0.0333,
+      speedRating: 0.0013,
+      jockeyForm: 0.1775,
+      trainerForm: 0.1571,
+      partnershipForm: 0.1683,
+      barrierSuitability: 0.0358,
+      weightSuitability: 0.078,
+      fitness: 0.0256,
+    },
+  },
 } satisfies Record<string, PredictionModelConfig>
 
 export interface RaceContext {

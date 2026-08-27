@@ -98,15 +98,29 @@ export async function POST(request: Request) {
     const runFullSuite = options.mode === 'all' || options.mode === 'retrospective'
 
     const supabase = createAdminClient()
-    let raceQuery = supabase
-      .from('races')
-      .select('id, racecourse_id, race_datetime, distance_m, track_condition, race_class')
-      .eq('status', status)
-      .order('race_datetime', { ascending: status === 'upcoming' })
-    raceQuery = options.raceId ? raceQuery.eq('id', options.raceId) : status === 'upcoming' ? raceQuery.limit(50) : raceQuery
+    const raceSelect = 'id, racecourse_id, race_datetime, distance_m, track_condition, race_class'
+    let races: Array<{ id: string; racecourse_id: string; race_datetime: string; distance_m: number | null; track_condition: string | null; race_class: string | null }>
+    if (options.raceId) {
+      const { data, error } = await supabase.from('races').select(raceSelect).eq('status', status).eq('id', options.raceId)
+      if (error) throw error
+      races = data ?? []
+    } else if (status === 'upcoming') {
+      const { data, error } = await supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: true }).limit(50)
+      if (error) throw error
+      races = data ?? []
+    } else {
+      // Retrospective backfills cover every completed race - Supabase caps an unpaginated
+      // select at 1000 rows, which silently truncated this to only the most recent races.
+      races = []
+      const pageSize = 1_000
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: false }).range(offset, offset + pageSize - 1)
+        if (error) throw error
+        races.push(...(data ?? []))
+        if (!data || data.length < pageSize) break
+      }
+    }
 
-    const { data: races, error: racesError } = await raceQuery
-    if (racesError) throw racesError
     if (!races?.length) {
       return NextResponse.json({ success: false, message: `No ${status} races to predict` }, { status: 404 })
     }
