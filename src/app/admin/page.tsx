@@ -4,6 +4,7 @@ import { login, logout } from './actions'
 import { hasAdminSession, isAdminConfigured } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { SiteNav } from '@/components/site-nav'
+import { computeDataQualityReport, type DataQualityReport } from '@/lib/paper-betting/data-quality-query'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,6 +27,18 @@ async function getAdminStats() {
     entries: entries.count || 0,
     predictions: predictions.count || 0,
     accuracy: accuracy.count || 0,
+  }
+}
+
+async function getPuntersEdgeDiagnostics(): Promise<DataQualityReport | null> {
+  const supabase = createAdminClient()
+  try {
+    return await computeDataQualityReport(supabase)
+  } catch (error) {
+    // The paper-betting migration may not have been applied yet - degrade gracefully rather
+    // than breaking the whole admin page.
+    console.error('PuntersEdge diagnostics unavailable', error)
+    return null
   }
 }
 
@@ -80,6 +93,7 @@ export default async function AdminPage({
   }
 
   const stats = await getAdminStats()
+  const puntersEdge = await getPuntersEdgeDiagnostics()
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -133,7 +147,73 @@ export default async function AdminPage({
           <h2 className="text-lg font-semibold text-slate-900 mb-4">Victoria Race CSV Importer</h2>
           <CsvImporter />
         </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-6 mt-8">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">PuntersEdge Data Quality &amp; API Budget</h2>
+          {!puntersEdge ? (
+            <p className="text-sm text-slate-600">
+              Not available yet - run &ldquo;Sync PuntersEdge Odds &amp; Recommendations&rdquo; at least once
+              (requires supabase/migrate-paper-betting.sql to have been applied).
+            </p>
+          ) : (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-sm font-medium text-slate-700 mb-2">API Budget</h3>
+                {!puntersEdge.apiBudget ? (
+                  <p className="text-sm text-slate-500">No usage recorded yet - requires a real PUNTERSEDGE_API_KEY (usage tracking is skipped in demo mode).</p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    <DiagStat label="Credits Used" value={String(puntersEdge.apiBudget.creditsUsed)} />
+                    <DiagStat label="Credits Remaining" value={String(puntersEdge.apiBudget.creditsRemaining)} />
+                    <DiagStat label="Daily Burn Rate" value={puntersEdge.apiBudget.dailyBurnRate != null ? puntersEdge.apiBudget.dailyBurnRate.toFixed(1) : 'n/a'} />
+                    <DiagStat
+                      label="Projected Runway"
+                      value={puntersEdge.apiBudget.projectedDaysUntilExhausted != null ? `${puntersEdge.apiBudget.projectedDaysUntilExhausted.toFixed(0)} days` : 'n/a'}
+                      warn={puntersEdge.apiBudget.projectedDaysUntilExhausted != null && puntersEdge.apiBudget.projectedDaysUntilExhausted < 5}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-medium text-slate-700 mb-2">Recent Recommendations (last 30 min)</h3>
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                  <DiagStat label="Total" value={String(puntersEdge.recentRecommendations.total)} />
+                  <DiagStat label="Missing TAB Price" value={String(puntersEdge.recentRecommendations.missingTabPrice)} />
+                  <DiagStat label="Stale Prices (&gt;120s)" value={String(puntersEdge.recentRecommendations.stalePrices)} />
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-medium text-slate-700 mb-2">Races by Status</h3>
+                <div className="flex flex-wrap gap-3 text-sm text-slate-700">
+                  {Object.entries(puntersEdge.racesByStatus).map(([status, count]) => (
+                    <span key={status} className="rounded bg-slate-100 px-3 py-1">{status}: {count}</span>
+                  ))}
+                  {Object.keys(puntersEdge.racesByStatus).length === 0 && <span className="text-slate-500">No races tracked yet.</span>}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-medium text-slate-700 mb-2">Pending Paper Bets</h3>
+                <p className="text-sm text-slate-700">
+                  {puntersEdge.pendingBets.count} pending
+                  {puntersEdge.pendingBets.oldestPlacedAt && ` (oldest placed ${new Date(puntersEdge.pendingBets.oldestPlacedAt).toLocaleString('en-AU')})`}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </main>
+    </div>
+  )
+}
+
+function DiagStat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className={`rounded border px-3 py-2 ${warn ? 'border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
+      <p className="text-[10px] uppercase text-slate-500">{label}</p>
+      <p className={`text-sm font-semibold ${warn ? 'text-amber-800' : 'text-slate-900'}`}>{value}</p>
     </div>
   )
 }

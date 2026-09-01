@@ -30,7 +30,7 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Description "Scrapes races/results, backfills + generates predictions, and backtests daily at 6am" `
+    -Description "Scrapes races/results, backfills + generates predictions, backtests, settles paper bets, and syncs PuntersEdge odds daily at 6am" `
     -RunLevel Highest
 
 Write-Host "Scheduled task '$TaskName' registered. Run 'Start-ScheduledTask -TaskName $TaskName' to test it now." -ForegroundColor Green

@@ -1,8 +1,14 @@
 <#
 Daily pipeline: sync races, sync results + backfill predictions,
-generate predictions, run backtest.
+generate predictions, run backtest, settle paper bets, sync PuntersEdge odds.
 
 Mirrors the exact steps defined in src/app/admin/admin-actions.tsx.
+
+Note: PuntersEdge only prices a race close to its jump (~15-25 min out), so a single
+daily run of the sync step will only ever catch whatever happens to be priced at that
+moment - it is not a substitute for near-jump polling. Run this script more often (e.g.
+via a separate, more frequent scheduled task calling only the two puntersedge steps) if
+timely BET/WATCH recommendations across the racing day matter.
 #>
 
 param(
@@ -98,6 +104,9 @@ try {
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "all" -Label "Generate Predictions" -WebSession $webSession
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession
+
+    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession
+    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession
 
     Write-Log "ALL STEPS COMPLETED"
 } catch {
