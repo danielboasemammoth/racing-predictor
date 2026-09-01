@@ -44,6 +44,18 @@ const actions: AdminAction[] = [
     detail: 'Score stored predictions against actual results for every completed race',
     steps: [{ path: '/api/admin/backtest', label: 'Scoring predictions' }],
   },
+  {
+    id: 'puntersedge-sync',
+    label: 'Sync PuntersEdge Odds & Recommendations',
+    detail: 'Pull the current TAB-priced card (horse/greyhound/harness), store odds snapshots, and generate BET/WATCH/NO BET recommendations - auto-places paper bets for qualifying BETs',
+    steps: [{ path: '/api/admin/puntersedge/sync', label: 'Syncing PuntersEdge odds' }],
+  },
+  {
+    id: 'puntersedge-settle',
+    label: 'Settle Paper Bets',
+    detail: 'Fetch final PuntersEdge results and settle every matching pending paper bet',
+    steps: [{ path: '/api/admin/puntersedge/settle', label: 'Settling paper bets' }],
+  },
 ]
 
 export function AdminActions() {
