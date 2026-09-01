@@ -1,77 +1,41 @@
 import { createClient } from '@/lib/supabase/server'
 import { SiteNav } from '@/components/site-nav'
-
-interface RaceRow {
-  id: string
-  venue: string
-  race_number: number
-  start_time: string
-  status: string
-}
-
-interface RecommendationRow {
-  id: string
-  race_id: string
-  runner_id: string
-  model_probability: number | null
-  tab_win_price: number | null
-  edge_points: number | null
-  expected_value: number | null
-  confidence_level: string | null
-  decision: 'BET' | 'WATCH' | 'NO_BET'
-  generated_at: string
-  pe_runners: { name: string; runner_number: number } | { name: string; runner_number: number }[] | null
-}
+import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
+import { PaperBetButton } from './paper-bet-button'
 
 const DECISION_STYLES: Record<string, string> = {
   BET: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   WATCH: 'bg-amber-50 text-amber-800 border-amber-200',
 }
 
-function runnerOf(row: RecommendationRow) {
+function runnerOf(row: OpportunityRow) {
   return Array.isArray(row.pe_runners) ? row.pe_runners[0] : row.pe_runners
 }
 
-async function loadUpcomingGreyhoundRaces() {
+function raceOf(row: OpportunityRow) {
+  return Array.isArray(row.pe_races) ? row.pe_races[0] : row.pe_races
+}
+
+async function loadUpcomingGreyhoundOpportunities() {
   const supabase = await createClient()
-  const races = await supabase
-    .from('pe_races')
-    .select('id, venue, race_number, start_time, status')
-    .eq('category', 'greyhound')
-    .eq('status', 'upcoming')
-    .order('start_time', { ascending: true })
-    .limit(30)
-  if (races.error) throw races.error
-  if (!races.data || races.data.length === 0) return []
+  const opportunities = await queryLatestOpportunities(supabase, { category: 'greyhound' })
 
-  const raceIds = races.data.map((r) => r.id)
-  const recentCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString()
-  const recs = await supabase
-    .from('pe_recommendations')
-    .select('id, race_id, runner_id, model_probability, tab_win_price, edge_points, expected_value, confidence_level, decision, generated_at, pe_runners(name, runner_number)')
-    .in('race_id', raceIds)
-    .in('decision', ['BET', 'WATCH'])
-    .gte('generated_at', recentCutoff)
-    .order('generated_at', { ascending: false })
-  if (recs.error) throw recs.error
+  const byRace = new Map<string, { venue: string; raceNumber: number; startTime: string; rows: OpportunityRow[] }>()
+  for (const row of opportunities) {
+    const race = raceOf(row)
+    if (!race) continue
+    const existing = byRace.get(row.race_id)
+    if (existing) existing.rows.push(row)
+    else byRace.set(row.race_id, { venue: race.venue, raceNumber: race.race_number, startTime: race.start_time, rows: [row] })
+  }
 
-  const seenRunner = new Set<string>()
-  const latestPerRunner = (recs.data ?? []).filter((r) => {
-    if (seenRunner.has(r.runner_id)) return false
-    seenRunner.add(r.runner_id)
-    return true
-  }) as RecommendationRow[]
-
-  return (races.data as RaceRow[]).map((race) => ({
-    race,
-    recommendations: latestPerRunner
-      .filter((r) => r.race_id === race.id)
-      .sort((a, b) => (b.edge_points ?? 0) - (a.edge_points ?? 0)),
-  }))
+  return [...byRace.entries()]
+    .map(([raceId, group]) => ({ raceId, ...group, rows: group.rows.sort((a, b) => (b.edge_points ?? 0) - (a.edge_points ?? 0)) }))
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
 }
 
 export default async function GreyhoundsPage() {
-  const raceGroups = await loadUpcomingGreyhoundRaces()
+  const raceGroups = await loadUpcomingGreyhoundOpportunities()
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -96,36 +60,46 @@ export default async function GreyhoundsPage() {
           </p>
         )}
 
-        {raceGroups.map(({ race, recommendations }) => (
-          <section key={race.id} className="rounded-lg border border-slate-200 bg-white p-4">
+        {raceGroups.map((group) => (
+          <section key={group.raceId} className="rounded-lg border border-slate-200 bg-white p-4">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">
-              {race.venue} R{race.race_number} · {new Date(race.start_time).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
+              {group.venue} R{group.raceNumber} · {new Date(group.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
             </h2>
-            {recommendations.length === 0 ? (
-              <p className="text-sm text-slate-500">No qualifying opportunities in this race right now.</p>
-            ) : (
-              <ul className="space-y-2">
-                {recommendations.map((rec) => {
-                  const runner = runnerOf(rec)
-                  return (
-                    <li key={rec.id} className={`flex items-center justify-between rounded border px-3 py-2 text-sm ${DECISION_STYLES[rec.decision]}`}>
-                      <span className="font-medium">
-                        #{runner?.runner_number} {runner?.name}
-                      </span>
-                      <span className="flex gap-4 text-xs">
-                        <span>TAB ${rec.tab_win_price?.toFixed(2)}</span>
-                        <span>Edge {rec.edge_points != null ? `${rec.edge_points >= 0 ? '+' : ''}${rec.edge_points.toFixed(1)}pts` : 'n/a'}</span>
-                        <span>{rec.confidence_level}</span>
-                        <span className="font-semibold">{rec.decision}</span>
-                      </span>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
+            <ul className="space-y-2">
+              {group.rows.map((rec) => {
+                const runner = runnerOf(rec)
+                if (!runner || rec.tab_win_price == null || rec.model_probability == null) return null
+                return (
+                  <li key={rec.id} className={`flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-sm ${DECISION_STYLES[rec.decision]}`}>
+                    <span className="font-medium">
+                      #{runner.runner_number} {runner.name}
+                    </span>
+                    <span className="flex flex-wrap items-center gap-4 text-xs">
+                      <span>TAB ${rec.tab_win_price.toFixed(2)}</span>
+                      <span>Edge {rec.edge_points != null ? `${rec.edge_points >= 0 ? '+' : ''}${rec.edge_points.toFixed(1)}pts` : 'n/a'}</span>
+                      <span>{rec.confidence_level}</span>
+                      <span className="font-semibold">{rec.decision}</span>
+                    </span>
+                    <PaperBetButton
+                      raceId={rec.race_id}
+                      runnerId={rec.runner_id}
+                      runnerName={runner.name}
+                      category="greyhound"
+                      tabWinPrice={rec.tab_win_price}
+                      modelProbability={rec.model_probability}
+                      modelVersion="market-consensus-v1"
+                      edgePoints={rec.edge_points}
+                      expectedValue={rec.expected_value}
+                      confidenceLevel={rec.confidence_level}
+                    />
+                  </li>
+                )
+              })}
+            </ul>
           </section>
         ))}
       </main>
     </div>
   )
 }
+

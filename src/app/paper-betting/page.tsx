@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { computeWalletStats, type WalletBetForStats } from '@/lib/betting/paper-wallet'
 import { SiteNav } from '@/components/site-nav'
+import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
+import { computeValidationReport, type ValidationReport } from '@/lib/paper-betting/validation-query'
 
 interface PaperAccountRow {
   id: string
@@ -70,8 +72,28 @@ async function loadWallet() {
   }
 }
 
+function raceOf(row: OpportunityRow) {
+  return Array.isArray(row.pe_races) ? row.pe_races[0] : row.pe_races
+}
+
+function runnerOf(row: OpportunityRow) {
+  return Array.isArray(row.pe_runners) ? row.pe_runners[0] : row.pe_runners
+}
+
+async function loadBestOpportunities() {
+  const supabase = await createClient()
+  return queryLatestOpportunities(supabase, { limit: 10 })
+}
+
+async function loadValidation(accountId: string | undefined): Promise<ValidationReport | null> {
+  if (!accountId) return null
+  const supabase = await createClient()
+  return computeValidationReport(supabase, accountId)
+}
+
 export default async function PaperBettingPage() {
   const wallet = await loadWallet()
+  const [opportunities, validation] = await Promise.all([loadBestOpportunities(), loadValidation(wallet?.account.id)])
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -87,6 +109,88 @@ export default async function PaperBettingPage() {
           Simulated bankroll only - no real bets are placed. Past paper-betting performance does not
           guarantee future results, and predicted probabilities can be wrong.
         </p>
+
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-slate-900">Best Opportunities Now</h2>
+          {opportunities.length === 0 ? (
+            <p className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+              No qualifying bets right now.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {opportunities.map((rec) => {
+                const race = raceOf(rec)
+                const runner = runnerOf(rec)
+                if (!race || !runner || rec.tab_win_price == null) return null
+                return (
+                  <li
+                    key={rec.id}
+                    className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2 text-sm ${rec.decision === 'BET' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}
+                  >
+                    <span className="font-medium text-slate-900">
+                      {race.venue} R{race.race_number} · #{runner.runner_number} {runner.name} ({race.category})
+                    </span>
+                    <span className="flex flex-wrap gap-3 text-xs text-slate-600">
+                      <span>TAB ${rec.tab_win_price.toFixed(2)}</span>
+                      <span>Edge {rec.edge_points != null ? `${rec.edge_points >= 0 ? '+' : ''}${rec.edge_points.toFixed(1)}pts` : 'n/a'}</span>
+                      <span className="font-semibold">{rec.decision}</span>
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
+
+        {validation && validation.totalSettled > 0 && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">Model Validation</h2>
+            <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="w-full min-w-[520px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Window</th>
+                    <th className="px-3 py-2">Bets</th>
+                    <th className="px-3 py-2">Strike Rate</th>
+                    <th className="px-3 py-2">ROI</th>
+                    <th className="px-3 py-2">Net Profit</th>
+                    <th className="px-3 py-2">Max Drawdown</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {validation.windows.filter((w) => w.n > 0).map((w) => (
+                    <tr key={w.label}>
+                      <td className="px-3 py-2 text-slate-700">{w.label}</td>
+                      <td className="px-3 py-2 text-slate-700">{w.n}</td>
+                      <td className="px-3 py-2 text-slate-700">{w.winRate != null ? `${(w.winRate * 100).toFixed(1)}%` : 'n/a'}</td>
+                      <td className={`px-3 py-2 font-medium ${w.roiPct >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{w.roiPct >= 0 ? '+' : ''}{w.roiPct.toFixed(1)}%</td>
+                      <td className={`px-3 py-2 font-medium ${w.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{w.netProfit >= 0 ? '+' : ''}${w.netProfit.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-slate-700">{w.maxDrawdownPct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-600">
+              <span>Brier score: {validation.calibration.brierScore != null ? validation.calibration.brierScore.toFixed(4) : 'n/a'} (0 = perfect)</span>
+              <span>Log loss: {validation.calibration.logLoss != null ? validation.calibration.logLoss.toFixed(4) : 'n/a'}</span>
+              <span>{validation.calibration.credibleBuckets.length} credible probability band{validation.calibration.credibleBuckets.length === 1 ? '' : 's'} (n≥30)</span>
+            </div>
+            {validation.calibration.credibleBuckets.length > 0 && (
+              <div className="mt-2 space-y-1 text-xs text-slate-700">
+                {validation.calibration.credibleBuckets.map((b) => (
+                  <div key={b.bucketLabel} className="flex items-center gap-3">
+                    <span className="w-16">{b.bucketLabel}</span>
+                    <span>expected {(b.expectedWinRate * 100).toFixed(1)}%</span>
+                    <span>actual {b.actualWinRate != null ? `${(b.actualWinRate * 100).toFixed(1)}%` : 'n/a'}</span>
+                    <span className="text-slate-400">(n={b.sampleSize})</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         {!wallet ? (
           <p className="text-sm text-slate-600">
