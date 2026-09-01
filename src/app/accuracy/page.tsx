@@ -168,12 +168,12 @@ export default async function AccuracyPage() {
               </div>
             )}
 
-            {modelMetrics.find((metric) => metric.modelVersion === 'v3.1-contextual-ranking-retrospective')?.calibration.length ? (
+            {modelMetrics.find((metric) => metric.modelVersion === 'v4.1-ensemble-retrospective')?.calibration.length ? (
               <div className="bg-white rounded-xl border border-slate-200 p-6">
-                <h2 className="text-lg font-semibold text-slate-900 mb-1">V3 Winner Calibration</h2>
+                <h2 className="text-lg font-semibold text-slate-900 mb-1">Winner Calibration</h2>
                 <p className="text-xs text-slate-500 mb-4">Predicted confidence should approach the observed win rate as the sample grows.</p>
                 <div className="space-y-3">
-                  {modelMetrics.find((metric) => metric.modelVersion === 'v3.1-contextual-ranking-retrospective')!.calibration.map((bucket) => (
+                  {modelMetrics.find((metric) => metric.modelVersion === 'v4.1-ensemble-retrospective')!.calibration.map((bucket) => (
                     <div key={bucket.band} className="grid grid-cols-[72px_1fr_110px] items-center gap-3 text-xs">
                       <span className="font-medium text-slate-700">{bucket.band}–{bucket.band + 9}%</span>
                       <div className="h-2 overflow-hidden rounded bg-slate-100">

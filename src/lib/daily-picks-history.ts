@@ -89,7 +89,6 @@ export async function loadDailyPicksHistory(
   const racesWithPredictions: RaceWithPrediction[] = typedRaces.map((race) => {
     const models = modelsByRace.get(race.id) ?? []
     const primary = models.find((model) => model.model_version.replace('-retrospective', '') === 'v4.1-ensemble')
-      ?? models.find((model) => model.model_version.replace('-retrospective', '') === 'v4-ensemble')
       ?? models[0]
       ?? null
     return { ...race, prediction: primary, model_predictions: models }

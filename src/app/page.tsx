@@ -75,7 +75,7 @@ async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
   })
 
   for (const [raceId, models] of modelsByRace) {
-    const primary = models.find((model) => model.model_version === 'v4.1-ensemble') ?? models.find((model) => model.model_version === 'v4-ensemble') ?? models[0]
+    const primary = models.find((model) => model.model_version === 'v4.1-ensemble') ?? models[0]
     if (primary) predictionMap.set(raceId, primary)
   }
 

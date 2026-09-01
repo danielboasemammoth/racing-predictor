@@ -1,8 +1,6 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
 import { averageSectionalRating } from '@/lib/sectional-speed'
 
-export const CONTEXTUAL_MODEL_VERSION = 'v3.1-contextual-ranking'
-
 export interface PredictionModelConfig {
   version: string
   temperature: number

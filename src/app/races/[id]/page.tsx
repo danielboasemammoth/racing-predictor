@@ -50,7 +50,6 @@ async function getRaceData(raceId: string) {
     if (!modelPredictions.some((model) => model.model_version.replace('-retrospective', '') === baseVersion)) modelPredictions.push(prediction)
   }
   const prediction = modelPredictions.find((model) => model.model_version.replace('-retrospective', '') === 'v4.1-ensemble')
-    ?? modelPredictions.find((model) => model.model_version.replace('-retrospective', '') === 'v4-ensemble')
     ?? modelPredictions[0]
     ?? null
 
