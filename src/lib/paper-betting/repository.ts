@@ -104,6 +104,10 @@ export async function insertRecommendations(
       reasons: rec.reasons,
       failed_criteria: rec.failedCriteria,
       thresholds,
+      place_model_probability: rec.place?.modelProbability ?? null,
+      place_edge_points: rec.place?.edgePoints ?? null,
+      place_expected_value: rec.place?.expectedValueRatio ?? null,
+      place_decision: rec.place?.decision ?? null,
     }))
   if (rows.length === 0) return
   const { error } = await admin.from('pe_recommendations').insert(rows)

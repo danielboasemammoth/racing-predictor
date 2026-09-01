@@ -63,33 +63,60 @@ export async function POST(request: Request) {
       for (const rec of recommendations) {
         if (rec.decision === 'WATCH') watchCount += 1
         if (rec.decision === 'NO_BET') noBetCount += 1
-        if (rec.decision !== 'BET' || rec.tabWinPrice == null || rec.modelProbability == null) continue
 
         const runnerId = runnerIdByNumber.get(rec.runnerNumber)
         if (!runnerId) continue
 
-        const stake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabWinPrice, rec.modelProbability)
-        if (stake <= 0) continue
+        if (rec.decision === 'BET' && rec.tabWinPrice != null && rec.modelProbability != null) {
+          const stake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabWinPrice, rec.modelProbability)
+          if (stake > 0) {
+            const result = await placeBet(admin, {
+              accountId: account.id,
+              raceId: race.race_id,
+              runnerId,
+              runnerName: rec.runnerName,
+              category: race.category,
+              mode: 'AUTO',
+              betType: 'WIN',
+              stake,
+              tabDecimalOdds: rec.tabWinPrice,
+              modelProbability: rec.modelProbability,
+              modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
+              edgePoints: rec.edgePoints,
+              expectedValue: rec.expectedValueRatio,
+              confidenceLevel: rec.confidenceLevel,
+              minutesToJumpAtPlacement: minutesToJump,
+              idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:WIN:${MARKET_CONSENSUS_MODEL_VERSION}`,
+            })
+            if (result.placed) betsCreated += 1
+          }
+        }
 
-        const result = await placeBet(admin, {
-          accountId: account.id,
-          raceId: race.race_id,
-          runnerId,
-          runnerName: rec.runnerName,
-          category: race.category,
-          mode: 'AUTO',
-          betType: 'WIN',
-          stake,
-          tabDecimalOdds: rec.tabWinPrice,
-          modelProbability: rec.modelProbability,
-          modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
-          edgePoints: rec.edgePoints,
-          expectedValue: rec.expectedValueRatio,
-          confidenceLevel: rec.confidenceLevel,
-          minutesToJumpAtPlacement: minutesToJump,
-          idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:${MARKET_CONSENSUS_MODEL_VERSION}`,
-        })
-        if (result.placed) betsCreated += 1
+        // Harville-derived place edge - separate qualifying decision from the win bet above.
+        if (rec.place?.decision === 'BET' && rec.tabPlacePrice != null) {
+          const placeStake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabPlacePrice, rec.place.modelProbability)
+          if (placeStake > 0) {
+            const result = await placeBet(admin, {
+              accountId: account.id,
+              raceId: race.race_id,
+              runnerId,
+              runnerName: rec.runnerName,
+              category: race.category,
+              mode: 'AUTO',
+              betType: 'PLACE',
+              stake: placeStake,
+              tabDecimalOdds: rec.tabPlacePrice,
+              modelProbability: rec.place.modelProbability,
+              modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
+              edgePoints: rec.place.edgePoints,
+              expectedValue: rec.place.expectedValueRatio,
+              confidenceLevel: rec.confidenceLevel,
+              minutesToJumpAtPlacement: minutesToJump,
+              idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:PLACE:${MARKET_CONSENSUS_MODEL_VERSION}`,
+            })
+            if (result.placed) betsCreated += 1
+          }
+        }
       }
     }
 

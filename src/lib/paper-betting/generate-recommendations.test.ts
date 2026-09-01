@@ -89,4 +89,23 @@ describe('generateRaceRecommendations', () => {
   it('exports a stable model version string for storage alongside every recommendation', () => {
     expect(MARKET_CONSENSUS_MODEL_VERSION).toBe('market-consensus-v1')
   })
+
+  it('computes a Harville place recommendation only when a TAB place price is available', () => {
+    const noPlacePrice = generateRaceRecommendations(race(), { now: NOW })
+    expect(noPlacePrice[0].place).toBeNull() // test fixture has no place_price
+
+    const withPlacePrice = generateRaceRecommendations(
+      race({
+        runners: [
+          { name: 'A', number: 1, bookmakers: [{ key: 'tab', win_price: 2.0, place_price: 1.2, age_seconds: 10 }] },
+          { name: 'B', number: 2, bookmakers: [{ key: 'tab', win_price: 3.0, place_price: 1.5, age_seconds: 10 }] },
+          { name: 'C', number: 3, bookmakers: [{ key: 'tab', win_price: 5.0, place_price: 1.8, age_seconds: 10 }] },
+          { name: 'D', number: 4, bookmakers: [{ key: 'tab', win_price: 8.0, place_price: 2.2, age_seconds: 10 }] },
+        ],
+      }),
+      { now: NOW },
+    )
+    expect(withPlacePrice[0].place).not.toBeNull()
+    expect(withPlacePrice[0].place!.modelProbability).toBeGreaterThan(withPlacePrice[0].modelProbability!) // place prob > win prob
+  })
 })

@@ -79,7 +79,12 @@ create table public.pe_recommendations (
   feature_completeness numeric,
   reasons jsonb,
   failed_criteria jsonb,
-  thresholds jsonb
+  thresholds jsonb,
+  -- Harville-derived place (top-3) recommendation, separate from the win decision above.
+  place_model_probability numeric,
+  place_edge_points numeric,
+  place_expected_value numeric,
+  place_decision text check (place_decision in ('BET', 'WATCH', 'NO_BET'))
 );
 
 create table public.paper_accounts (

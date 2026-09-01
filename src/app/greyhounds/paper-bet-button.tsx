@@ -14,6 +14,10 @@ export interface PaperBetButtonProps {
   edgePoints: number | null
   expectedValue: number | null
   confidenceLevel: string | null
+  /** Harville-derived place probability/edge - used instead of the win figures when betType is PLACE. */
+  placeModelProbability: number | null
+  placeEdgePoints: number | null
+  placeExpectedValue: number | null
 }
 
 /** MANUAL PAPER BETTING: places a simulated bet at the TAB price shown right now. No real money moves. */
@@ -24,9 +28,12 @@ export function PaperBetButton(props: PaperBetButtonProps) {
   const [message, setMessage] = useState<string>()
 
   const price = betType === 'PLACE' ? props.tabPlacePrice : props.tabWinPrice
+  const modelProbability = betType === 'PLACE' ? props.placeModelProbability : props.modelProbability
+  const edgePoints = betType === 'PLACE' ? props.placeEdgePoints : props.edgePoints
+  const expectedValue = betType === 'PLACE' ? props.placeExpectedValue : props.expectedValue
 
   async function placeBet() {
-    if (!price) return
+    if (!price || modelProbability == null) return
     setStatus('pending')
     setMessage(undefined)
     try {
@@ -40,10 +47,10 @@ export function PaperBetButton(props: PaperBetButtonProps) {
           category: props.category,
           betType,
           tabDecimalOdds: price,
-          modelProbability: props.modelProbability,
+          modelProbability,
           modelVersion: props.modelVersion,
-          edgePoints: props.edgePoints,
-          expectedValue: props.expectedValue,
+          edgePoints,
+          expectedValue,
           confidenceLevel: props.confidenceLevel,
           stakeOverride: stake,
         }),
@@ -75,7 +82,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
         disabled={status === 'pending'}
       >
         <option value="WIN">WIN</option>
-        <option value="PLACE" disabled={!props.tabPlacePrice}>PLACE</option>
+        <option value="PLACE" disabled={!props.tabPlacePrice || props.placeModelProbability == null}>PLACE</option>
       </select>
       <label className="flex items-center gap-1 text-xs text-slate-600">
         $
@@ -92,7 +99,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
       <button
         type="button"
         onClick={placeBet}
-        disabled={status === 'pending' || !price}
+        disabled={status === 'pending' || !price || modelProbability == null}
         className="rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
       >
         {status === 'pending' ? 'Placing…' : 'PAPER BET'}

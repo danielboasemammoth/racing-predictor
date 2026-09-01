@@ -1,8 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { computeWalletStats, type WalletBetForStats } from '@/lib/betting/paper-wallet'
 import { brierScore, bucketCalibration, credibleBuckets, logLoss, type CalibrationSample } from '@/lib/betting/calibration'
+import { detectDrift, type DriftBetSample, type DriftReport } from '@/lib/betting/drift-detection'
 
 const WINDOW_SIZES = [20, 50, 100, 250, 500] as const
+const DRIFT_RECENT_WINDOW_SIZE = 50
 
 export interface ValidationWindow {
   label: string
@@ -22,6 +24,7 @@ export interface ValidationReport {
     brierScore: number | null
     logLoss: number | null
   }
+  drift: DriftReport
 }
 
 /** Shared MODEL VALIDATION computation used by /api/paper-betting/validation and the /paper-betting page. */
@@ -59,6 +62,15 @@ export async function computeValidationReport(supabase: SupabaseClient, accountI
   const calibrationSamples: CalibrationSample[] = bets.map((b) => ({ modelProbability: b.model_probability as number, won: b.status === 'WON' }))
   const buckets = bucketCalibration(calibrationSamples)
 
+  const driftSamples: DriftBetSample[] = bets.map((b) => ({
+    modelProbability: b.model_probability as number,
+    won: b.status === 'WON',
+    profit: (b.profit as number) ?? 0,
+    stake: b.stake as number,
+    edgePoints: b.edge_points as number | null,
+  }))
+  const drift = detectDrift(driftSamples.slice(-DRIFT_RECENT_WINDOW_SIZE), driftSamples.slice(0, -DRIFT_RECENT_WINDOW_SIZE))
+
   return {
     totalSettled: bets.length,
     windows,
@@ -68,5 +80,6 @@ export async function computeValidationReport(supabase: SupabaseClient, accountI
       brierScore: brierScore(calibrationSamples),
       logLoss: logLoss(calibrationSamples),
     },
+    drift,
   }
 }

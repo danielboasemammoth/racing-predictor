@@ -190,8 +190,24 @@ export default async function PaperBettingPage() {
                 ))}
               </div>
             )}
+
+            <div className="mt-4 border-t border-slate-200 pt-3">
+              <h3 className="text-xs font-semibold uppercase text-slate-500">Drift Detection (recent 50 vs baseline)</h3>
+              {!validation.drift.sufficientData ? (
+                <p className="mt-1 text-xs text-slate-500">Not enough settled bets yet to compare recent performance against a baseline (needs 30+ in each window).</p>
+              ) : validation.drift.flags.length === 0 ? (
+                <p className="mt-1 text-xs text-emerald-700">No drift detected - recent performance is consistent with the historical baseline.</p>
+              ) : (
+                <ul className="mt-1 space-y-1">
+                  {validation.drift.flags.map((flag) => (
+                    <li key={flag.metric} className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-900">{flag.message}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
         )}
+
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-900">What-If Analysis</h2>

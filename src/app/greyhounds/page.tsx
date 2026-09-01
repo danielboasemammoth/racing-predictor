@@ -92,6 +92,9 @@ export default async function GreyhoundsPage() {
                       edgePoints={rec.edge_points}
                       expectedValue={rec.expected_value}
                       confidenceLevel={rec.confidence_level}
+                      placeModelProbability={rec.place_model_probability}
+                      placeEdgePoints={rec.place_edge_points}
+                      placeExpectedValue={rec.place_expected_value}
                     />
                   </li>
                 )
