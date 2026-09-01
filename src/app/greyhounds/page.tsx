@@ -86,6 +86,7 @@ export default async function GreyhoundsPage() {
                       runnerName={runner.name}
                       category="greyhound"
                       tabWinPrice={rec.tab_win_price}
+                      tabPlacePrice={rec.tab_place_price}
                       modelProbability={rec.model_probability}
                       modelVersion="market-consensus-v1"
                       edgePoints={rec.edge_points}

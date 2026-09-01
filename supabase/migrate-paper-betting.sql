@@ -69,6 +69,7 @@ create table public.pe_recommendations (
   category text not null check (category in ('horse', 'greyhound', 'harness')),
   model_probability numeric not null,
   tab_win_price numeric,
+  tab_place_price numeric,
   tab_age_seconds int,
   edge_points numeric,
   expected_value numeric,

@@ -93,6 +93,7 @@ export async function insertRecommendations(
       category,
       model_probability: rec.modelProbability,
       tab_win_price: rec.tabWinPrice,
+      tab_place_price: rec.tabPlacePrice,
       tab_age_seconds: rec.tabAgeSeconds,
       edge_points: rec.edgePoints,
       expected_value: rec.expectedValueRatio,

@@ -8,6 +8,7 @@ export interface PaperBetButtonProps {
   runnerName: string
   category: 'horse' | 'greyhound' | 'harness'
   tabWinPrice: number
+  tabPlacePrice: number | null
   modelProbability: number
   modelVersion: string
   edgePoints: number | null
@@ -18,10 +19,14 @@ export interface PaperBetButtonProps {
 /** MANUAL PAPER BETTING: places a simulated bet at the TAB price shown right now. No real money moves. */
 export function PaperBetButton(props: PaperBetButtonProps) {
   const [stake, setStake] = useState(10)
+  const [betType, setBetType] = useState<'WIN' | 'PLACE'>('WIN')
   const [status, setStatus] = useState<'idle' | 'pending' | 'placed' | 'error'>('idle')
   const [message, setMessage] = useState<string>()
 
+  const price = betType === 'PLACE' ? props.tabPlacePrice : props.tabWinPrice
+
   async function placeBet() {
+    if (!price) return
     setStatus('pending')
     setMessage(undefined)
     try {
@@ -33,7 +38,8 @@ export function PaperBetButton(props: PaperBetButtonProps) {
           runnerId: props.runnerId,
           runnerName: props.runnerName,
           category: props.category,
-          tabDecimalOdds: props.tabWinPrice,
+          betType,
+          tabDecimalOdds: price,
           modelProbability: props.modelProbability,
           modelVersion: props.modelVersion,
           edgePoints: props.edgePoints,
@@ -49,7 +55,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
         return
       }
       setStatus('placed')
-      setMessage(`Paper bet placed: $${stake.toFixed(2)} @ $${props.tabWinPrice.toFixed(2)}`)
+      setMessage(`Paper bet placed: $${stake.toFixed(2)} ${betType} @ $${price.toFixed(2)}`)
     } catch {
       setStatus('error')
       setMessage('Could not reach the server')
@@ -62,6 +68,15 @@ export function PaperBetButton(props: PaperBetButtonProps) {
 
   return (
     <div className="flex items-center gap-2">
+      <select
+        value={betType}
+        onChange={(e) => setBetType(e.target.value as 'WIN' | 'PLACE')}
+        className="rounded border border-slate-300 px-1 py-0.5 text-xs"
+        disabled={status === 'pending'}
+      >
+        <option value="WIN">WIN</option>
+        <option value="PLACE" disabled={!props.tabPlacePrice}>PLACE</option>
+      </select>
       <label className="flex items-center gap-1 text-xs text-slate-600">
         $
         <input
@@ -77,7 +92,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
       <button
         type="button"
         onClick={placeBet}
-        disabled={status === 'pending'}
+        disabled={status === 'pending' || !price}
         className="rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
       >
         {status === 'pending' ? 'Placing…' : 'PAPER BET'}

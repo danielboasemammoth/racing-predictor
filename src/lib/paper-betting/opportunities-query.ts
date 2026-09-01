@@ -8,6 +8,7 @@ export interface OpportunityRow {
   runner_id: string
   model_probability: number | null
   tab_win_price: number | null
+  tab_place_price: number | null
   edge_points: number | null
   expected_value: number | null
   confidence_level: string | null
@@ -27,7 +28,7 @@ export async function queryLatestOpportunities(
   let query = supabase
     .from('pe_recommendations')
     .select(
-      'id, race_id, runner_id, model_probability, tab_win_price, edge_points, expected_value, confidence_level, decision, generated_at, category, pe_runners(name, runner_number), pe_races!inner(venue, race_number, category, start_time, status)',
+      'id, race_id, runner_id, model_probability, tab_win_price, tab_place_price, edge_points, expected_value, confidence_level, decision, generated_at, category, pe_runners(name, runner_number), pe_races!inner(venue, race_number, category, start_time, status)',
     )
     .in('decision', ['BET', 'WATCH'])
     .gte('generated_at', recentCutoff)

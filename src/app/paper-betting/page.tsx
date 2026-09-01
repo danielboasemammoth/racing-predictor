@@ -3,6 +3,7 @@ import { computeWalletStats, type WalletBetForStats } from '@/lib/betting/paper-
 import { SiteNav } from '@/components/site-nav'
 import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
 import { computeValidationReport, type ValidationReport } from '@/lib/paper-betting/validation-query'
+import { WhatIfLab } from './what-if-lab'
 
 interface PaperAccountRow {
   id: string
@@ -191,6 +192,11 @@ export default async function PaperBettingPage() {
             )}
           </section>
         )}
+
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-slate-900">What-If Analysis</h2>
+          <WhatIfLab />
+        </section>
 
         {!wallet ? (
           <p className="text-sm text-slate-600">

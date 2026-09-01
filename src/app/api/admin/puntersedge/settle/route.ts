@@ -8,8 +8,10 @@ import { getPendingBetsForRace, settleBetInDb } from '@/lib/paper-betting/reposi
 /**
  * Fetches FINAL results (never interim - placings can still change on protest) and settles every
  * matching PENDING paper bet. Matches on the runner's stable number within the race, never on
- * name. Runners in a race's `scratchings` are settled SCRATCHED (stake refunded); every other
- * pending bet on a race with no matching placing is left PENDING (result not yet available).
+ * name. `placings` only contains the dividend-bearing placegetters for this field size (verified
+ * against a live result) - a runner that is neither scratched nor in `placings` on a FINAL result
+ * definitively finished outside the paid places, so WIN and PLACE bets on it settle LOST rather
+ * than being left pending forever.
  */
 export async function POST(request: Request) {
   if (!(await hasAdminSession())) {
@@ -42,22 +44,19 @@ export async function POST(request: Request) {
         continue
       }
 
-      const scratchedNumbers = new Set((result.scratchings ?? []).map((s) => s.number))
+      const deductedNumbers = new Set((result.deductions ?? []).map((d) => d.number))
       const placingByNumber = new Map(result.placings.map((p) => [p.number, p]))
 
       for (const bet of pendingBets) {
-        if (bet.bet_type !== 'WIN') continue // PLACE settlement not yet implemented - see report
-
-        if (scratchedNumbers.has(bet.runner_number)) {
+        if (deductedNumbers.has(bet.runner_number)) {
           const { returnAmount, profit } = settleBet({ stake: bet.stake, decimalOdds: bet.tab_decimal_odds }, 'SCRATCHED')
           if (await settleBetInDb(admin, bet.id, 'SCRATCHED', returnAmount, profit)) settledCount += 1
           continue
         }
 
         const placing = placingByNumber.get(bet.runner_number)
-        if (!placing) continue // no placing and not scratched - result incomplete, leave PENDING
-
-        const outcome = placing.position === 1 ? 'WON' : 'LOST'
+        // WIN only wins for the actual winner; PLACE wins for any dividend-bearing placegetter.
+        const outcome = bet.bet_type === 'WIN' ? (placing?.position === 1 ? 'WON' : 'LOST') : placing ? 'WON' : 'LOST'
         const { returnAmount, profit } = settleBet({ stake: bet.stake, decimalOdds: bet.tab_decimal_odds }, outcome)
         if (await settleBetInDb(admin, bet.id, outcome, returnAmount, profit)) settledCount += 1
       }

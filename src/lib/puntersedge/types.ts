@@ -63,6 +63,15 @@ export interface PeResultPlacing {
   place_price?: number | null
 }
 
+/** A scratched runner's win/place deduction fractions, verified against the real /v1/racing/results payload. */
+export interface PeResultDeduction {
+  name: string
+  number: number
+  win: number
+  place: number
+  scratched_at: string
+}
+
 export interface PeRaceResult {
   race_id: string
   venue: string
@@ -70,8 +79,9 @@ export interface PeRaceResult {
   category: RacingCategory
   status: 'final' | 'interim'
   country: string | null
+  /** Only the dividend-bearing placegetters (paid places for this field size) - not the full field. */
   placings: PeResultPlacing[]
-  scratchings?: PeScratching[]
+  deductions?: PeResultDeduction[]
   dividends?: Record<string, unknown>
 }
 
