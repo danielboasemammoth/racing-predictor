@@ -205,6 +205,7 @@ export default async function AnalyticsPage() {
                 context.history.filter((row): row is typeof row & { probability: number; gap: number; agreeing: number; totalBaseModels: number } =>
                   typeof row.probability === 'number' && typeof row.gap === 'number' && typeof row.agreeing === 'number' && typeof row.totalBaseModels === 'number'),
                 context.calibration,
+                context.history,
               ).map((band) => ({
                 label: band.label,
                 n: band.n,

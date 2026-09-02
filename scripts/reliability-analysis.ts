@@ -29,14 +29,16 @@ import {
   probabilityBand,
 } from '../src/lib/reliability-analysis'
 import { CURRENT_MODEL_VERSIONS } from '../src/lib/prediction-suite'
-import { computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '../src/lib/reliability-score'
+import { computeComparableCohort, computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '../src/lib/reliability-score'
 import { flatStakeReport } from '../src/lib/roi-analysis'
 import { createScriptClient } from './supabase-client'
 
 config({ path: '.env.local' })
 
 const supabase = createScriptClient()
-const BASE_MODEL_VERSIONS = CURRENT_MODEL_VERSIONS.filter((version) => version !== 'v4.1-ensemble')
+// v6-market-blend is a challenger derived from the ensemble's own output, not an independent
+// fundamentals variant - excluded from "base model" agreement counting like v4.1-ensemble is.
+const BASE_MODEL_VERSIONS = CURRENT_MODEL_VERSIONS.filter((version) => version !== 'v4.1-ensemble' && version !== 'v6-market-blend')
 const ENSEMBLE_VERSION = 'v4.1-ensemble-retrospective'
 
 interface RaceRow {
@@ -241,10 +243,10 @@ function analyzeSlice(label: string, rows: RaceAnalysisRow[]) {
 }
 
 /** Spec section 28: verify higher Reliability Scores correspond to genuinely higher strike rates. */
-function reportCalibrationMonotonicity(rows: RaceAnalysisRow[], calibration: CalibrationTable) {
+function reportCalibrationMonotonicity(rows: RaceAnalysisRow[], calibration: CalibrationTable, history: RaceAnalysisRow[]) {
   console.log('\n## Reliability Score calibration (spec section 28 - should read monotonically top to bottom)')
   console.log('  Band       Races   Wins   Strike Rate')
-  for (const band of reliabilityCalibrationBands(rows, calibration)) {
+  for (const band of reliabilityCalibrationBands(rows, calibration, history)) {
     console.log(`  ${band.label.padEnd(10)} ${String(band.n).padEnd(7)} ${String(band.wins).padEnd(6)} ${(band.strikeRate * 100).toFixed(1)}%`)
   }
 }
@@ -254,7 +256,7 @@ function reportCalibrationMonotonicity(rows: RaceAnalysisRow[], calibration: Cal
  * odds here are the best price recorded in Racing.com's own feed, not a confirmed TAB Fixed Win
  * or Betfair SP - this project has no market-data integration yet. Treat as an approximation.
  */
-function reportProfitability(rows: RaceAnalysisRow[], calibration: CalibrationTable) {
+function reportProfitability(rows: RaceAnalysisRow[], calibration: CalibrationTable, history: RaceAnalysisRow[]) {
   const withOdds = rows.filter((r): r is RaceAnalysisRow & { bestRecordedOdds: number } => r.bestRecordedOdds !== null)
   console.log(`\n## Flat-stake profitability (${withOdds.length}/${rows.length} races had a recorded price; NOT confirmed TAB/Betfair)`)
 
@@ -274,7 +276,7 @@ function reportProfitability(rows: RaceAnalysisRow[], calibration: CalibrationTa
 
   console.log('\n  By Reliability Score band:')
   const scoreGroups = Map.groupBy(withOdds, (r) => {
-    const score = computeReliabilityScore({ probability: r.probability, gap: r.gap, agreeing: r.agreeing, totalBaseModels: r.totalBaseModels }, calibration).score
+    const score = computeReliabilityScore({ probability: r.probability, gap: r.gap, agreeing: r.agreeing, totalBaseModels: r.totalBaseModels }, calibration, history).score
     if (score >= 80) return '80+'
     if (score >= 65) return '65-79'
     if (score >= 50) return '50-64'
@@ -314,17 +316,15 @@ async function main() {
   const gapBuckets = bucketize(rows, (r) => predictionGapBand(r.gap), (r) => r.correctWinner)
   const agreementBuckets = bucketize(rows, (r) => agreementBand(r.agreeing, r.totalBaseModels), (r) => r.correctWinner)
 
-  // Raw blended rate (pre-rescale) for every historical race, so the score can be normalized
-  // against the actual observed range instead of the 0-40%-ish ceiling raw win rates are stuck at.
-  const rawRates = rows.map((row) => {
-    const factors = [
-      probabilityBuckets.find((b) => b.label === probabilityBand(row.probability)),
-      gapBuckets.find((b) => b.label === predictionGapBand(row.gap)),
-      agreementBuckets.find((b) => b.label === agreementBand(row.agreeing, row.totalBaseModels)),
-    ].filter((b): b is BucketStats => Boolean(b))
-    const weight = factors.reduce((sum, b) => sum + b.n, 0)
-    return weight > 0 ? factors.reduce((sum, b) => sum + b.shrunkStrikeRate * b.n, 0) / weight : overallBaseline
-  })
+  // Raw comparable-cohort rate (pre-rescale) for every historical race, using the SAME single
+  // joint-cohort tiered lookup the live score uses (computeComparableCohort) - never the old
+  // "sum three overlapping buckets" blend, which double/triple-counted the same races.
+  const rawRates = rows.map((row) =>
+    computeComparableCohort(
+      { probability: row.probability, gap: row.gap, agreeing: row.agreeing, totalBaseModels: row.totalBaseModels },
+      rows,
+    ).shrunkStrikeRate,
+  )
 
   const calibration = {
     generatedAt: new Date().toISOString(),
@@ -340,8 +340,8 @@ async function main() {
   writeFileSync('scripts/output/reliability-calibration.json', JSON.stringify(calibration, null, 2))
   console.log('\nWrote scripts/output/reliability-calibration.json (production calibration table: probability/gap/agreement only).')
 
-  reportCalibrationMonotonicity(rows, calibration)
-  reportProfitability(rows, calibration)
+  reportCalibrationMonotonicity(rows, calibration, rows)
+  reportProfitability(rows, calibration, rows)
 
   const historyPayload = { generatedAt: new Date().toISOString(), trainEnd, validationEnd, rows }
   writeFileSync(

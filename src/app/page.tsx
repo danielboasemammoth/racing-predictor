@@ -119,6 +119,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   const supabase = await createClient()
   const [races, reliabilityContext] = await Promise.all([getUpcomingRaces(), loadReliabilityContext(supabase)])
   filters.calibration = reliabilityContext?.calibration ?? null
+  filters.history = reliabilityContext?.history ?? null
 
   const dailyPicks = getDailyPicks(races, new Date(), 3, filters)
   const tomorrowPicks = getTomorrowPicks(races, new Date(), 3, filters)
@@ -175,7 +176,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               </div>
             )}
 
-            {dailyPicks.length > 0 && (
+            {dailyPicks.length > 0 ? (
               <section aria-labelledby="daily-picks-title" className="border-y border-teal-200 bg-teal-50 px-4 py-6 sm:px-6">
                 <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
                   <div>
@@ -239,7 +240,15 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                   ))}
                 </div>
               </section>
-            )}
+            ) : reliabilityContext ? (
+              <section aria-labelledby="daily-picks-title" className="border-y border-slate-200 bg-slate-50 px-4 py-6 sm:px-6">
+                <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
+                <h2 id="daily-picks-title" className="mt-1 text-lg font-bold text-slate-900">No conservative selections currently qualify</h2>
+                <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                  No upcoming race today has a prediction with sufficient evidence and a comparable historical cohort above baseline. This is a normal outcome, not an error - the shortlist is never filled just to have content.
+                </p>
+              </section>
+            ) : null}
 
             {tomorrowPicks.length > 0 && (
               <details className="border border-slate-200 bg-white px-4 py-4 sm:px-6">

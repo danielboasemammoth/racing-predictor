@@ -237,12 +237,18 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
               </div>
             </div>
 
+            {raceReliability.reliability.vetoReason && (
+              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Capped: {raceReliability.reliability.vetoReason}
+              </p>
+            )}
+
             <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <p className="text-xs font-bold uppercase text-emerald-700">Positive Factors</p>
-                {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline >= 0).length ? (
+                {raceReliability.reliability.factors.filter((factor) => factor.significant && factor.liftVsBaseline > 0).length ? (
                   <ul className="mt-2 space-y-2">
-                    {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline >= 0).map((factor) => (
+                    {raceReliability.reliability.factors.filter((factor) => factor.significant && factor.liftVsBaseline > 0).map((factor) => (
                       <li key={factor.label} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-slate-700">
                         <p className="font-semibold text-slate-900">{factor.label}</p>
                         <p className="mt-0.5">
@@ -252,14 +258,14 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                     ))}
                   </ul>
                 ) : (
-                  <p className="mt-2 text-xs text-slate-500">None of the validated factors favour this pick.</p>
+                  <p className="mt-2 text-xs text-slate-500">None of the factors show a statistically significant positive lift.</p>
                 )}
               </div>
               <div>
                 <p className="text-xs font-bold uppercase text-red-700">Negative Factors</p>
-                {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline < 0).length ? (
+                {raceReliability.reliability.factors.filter((factor) => factor.significant && factor.liftVsBaseline < 0).length ? (
                   <ul className="mt-2 space-y-2">
-                    {raceReliability.reliability.factors.filter((factor) => factor.liftVsBaseline < 0).map((factor) => (
+                    {raceReliability.reliability.factors.filter((factor) => factor.significant && factor.liftVsBaseline < 0).map((factor) => (
                       <li key={factor.label} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-slate-700">
                         <p className="font-semibold text-slate-900">{factor.label}</p>
                         <p className="mt-0.5">
@@ -269,12 +275,17 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                     ))}
                   </ul>
                 ) : (
-                  <p className="mt-2 text-xs text-slate-500">None of the validated factors count against this pick.</p>
+                  <p className="mt-2 text-xs text-slate-500">None of the factors show a statistically significant negative lift.</p>
                 )}
               </div>
             </div>
+            {raceReliability.reliability.factors.some((factor) => !factor.significant) && (
+              <p className="mt-3 text-xs text-slate-500">
+                Neutral / uncertain (no demonstrated historical lift): {raceReliability.reliability.factors.filter((factor) => !factor.significant).map((factor) => factor.label).join('; ')}
+              </p>
+            )}
             <p className="mt-3 text-xs text-slate-500">
-              Evidence confidence: <span className="font-semibold">{raceReliability.reliability.evidenceConfidence}</span> (based on {raceReliability.reliability.evidenceSampleSize} comparable historical races)
+              Evidence confidence: <span className="font-semibold">{raceReliability.reliability.evidenceConfidence}</span> (based on {raceReliability.reliability.evidenceSampleSize} comparable historical races, matched on {raceReliability.reliability.evidenceCriteriaUsed.join(', ')})
             </p>
 
             <div className="mt-5 border-t border-slate-100 pt-4">

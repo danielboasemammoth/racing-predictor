@@ -70,6 +70,7 @@ export function computeRaceReliability(
   const reliability = computeReliabilityScore(
     { probability, gap, agreeing, totalBaseModels: otherModels.length },
     context.calibration,
+    context.history,
   )
   const similarRaces = findSimilarRaces(
     {

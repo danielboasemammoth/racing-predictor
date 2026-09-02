@@ -13,7 +13,9 @@ export interface ModelSuiteResult extends ContextualPredictionResult {
 
 export const ALL_MODEL_CONFIGS = Object.values(MODEL_CONFIGS)
 export const PRODUCTION_ENSEMBLE_CONFIGS = [MODEL_CONFIGS.optimized, MODEL_CONFIGS.connections]
-export const CURRENT_MODEL_VERSIONS = [...Object.values(MODEL_CONFIGS).map((config) => config.version), 'v4.1-ensemble']
+// v6-market-blend (src/lib/market-blend-model.ts) is a CHALLENGER, generated alongside the
+// production ensemble but not selected as the primary pick anywhere - see that file for why.
+export const CURRENT_MODEL_VERSIONS = [...Object.values(MODEL_CONFIGS).map((config) => config.version), 'v4.1-ensemble', 'v6-market-blend']
 
 function component(modelVersion: string, result: ContextualPredictionResult) {
   const winner = result.predictions.podium[0]

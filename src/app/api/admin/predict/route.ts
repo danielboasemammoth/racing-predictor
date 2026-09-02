@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { HistoricalStart } from '@/lib/prediction-v3'
 import { ALL_MODEL_CONFIGS, runConfiguredModel, runEnsemble } from '@/lib/prediction-suite'
+import { runMarketBlendModel } from '@/lib/market-blend-model'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { parseStandardTimeDifference } from '@/lib/sectional-speed'
 import type { RaceEntryWithHorse } from '@/lib/types'
@@ -216,9 +217,11 @@ export async function POST(request: Request) {
         oddsByHorse,
         fieldSize: typedEntries.length,
       }
+      const ensembleResult = runEnsemble(input)
+      const marketBlendResult = runMarketBlendModel(ensembleResult)
       const results = runFullSuite
-        ? [...ALL_MODEL_CONFIGS.map((config) => runConfiguredModel(input, config)), runEnsemble(input)]
-        : [runEnsemble(input)]
+        ? [...ALL_MODEL_CONFIGS.map((config) => runConfiguredModel(input, config)), ensembleResult, marketBlendResult]
+        : [ensembleResult, marketBlendResult]
       allRows.push(...results.map((result) => ({
           race_id: race.id,
           model_version: `${result.modelVersion}${suffix}`,
