@@ -267,18 +267,21 @@ export async function recordApiUsage(admin: SupabaseClient, usage: { credits_use
  * Whether calling PuntersEdge results() could plausibly settle anything right now - a PENDING bet
  * whose race jumped at least `bufferMinutes` ago (results land a median 4.9min after the jump).
  * Used to skip the results API call entirely (2 credits/call) on ticks with nothing to settle,
- * which was previously the majority of scheduled polls.
+ * which was previously the majority of scheduled polls. Only PuntersEdge-sourced bets are settled
+ * here (internal-source bets have no pe_races row) - paper_bets.race_id no longer has a DB-level
+ * FK to pe_races (see migrate-paper-betting-internal-source.sql), so this can't rely on a PostgREST
+ * embed/inner-join filter anymore - it's a manual two-step lookup instead.
  */
 export async function hasSettleableBets(admin: SupabaseClient, bufferMinutes = 10): Promise<boolean> {
+  const pending = await admin.from('paper_bets').select('race_id').eq('status', 'PENDING').eq('source', 'puntersedge')
+  if (pending.error) throw new Error(`Failed to check for settleable bets: ${pending.error.message}`)
+  const raceIds = [...new Set((pending.data ?? []).map((b) => b.race_id as string))]
+  if (raceIds.length === 0) return false
+
   const cutoff = new Date(Date.now() - bufferMinutes * 60_000).toISOString()
-  const { data, error } = await admin
-    .from('paper_bets')
-    .select('id, pe_races!inner(start_time)')
-    .eq('status', 'PENDING')
-    .lte('pe_races.start_time', cutoff)
-    .limit(1)
-  if (error) throw new Error(`Failed to check for settleable bets: ${error.message}`)
-  return (data ?? []).length > 0
+  const races = await admin.from('pe_races').select('id').in('id', raceIds).lte('start_time', cutoff).limit(1)
+  if (races.error) throw new Error(`Failed to check for settleable bets: ${races.error.message}`)
+  return (races.data ?? []).length > 0
 }
 
 /** Latest recorded PuntersEdge credit usage, or null if none has been recorded yet. */
@@ -298,21 +301,30 @@ export interface PendingBetRow {
 
 /** Pending WIN/PLACE bets for a race, joined to the runner's number for result matching (never by name). */
 export async function getPendingBetsForRace(admin: SupabaseClient, raceId: string): Promise<PendingBetRow[]> {
-  const { data, error } = await admin
+  const bets = await admin
     .from('paper_bets')
-    .select('id, stake, tab_decimal_odds, bet_type, pe_runners!inner(runner_number)')
+    .select('id, stake, tab_decimal_odds, bet_type, runner_id')
     .eq('race_id', raceId)
     .eq('status', 'PENDING')
-  if (error) throw new Error(`Failed to load pending bets for race ${raceId}: ${error.message}`)
-  return (data ?? []).map((row) => {
-    const runner = Array.isArray(row.pe_runners) ? row.pe_runners[0] : row.pe_runners
-    return {
+    .eq('source', 'puntersedge')
+  if (bets.error) throw new Error(`Failed to load pending bets for race ${raceId}: ${bets.error.message}`)
+  const rows = bets.data ?? []
+  if (rows.length === 0) return []
+
+  // paper_bets.runner_id no longer has a DB-level FK to pe_runners either - resolve separately.
+  const runnerIds = [...new Set(rows.map((b) => b.runner_id as string))]
+  const runners = await admin.from('pe_runners').select('id, runner_number').in('id', runnerIds)
+  if (runners.error) throw new Error(`Failed to load runners for race ${raceId}: ${runners.error.message}`)
+  const runnerNumberById = new Map((runners.data ?? []).map((r) => [r.id as string, r.runner_number as number]))
+
+  return rows
+    .map((row) => ({
       id: row.id as string,
       stake: row.stake as number,
       tab_decimal_odds: row.tab_decimal_odds as number,
       bet_type: row.bet_type as 'WIN' | 'PLACE',
-      runner_number: (runner as { runner_number: number }).runner_number,
-    }
-  })
+      runner_number: runnerNumberById.get(row.runner_id as string),
+    }))
+    .filter((row): row is PendingBetRow => row.runner_number != null)
 }
 

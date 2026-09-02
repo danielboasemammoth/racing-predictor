@@ -27,15 +27,14 @@ interface PaperBetRow {
   status: string
   profit: number | null
   placed_at: string
-  pe_races: { venue: string; race_number: number; category: string; start_time: string } | { venue: string; race_number: number; category: string; start_time: string }[] | null
 }
 
-function raceLabel(row: PaperBetRow, internalRaces: Map<string, { venue: string; raceNumber: number }>) {
+function raceLabel(row: PaperBetRow, internalRaces: Map<string, { venue: string; raceNumber: number }>, peRaces: Map<string, { venue: string; race_number: number }>) {
   if (row.source === 'internal') {
     const race = internalRaces.get(row.race_id)
     return race ? `${race.venue} R${race.raceNumber}` : `Race ${row.race_id}`
   }
-  const race = Array.isArray(row.pe_races) ? row.pe_races[0] : row.pe_races
+  const race = peRaces.get(row.race_id)
   if (!race) return `Race ${row.race_id}`
   return `${race.venue} R${race.race_number}`
 }
@@ -55,9 +54,12 @@ async function loadWallet() {
   if (account.error) throw account.error
   if (!account.data) return null
 
+  // paper_bets.race_id no longer has a DB-level FK to pe_races (see migrate-paper-betting-internal-source.sql
+  // - it can point at either pe_races or the internal races table depending on `source`), so PostgREST can no
+  // longer auto-embed pe_races. Fetch bets first, then separately resolve race info per source below.
   const bets = await supabase
     .from('paper_bets')
-    .select('*, pe_races(venue, race_number, category, start_time)')
+    .select('*')
     .eq('account_id', account.data.id)
     .order('placed_at', { ascending: false })
     .limit(200)
@@ -71,6 +73,13 @@ async function loadWallet() {
       const course = Array.isArray(row.racecourses) ? row.racecourses[0] : row.racecourses
       internalRaces.set(row.id, { venue: course?.name ?? 'Unknown venue', raceNumber: row.race_number })
     }
+  }
+
+  const peRaceIds = [...new Set((bets.data ?? []).filter((b) => b.source !== 'internal').map((b) => b.race_id))]
+  const peRaces = new Map<string, { venue: string; race_number: number }>()
+  if (peRaceIds.length) {
+    const pe = await supabase.from('pe_races').select('id, venue, race_number').in('id', peRaceIds)
+    for (const race of pe.data ?? []) peRaces.set(race.id, race)
   }
 
   const chronological = [...(bets.data ?? [])].reverse() as PaperBetRow[]
@@ -87,6 +96,7 @@ async function loadWallet() {
     stats: computeWalletStats(account.data.starting_bankroll as number, statsInput),
     recentBets: (bets.data ?? []) as PaperBetRow[],
     internalRaces,
+    peRaces,
   }
 }
 
@@ -276,7 +286,7 @@ export default async function PaperBettingPage() {
                   <tbody className="divide-y divide-slate-100">
                     {wallet.recentBets.map((bet) => (
                       <tr key={bet.id}>
-                        <td className="px-3 py-2 text-slate-700">{raceLabel(bet, wallet.internalRaces)}</td>
+                        <td className="px-3 py-2 text-slate-700">{raceLabel(bet, wallet.internalRaces, wallet.peRaces)}</td>
                         <td className="px-3 py-2 text-slate-900">{bet.runner_name}</td>
                         <td className="px-3 py-2 text-slate-500">{bet.mode}</td>
                         <td className="px-3 py-2 text-slate-700" title={bet.source === 'internal' ? 'Recorded price (Racing.com feed, not confirmed TAB/Betfair)' : 'TAB price'}>

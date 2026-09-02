@@ -13,17 +13,25 @@ export async function GET(request: Request) {
   const category = searchParams.get('category')
   const limit = Math.min(500, Number(searchParams.get('limit') ?? '100'))
 
-  let query = admin
-    .from('paper_bets')
-    .select('*, pe_races(venue, race_number, category, start_time)')
-    .order('placed_at', { ascending: false })
-    .limit(limit)
+  // paper_bets.race_id no longer has a DB-level FK to pe_races (see migrate-paper-betting-internal-source.sql -
+  // it can point at either pe_races or the internal races table depending on `source`), so PostgREST can no
+  // longer auto-embed pe_races here. Fetch bets first, then separately fetch pe_races for the puntersedge rows.
+  let query = admin.from('paper_bets').select('*').order('placed_at', { ascending: false }).limit(limit)
   if (status) query = query.eq('status', status)
   if (category) query = query.eq('category', category)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, message: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, bets: data ?? [] })
+  const bets = data ?? []
+
+  const peRaceIds = [...new Set(bets.filter((b) => b.source !== 'internal').map((b) => b.race_id))]
+  const peRaces = new Map<string, { venue: string; race_number: number; category: string; start_time: string }>()
+  if (peRaceIds.length) {
+    const races = await admin.from('pe_races').select('id, venue, race_number, category, start_time').in('id', peRaceIds)
+    for (const race of races.data ?? []) peRaces.set(race.id, race)
+  }
+
+  return NextResponse.json({ success: true, bets: bets.map((b) => ({ ...b, pe_races: peRaces.get(b.race_id) ?? null })) })
 }
 
 /** Manual "PAPER BET" action - gated the same as every other write on this site (admin session). */
