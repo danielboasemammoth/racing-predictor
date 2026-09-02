@@ -5,6 +5,7 @@ import { getDailyPicks, getTomorrowPicks, type DailyPicksFilterOptions } from '@
 import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 import { loadReliabilityContext } from '@/lib/reliability-context'
 import { SiteNav } from '@/components/site-nav'
+import { PaperBetButton } from '@/components/paper-bet-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -394,6 +395,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                               </p>
                             )}
                           </div>
+                          {idx === 0 && horse.win_odds ? (
+                            <div className="ml-8 mt-3">
+                              <PaperBetButton
+                                raceId={race.id}
+                                runnerId={horse.horse_id}
+                                runnerName={horse.horse_name}
+                                category="horse"
+                                source="internal"
+                                winPrice={horse.win_odds}
+                                placePrice={horse.place_odds ?? null}
+                                modelProbability={horse.win_probability ?? horse.confidence}
+                                modelVersion={race.prediction?.model_version ?? 'v4.1-ensemble'}
+                              />
+                              <p className="mt-1 text-[10px] text-slate-400">Recorded price (Racing.com feed - not a confirmed TAB/Betfair price)</p>
+                            </div>
+                          ) : null}
                         </div>
                       )) || (
                         <div className="col-span-3 text-sm text-slate-500">No podium predictions available</div>

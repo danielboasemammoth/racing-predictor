@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { SiteNav } from '@/components/site-nav'
 import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
-import { PaperBetButton } from './paper-bet-button'
+import { PaperBetButton } from '@/components/paper-bet-button'
 
 const DECISION_STYLES: Record<string, string> = {
   BET: 'bg-emerald-50 text-emerald-800 border-emerald-200',
@@ -85,8 +85,9 @@ export default async function GreyhoundsPage() {
                       runnerId={rec.runner_id}
                       runnerName={runner.name}
                       category="greyhound"
-                      tabWinPrice={rec.tab_win_price}
-                      tabPlacePrice={rec.tab_place_price}
+                      source="puntersedge"
+                      winPrice={rec.tab_win_price}
+                      placePrice={rec.tab_place_price}
                       modelProbability={rec.model_probability}
                       modelVersion="market-consensus-v1"
                       edgePoints={rec.edge_points}

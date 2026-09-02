@@ -141,12 +141,50 @@ export async function getOrCreateAccount(admin: SupabaseClient, name: string, st
   return created.data as PaperAccountRow
 }
 
+/**
+ * Rebases the account's starting bankroll (spec: user chooses their starting budget). Preserves
+ * accumulated net profit/loss rather than wiping it: current_bankroll becomes
+ * newStartingBankroll + (old current_bankroll - old starting_bankroll). Never rewrites individual
+ * bets' own recorded bankroll_after - those remain an honest historical record of the old basis.
+ */
+export async function updateStartingBankroll(admin: SupabaseClient, accountId: string, newStartingBankroll: number): Promise<PaperAccountRow> {
+  const existing = await admin.from('paper_accounts').select('*').eq('id', accountId).single()
+  if (existing.error) throw new Error(`Failed to load paper account ${accountId}: ${existing.error.message}`)
+  const netProfit = (existing.data.current_bankroll as number) - (existing.data.starting_bankroll as number)
+
+  const updated = await admin
+    .from('paper_accounts')
+    .update({ starting_bankroll: newStartingBankroll, current_bankroll: newStartingBankroll + netProfit, updated_at: new Date().toISOString() })
+    .eq('id', accountId)
+    .select('*')
+    .single()
+  if (updated.error) throw new Error(`Failed to update starting bankroll for account ${accountId}: ${updated.error.message}`)
+  return updated.data as PaperAccountRow
+}
+
+/** Deletes all bets for an account and resets it to a fresh bankroll - destructive, admin-confirmed only. */
+export async function resetAccount(admin: SupabaseClient, accountId: string, newStartingBankroll: number): Promise<PaperAccountRow> {
+  const deleteBets = await admin.from('paper_bets').delete().eq('account_id', accountId)
+  if (deleteBets.error) throw new Error(`Failed to clear bets for account ${accountId}: ${deleteBets.error.message}`)
+
+  const updated = await admin
+    .from('paper_accounts')
+    .update({ starting_bankroll: newStartingBankroll, current_bankroll: newStartingBankroll, updated_at: new Date().toISOString() })
+    .eq('id', accountId)
+    .select('*')
+    .single()
+  if (updated.error) throw new Error(`Failed to reset account ${accountId}: ${updated.error.message}`)
+  return updated.data as PaperAccountRow
+}
+
 export interface PlaceBetInput {
   accountId: string
   raceId: string
   runnerId: string
   runnerName: string
   category: 'horse' | 'greyhound' | 'harness'
+  /** 'puntersedge' (default elsewhere in this file) or 'internal' - the home page's own Racing.com-sourced prediction models. */
+  source: 'puntersedge' | 'internal'
   mode: 'AUTO' | 'MANUAL'
   betType: 'WIN' | 'PLACE'
   stake: number
@@ -173,6 +211,7 @@ export async function placeBet(admin: SupabaseClient, input: PlaceBetInput): Pro
       runner_id: input.runnerId,
       runner_name: input.runnerName,
       category: input.category,
+      source: input.source,
       mode: input.mode,
       bet_type: input.betType,
       stake: input.stake,

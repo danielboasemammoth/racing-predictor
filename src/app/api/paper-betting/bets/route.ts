@@ -37,6 +37,7 @@ export async function POST(request: Request) {
     runnerId?: string
     runnerName?: string
     category?: 'horse' | 'greyhound' | 'harness'
+    source?: 'puntersedge' | 'internal'
     betType?: 'WIN' | 'PLACE'
     tabDecimalOdds?: number
     modelProbability?: number
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, message: 'Invalid TAB price' }, { status: 400 })
   }
   const betType = body.betType === 'PLACE' ? 'PLACE' : 'WIN'
+  const source = body.source === 'internal' ? 'internal' : 'puntersedge'
 
   const admin = createAdminClient()
   const account = await getOrCreateAccount(admin, 'default', DEFAULT_STARTING_BANKROLL)
@@ -72,6 +74,7 @@ export async function POST(request: Request) {
     runnerId: body.runnerId,
     runnerName: body.runnerName,
     category: body.category,
+    source,
     mode: 'MANUAL',
     betType,
     stake,
@@ -84,7 +87,7 @@ export async function POST(request: Request) {
     minutesToJumpAtPlacement: body.minutesToJump ?? 0,
     // 5-second bucket: blocks an accidental double-click on the same runner, still allows a
     // deliberate second manual bet on the same runner later.
-    idempotencyKey: `manual:${body.raceId}:${body.runnerId}:${betType}:${Math.floor(Date.now() / 5000)}`,
+    idempotencyKey: `manual:${source}:${body.raceId}:${body.runnerId}:${betType}:${Math.floor(Date.now() / 5000)}`,
   })
 
   if (!result.placed) {

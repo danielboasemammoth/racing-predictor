@@ -1,36 +1,40 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 export interface PaperBetButtonProps {
   raceId: string
   runnerId: string
   runnerName: string
   category: 'horse' | 'greyhound' | 'harness'
-  tabWinPrice: number
-  tabPlacePrice: number | null
+  /** 'internal' = the home page's own Racing.com-sourced prediction models; 'puntersedge' (default) = the PuntersEdge value engine. */
+  source?: 'puntersedge' | 'internal'
+  winPrice: number
+  placePrice?: number | null
   modelProbability: number
   modelVersion: string
-  edgePoints: number | null
-  expectedValue: number | null
-  confidenceLevel: string | null
+  edgePoints?: number | null
+  expectedValue?: number | null
+  confidenceLevel?: string | null
   /** Harville-derived place probability/edge - used instead of the win figures when betType is PLACE. */
-  placeModelProbability: number | null
-  placeEdgePoints: number | null
-  placeExpectedValue: number | null
+  placeModelProbability?: number | null
+  placeEdgePoints?: number | null
+  placeExpectedValue?: number | null
 }
 
-/** MANUAL PAPER BETTING: places a simulated bet at the TAB price shown right now. No real money moves. */
+/** MANUAL PAPER BETTING: places a simulated bet at the price shown right now. No real money moves. */
 export function PaperBetButton(props: PaperBetButtonProps) {
+  const router = useRouter()
   const [stake, setStake] = useState(10)
   const [betType, setBetType] = useState<'WIN' | 'PLACE'>('WIN')
   const [status, setStatus] = useState<'idle' | 'pending' | 'placed' | 'error'>('idle')
   const [message, setMessage] = useState<string>()
 
-  const price = betType === 'PLACE' ? props.tabPlacePrice : props.tabWinPrice
-  const modelProbability = betType === 'PLACE' ? props.placeModelProbability : props.modelProbability
-  const edgePoints = betType === 'PLACE' ? props.placeEdgePoints : props.edgePoints
-  const expectedValue = betType === 'PLACE' ? props.placeExpectedValue : props.expectedValue
+  const price = betType === 'PLACE' ? (props.placePrice ?? null) : props.winPrice
+  const modelProbability = betType === 'PLACE' ? (props.placeModelProbability ?? null) : props.modelProbability
+  const edgePoints = betType === 'PLACE' ? (props.placeEdgePoints ?? null) : (props.edgePoints ?? null)
+  const expectedValue = betType === 'PLACE' ? (props.placeExpectedValue ?? null) : (props.expectedValue ?? null)
 
   async function placeBet() {
     if (!price || modelProbability == null) return
@@ -45,13 +49,14 @@ export function PaperBetButton(props: PaperBetButtonProps) {
           runnerId: props.runnerId,
           runnerName: props.runnerName,
           category: props.category,
+          source: props.source ?? 'puntersedge',
           betType,
           tabDecimalOdds: price,
           modelProbability,
           modelVersion: props.modelVersion,
           edgePoints,
           expectedValue,
-          confidenceLevel: props.confidenceLevel,
+          confidenceLevel: props.confidenceLevel ?? null,
           stakeOverride: stake,
         }),
       })
@@ -63,6 +68,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
       }
       setStatus('placed')
       setMessage(`Paper bet placed: $${stake.toFixed(2)} ${betType} @ $${price.toFixed(2)}`)
+      router.refresh()
     } catch {
       setStatus('error')
       setMessage('Could not reach the server')
@@ -82,7 +88,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
         disabled={status === 'pending'}
       >
         <option value="WIN">WIN</option>
-        <option value="PLACE" disabled={!props.tabPlacePrice || props.placeModelProbability == null}>PLACE</option>
+        <option value="PLACE" disabled={!props.placePrice || props.placeModelProbability == null}>PLACE</option>
       </select>
       <label className="flex items-center gap-1 text-xs text-slate-600">
         $

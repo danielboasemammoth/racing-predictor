@@ -4,6 +4,7 @@ import { SiteNav } from '@/components/site-nav'
 import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
 import { computeValidationReport, type ValidationReport } from '@/lib/paper-betting/validation-query'
 import { WhatIfLab } from './what-if-lab'
+import { BankrollSettings } from './bankroll-settings'
 
 interface PaperAccountRow {
   id: string
@@ -17,6 +18,7 @@ interface PaperBetRow {
   race_id: string
   runner_name: string
   category: string
+  source: string
   mode: string
   stake: number
   tab_decimal_odds: number
@@ -28,7 +30,11 @@ interface PaperBetRow {
   pe_races: { venue: string; race_number: number; category: string; start_time: string } | { venue: string; race_number: number; category: string; start_time: string }[] | null
 }
 
-function raceLabel(row: PaperBetRow) {
+function raceLabel(row: PaperBetRow, internalRaces: Map<string, { venue: string; raceNumber: number }>) {
+  if (row.source === 'internal') {
+    const race = internalRaces.get(row.race_id)
+    return race ? `${race.venue} R${race.raceNumber}` : `Race ${row.race_id}`
+  }
   const race = Array.isArray(row.pe_races) ? row.pe_races[0] : row.pe_races
   if (!race) return `Race ${row.race_id}`
   return `${race.venue} R${race.race_number}`
@@ -57,6 +63,16 @@ async function loadWallet() {
     .limit(200)
   if (bets.error) throw bets.error
 
+  const internalRaceIds = [...new Set((bets.data ?? []).filter((b) => b.source === 'internal').map((b) => b.race_id))]
+  const internalRaces = new Map<string, { venue: string; raceNumber: number }>()
+  if (internalRaceIds.length) {
+    const internal = await supabase.from('races').select('id, race_number, racecourses(name)').in('id', internalRaceIds)
+    for (const row of internal.data ?? []) {
+      const course = Array.isArray(row.racecourses) ? row.racecourses[0] : row.racecourses
+      internalRaces.set(row.id, { venue: course?.name ?? 'Unknown venue', raceNumber: row.race_number })
+    }
+  }
+
   const chronological = [...(bets.data ?? [])].reverse() as PaperBetRow[]
   const statsInput: WalletBetForStats[] = chronological.map((b) => ({
     stake: b.stake,
@@ -70,6 +86,7 @@ async function loadWallet() {
     account: account.data as PaperAccountRow,
     stats: computeWalletStats(account.data.starting_bankroll as number, statsInput),
     recentBets: (bets.data ?? []) as PaperBetRow[],
+    internalRaces,
   }
 }
 
@@ -215,10 +232,13 @@ export default async function PaperBettingPage() {
         </section>
 
         {!wallet ? (
-          <p className="text-sm text-slate-600">
-            No paper betting account yet - run &ldquo;Sync PuntersEdge Odds &amp; Recommendations&rdquo; from
-            the Admin page to create the default account and start generating recommendations.
-          </p>
+          <section>
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">Set Up Paper Betting</h2>
+            <p className="mb-3 text-sm text-slate-600">
+              Choose a starting budget to begin. You can place paper bets from the home page or the Greyhounds page once this is set up.
+            </p>
+            <BankrollSettings currentStartingBankroll={null} betCount={0} />
+          </section>
         ) : (
           <>
             <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -230,6 +250,11 @@ export default async function PaperBettingPage() {
               <Stat label="Max Drawdown" value={`${wallet.stats.maxDrawdownPct.toFixed(1)}%`} />
               <Stat label="Bets Placed" value={String(wallet.stats.numberOfBets)} />
               <Stat label="Pending" value={String(wallet.stats.numberPending)} />
+            </section>
+
+            <section>
+              <h2 className="mb-3 text-sm font-semibold text-slate-900">Bankroll Settings</h2>
+              <BankrollSettings currentStartingBankroll={wallet.account.starting_bankroll} betCount={wallet.stats.numberOfBets} />
             </section>
 
             <section>
@@ -251,10 +276,12 @@ export default async function PaperBettingPage() {
                   <tbody className="divide-y divide-slate-100">
                     {wallet.recentBets.map((bet) => (
                       <tr key={bet.id}>
-                        <td className="px-3 py-2 text-slate-700">{raceLabel(bet)}</td>
+                        <td className="px-3 py-2 text-slate-700">{raceLabel(bet, wallet.internalRaces)}</td>
                         <td className="px-3 py-2 text-slate-900">{bet.runner_name}</td>
                         <td className="px-3 py-2 text-slate-500">{bet.mode}</td>
-                        <td className="px-3 py-2 text-slate-700">${bet.tab_decimal_odds.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-slate-700" title={bet.source === 'internal' ? 'Recorded price (Racing.com feed, not confirmed TAB/Betfair)' : 'TAB price'}>
+                          ${bet.tab_decimal_odds.toFixed(2)}{bet.source === 'internal' && <span className="ml-1 text-[10px] text-slate-400">rec.</span>}
+                        </td>
                         <td className="px-3 py-2 text-slate-700">${bet.stake.toFixed(2)}</td>
                         <td className="px-3 py-2 text-slate-700">{bet.edge_points != null ? `${bet.edge_points >= 0 ? '+' : ''}${bet.edge_points.toFixed(1)}pts` : 'n/a'}</td>
                         <td className="px-3 py-2">
