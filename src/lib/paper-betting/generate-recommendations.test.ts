@@ -90,6 +90,24 @@ describe('generateRaceRecommendations', () => {
     expect(MARKET_CONSENSUS_MODEL_VERSION).toBe('market-consensus-v1')
   })
 
+  it('excludes runners with an unresolved (null) program number rather than crashing (verified live)', () => {
+    const results = generateRaceRecommendations(
+      race({
+        runners: [
+          { name: 'Unresolved Dog', number: null, barrier: 1, bookmakers: [{ key: 'tab', win_price: 5.0 }] },
+          {
+            name: 'Resolved Dog',
+            number: 2,
+            bookmakers: [{ key: 'tab', win_price: 2.0, age_seconds: 10 }, { key: 'sportsbet', win_price: 2.0 }],
+          },
+        ],
+      }),
+      { now: NOW },
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0].runnerName).toBe('Resolved Dog')
+  })
+
   it('computes a Harville place recommendation only when a TAB place price is available', () => {
     const noPlacePrice = generateRaceRecommendations(race(), { now: NOW })
     expect(noPlacePrice[0].place).toBeNull() // test fixture has no place_price

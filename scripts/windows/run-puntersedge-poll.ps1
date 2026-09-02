@@ -1,16 +1,18 @@
 <#
 Frequent PuntersEdge poll: settle paper bets, then sync odds/recommendations.
 
-Intended to run every 10-15 minutes via Task Scheduler (see the trigger example in
-register-puntersedge-poll-task.ps1) - separate from run-daily-tasks.ps1's once-daily
-6am pipeline, because PuntersEdge only prices a race close to its jump (~15-25 min out),
-so timely BET/WATCH recommendations need much more frequent polling than the daily
-prediction pipeline.
+Intended to run every 15-60 minutes via Task Scheduler (see register-puntersedge-poll-task.ps1,
+default 60 min on the free tier) - separate from run-daily-tasks.ps1's once-daily 6am pipeline,
+because PuntersEdge only prices a race close to its jump (~15-25 min out), so timely BET/WATCH
+recommendations need much more frequent polling than the daily prediction pipeline.
 
-Credit-conscious: exits immediately without calling the API at all outside AU racing
-hours (6am-11pm AEST/AEDT, DST-safe via the Windows timezone database) - a 24/7 15-minute
-schedule would otherwise burn through the free tier's 1,500 monthly credits in about a
-week for no benefit, since there is nothing to price overnight.
+Credit-conscious in two ways: (1) exits immediately without calling the API at all outside AU
+racing hours (6am-11pm AEST/AEDT, DST-safe via the Windows timezone database) - a 24/7 schedule
+would otherwise burn credits overnight for no benefit, since there is nothing to price then; (2)
+the settle endpoint itself now skips its results() call (2 credits) on ticks with no pending bet
+past its jump time, which measured live as the majority of polls. See the interval math in
+register-puntersedge-poll-task.ps1's header - real measured burn rate on the free tier was ~182
+credits/day at a 15-minute interval, well over the ~50/day the 1,500-credit free tier sustains.
 #>
 
 param(

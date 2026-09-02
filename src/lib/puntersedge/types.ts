@@ -21,7 +21,8 @@ export interface PeBookmakerPrice {
 
 export interface PeRunner {
   name: string
-  number: number
+  /** Verified live: can be null when the primary program-number source hasn't resolved yet, even though barrier/trainer/form are already populated. */
+  number: number | null
   barrier?: number | null
   jockey?: string | null
   trainer?: string | null

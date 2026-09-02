@@ -65,11 +65,16 @@ function marketAgreementFactor(dispersion: number | undefined): number {
 export function generateRaceRecommendations(race: PeNextToGoRace, options: GenerateRecommendationsOptions): RunnerRecommendation[] {
   // The unauthenticated demo sandbox truncates optional fields (scratchings, runners) entirely
   // rather than sending empty arrays - default defensively so demo mode never throws.
+  // Verified live: a runner's `number` can also be null (program number not yet resolved by
+  // PuntersEdge's upstream source) even with barrier/trainer/form present - such runners can't be
+  // tracked or bet on without a stable number, so they're excluded rather than crashing or guessing.
   const scratchedNumbers = new Set((race.scratchings ?? []).map((s) => s.number))
   const minutesToJump = (new Date(race.start_time).getTime() - options.now.getTime()) / 60_000
   const raceStarted = minutesToJump <= 0
 
-  const views = (race.runners ?? []).map((runner) => ({ runner, view: buildRunnerMarketView(runner) }))
+  const views = (race.runners ?? [])
+    .filter((runner): runner is typeof runner & { number: number } => runner.number != null)
+    .map((runner) => ({ runner, view: buildRunnerMarketView(runner) }))
   const referencePrices = views.map(({ view }) => view.consensus?.medianPrice ?? view.tab?.winPrice ?? null)
   const validIndices = referencePrices.map((p, i) => (p != null ? i : -1)).filter((i) => i >= 0)
   const noVigField = noVigProbabilities(validIndices.map((i) => referencePrices[i] as number))

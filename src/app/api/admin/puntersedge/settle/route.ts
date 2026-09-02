@@ -3,7 +3,7 @@ import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getPuntersEdgeClient } from '@/lib/puntersedge/client'
 import { settleBet } from '@/lib/betting/paper-wallet'
-import { getPendingBetsForRace, settleBetInDb } from '@/lib/paper-betting/repository'
+import { getPendingBetsForRace, hasSettleableBets, settleBetInDb } from '@/lib/paper-betting/repository'
 
 /**
  * Fetches FINAL results (never interim - placings can still change on protest) and settles every
@@ -12,6 +12,10 @@ import { getPendingBetsForRace, settleBetInDb } from '@/lib/paper-betting/reposi
  * against a live result) - a runner that is neither scratched nor in `placings` on a FINAL result
  * definitively finished outside the paid places, so WIN and PLACE bets on it settle LOST rather
  * than being left pending forever.
+ *
+ * Skips the PuntersEdge API call entirely (saving 2 credits) when there is no PENDING bet whose
+ * race has jumped yet - most scheduled polls have nothing to settle, and each results() call costs
+ * credits regardless of how many (if any) results it returns.
  */
 export async function POST(request: Request) {
   if (!(await hasAdminSession())) {
@@ -32,6 +36,17 @@ export async function POST(request: Request) {
   const client = getPuntersEdgeClient()
 
   try {
+    if (!(await hasSettleableBets(admin))) {
+      return NextResponse.json({
+        success: true,
+        resultsChecked: 0,
+        settledCount: 0,
+        skippedNoPendingBets: 0,
+        skippedApiCall: true,
+        message: 'No pending bets past their jump time - skipped the PuntersEdge results call',
+      })
+    }
+
     const results = await client.results({ hoursBack, status: 'final', country: ['AU'] })
 
     let settledCount = 0

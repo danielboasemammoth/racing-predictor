@@ -6,6 +6,7 @@ import { generateRaceRecommendations, MARKET_CONSENSUS_MODEL_VERSION } from '@/l
 import { DEFAULT_THRESHOLDS } from '@/lib/betting/recommendation-engine'
 import { recommendedStake } from '@/lib/betting/kelly'
 import {
+  getLatestApiUsage,
   getOrCreateAccount,
   insertOddsSnapshots,
   insertRecommendations,
@@ -16,6 +17,9 @@ import {
 import type { RacingCategory } from '@/lib/puntersedge/types'
 
 const DEFAULT_STARTING_BANKROLL = 500
+// Below this, stop spending credits on next-to-go (2/call) - reserve what's left for settling
+// bets that are already placed, which matters more than discovering new ones.
+const MIN_CREDITS_RESERVE = 20
 
 /**
  * Fetches the currently priced card from PuntersEdge, upserts races/runners, generates
@@ -43,6 +47,19 @@ export async function POST(request: Request) {
   const now = new Date()
 
   try {
+    const usage = await getLatestApiUsage(admin)
+    if (usage && usage.creditsRemaining < MIN_CREDITS_RESERVE) {
+      return NextResponse.json({
+        success: true,
+        racesProcessed: 0,
+        betsCreated: 0,
+        watchCount: 0,
+        noBetCount: 0,
+        skippedLowCredits: true,
+        message: `Skipped sync - only ${usage.creditsRemaining} PuntersEdge credits remaining this period (reserve threshold ${MIN_CREDITS_RESERVE})`,
+      })
+    }
+
     const races = await client.nextToGo({ numRaces: 200, categories, country: ['AU'], includeUnresolved: true })
     const account = await getOrCreateAccount(admin, 'default', DEFAULT_STARTING_BANKROLL)
 

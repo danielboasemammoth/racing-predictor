@@ -26,18 +26,23 @@ export async function upsertRaceAndRunners(admin: SupabaseClient, race: PeNextTo
   )
   if (raceError) throw new Error(`Failed to upsert pe_race ${race.race_id}: ${raceError.message}`)
 
-  const scratchedNumbers = new Set(race.scratchings.map((s) => s.number))
-  const runnerRows = race.runners.map((runner) => ({
-    race_id: race.race_id,
-    runner_number: runner.number,
-    name: runner.name,
-    barrier: runner.barrier ?? null,
-    jockey: runner.jockey ?? null,
-    trainer: runner.trainer ?? null,
-    form: runner.form ?? null,
-    scratched: scratchedNumbers.has(runner.number),
-    updated_at: new Date().toISOString(),
-  }))
+  const scratchedNumbers = new Set((race.scratchings ?? []).map((s) => s.number))
+  // Runners with an unresolved program number (verified live - see generate-recommendations.ts)
+  // can't be tracked without a stable number, so they're excluded rather than violating the
+  // NOT NULL runner_number constraint.
+  const runnerRows = (race.runners ?? [])
+    .filter((runner) => runner.number != null)
+    .map((runner) => ({
+      race_id: race.race_id,
+      runner_number: runner.number,
+      name: runner.name,
+      barrier: runner.barrier ?? null,
+      jockey: runner.jockey ?? null,
+      trainer: runner.trainer ?? null,
+      form: runner.form ?? null,
+      scratched: scratchedNumbers.has(runner.number as number),
+      updated_at: new Date().toISOString(),
+    }))
   if (runnerRows.length === 0) return new Map<number, string>()
 
   const { data, error: runnerError } = await admin
@@ -217,6 +222,31 @@ export async function recordApiUsage(admin: SupabaseClient, usage: { credits_use
     raw: usage,
   })
   if (error) throw new Error(`Failed to record API usage: ${error.message}`)
+}
+
+/**
+ * Whether calling PuntersEdge results() could plausibly settle anything right now - a PENDING bet
+ * whose race jumped at least `bufferMinutes` ago (results land a median 4.9min after the jump).
+ * Used to skip the results API call entirely (2 credits/call) on ticks with nothing to settle,
+ * which was previously the majority of scheduled polls.
+ */
+export async function hasSettleableBets(admin: SupabaseClient, bufferMinutes = 10): Promise<boolean> {
+  const cutoff = new Date(Date.now() - bufferMinutes * 60_000).toISOString()
+  const { data, error } = await admin
+    .from('paper_bets')
+    .select('id, pe_races!inner(start_time)')
+    .eq('status', 'PENDING')
+    .lte('pe_races.start_time', cutoff)
+    .limit(1)
+  if (error) throw new Error(`Failed to check for settleable bets: ${error.message}`)
+  return (data ?? []).length > 0
+}
+
+/** Latest recorded PuntersEdge credit usage, or null if none has been recorded yet. */
+export async function getLatestApiUsage(admin: SupabaseClient): Promise<{ creditsRemaining: number } | null> {
+  const { data, error } = await admin.from('pe_api_usage').select('credits_remaining').order('checked_at', { ascending: false }).limit(1).maybeSingle()
+  if (error) throw new Error(`Failed to load latest API usage: ${error.message}`)
+  return data ? { creditsRemaining: data.credits_remaining as number } : null
 }
 
 export interface PendingBetRow {
