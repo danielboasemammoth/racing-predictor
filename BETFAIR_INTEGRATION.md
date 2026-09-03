@@ -36,6 +36,27 @@ switch to. When Stage 2 adds real credentials, delayed data must never be silent
 real-money decisions - if live prices aren't available, live betting must be disabled, not
 downgraded to delayed prices.
 
+## Data source strategy: PuntersEdge + Betfair combined
+
+Betfair's free "Delayed" application key lags the real market (commonly a minute or more) - fine
+days out from a race, unreliable in the volatile final few minutes before the jump. PuntersEdge's
+TAB-derived prices are already effectively live in this codebase. Policy
+(`src/lib/betfair/market-data-policy.ts`, `selectMarketDataSource`):
+
+| Betfair mode | Minutes to jump | Source used for VALUE/recommendation display |
+|---|---|---|
+| `BETFAIR_DISABLED` | any | PuntersEdge |
+| `BETFAIR_DELAYED` | <= 15 min | PuntersEdge (delayed Betfair price too stale to trust) |
+| `BETFAIR_DELAYED` | > 15 min | Betfair (acceptable approximation further from the jump) |
+| `BETFAIR_LIVE` | any | Betfair (accurate AND the actual execution venue) |
+
+This only governs which price informs a *recommendation*. It never changes the fail-closed
+execution rule: any real order always reloads Betfair's own live price immediately before
+submitting (see `BETTING_RISK_ENGINE.md`'s `MAX_PRICE_AGE_SECONDS` check) - a PuntersEdge/TAB price
+is a different market and is never directly executable on Betfair. This policy function exists now
+(Stage 1) as a documented decision ready for Stage 2 to wire up; there is no real Betfair feed yet
+to actually apply it to.
+
 ## Database (see `supabase/migrate-betfair-stage1.sql`)
 
 New tables, entirely separate from the existing PuntersEdge `paper_accounts`/`paper_bets`

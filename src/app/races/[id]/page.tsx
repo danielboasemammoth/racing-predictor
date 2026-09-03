@@ -5,6 +5,7 @@ import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
 import { computeRaceReliability, loadReliabilityContext } from '@/lib/reliability-context'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { RefreshRaceButton } from './refresh-race-button'
+import { HorseBetActions } from './horse-bet-actions'
 import { SiteNav } from '@/components/site-nav'
 
 export const dynamic = 'force-dynamic'
@@ -135,6 +136,10 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
         },
       }
     : prediction
+
+  // Betting only makes sense before the race runs, and only for horses the model actually priced.
+  const canPlaceBets = race.status === 'upcoming'
+  const predictedByHorseId = new Map((filteredPrediction?.predictions.all_horses ?? filteredPrediction?.predictions.podium ?? []).map((h) => [h.horse_id, h]))
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -385,21 +390,44 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                   <th className="text-left py-2 px-2">Trainer</th>
                   <th className="text-left py-2 px-2">Time</th>
                   <th className="text-left py-2 px-2">Margin</th>
+                  {canPlaceBets && <th className="text-left py-2 px-2">Bet</th>}
                 </tr>
               </thead>
               <tbody>
-                {entries.map((entry) => (
-                  <tr key={entry.id} className="border-b border-slate-100">
-                    <td className="py-2 px-2">{entry.finishing_position || '—'}</td>
-                    <td className="py-2 px-2 font-medium">{entry.horses?.name || 'Unknown'}</td>
-                    <td className="py-2 px-2">{entry.barrier_number || '—'}</td>
-                    <td className="py-2 px-2">{entry.weight_carried || '—'}</td>
-                    <td className="py-2 px-2">{entry.jockey || '—'}</td>
-                    <td className="py-2 px-2">{entry.trainer || '—'}</td>
-                    <td className="py-2 px-2">{entry.finishing_time || '—'}</td>
-                    <td className="py-2 px-2">{entry.margin || '—'}</td>
-                  </tr>
-                ))}
+                {entries.map((entry) => {
+                  const predicted = predictedByHorseId.get(entry.horse_id)
+                  return (
+                    <tr key={entry.id} className="border-b border-slate-100">
+                      <td className="py-2 px-2">{entry.finishing_position || '—'}</td>
+                      <td className="py-2 px-2 font-medium">{entry.horses?.name || 'Unknown'}</td>
+                      <td className="py-2 px-2">{entry.barrier_number || '—'}</td>
+                      <td className="py-2 px-2">{entry.weight_carried || '—'}</td>
+                      <td className="py-2 px-2">{entry.jockey || '—'}</td>
+                      <td className="py-2 px-2">{entry.trainer || '—'}</td>
+                      <td className="py-2 px-2">{entry.finishing_time || '—'}</td>
+                      <td className="py-2 px-2">{entry.margin || '—'}</td>
+                      {canPlaceBets && (
+                        <td className="py-2 px-2">
+                          {predicted?.win_odds && (
+                            <HorseBetActions
+                              raceId={race.id}
+                              raceDatetime={race.race_datetime}
+                              venue={race.racecourses?.name}
+                              raceNumber={race.race_number}
+                              state={race.racecourses?.state}
+                              horseId={entry.horse_id}
+                              horseName={entry.horses?.name || 'Unknown'}
+                              winOdds={predicted.win_odds}
+                              winProbability={predicted.win_probability ?? predicted.confidence}
+                              confidence={predicted.confidence}
+                              modelVersion={filteredPrediction?.model_version ?? 'v4.1-ensemble'}
+                            />
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
