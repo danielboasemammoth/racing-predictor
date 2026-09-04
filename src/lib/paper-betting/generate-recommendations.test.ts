@@ -119,11 +119,44 @@ describe('generateRaceRecommendations', () => {
           { name: 'B', number: 2, bookmakers: [{ key: 'tab', win_price: 3.0, place_price: 1.5, age_seconds: 10 }] },
           { name: 'C', number: 3, bookmakers: [{ key: 'tab', win_price: 5.0, place_price: 1.8, age_seconds: 10 }] },
           { name: 'D', number: 4, bookmakers: [{ key: 'tab', win_price: 8.0, place_price: 2.2, age_seconds: 10 }] },
+          { name: 'E', number: 5, bookmakers: [{ key: 'tab', win_price: 9.0, place_price: 2.5, age_seconds: 10 }] },
         ],
       }),
       { now: NOW },
     )
     expect(withPlacePrice[0].place).not.toBeNull()
+    expect(withPlacePrice[0].place!.paidPlaces).toBe(2) // 5-runner greyhound field only pays 1st-2nd
     expect(withPlacePrice[0].place!.modelProbability).toBeGreaterThan(withPlacePrice[0].modelProbability!) // place prob > win prob
+  })
+
+  it('a small greyhound field (under 5 active runners) pays win-only, so place probability equals win probability', () => {
+    const results = generateRaceRecommendations(
+      race({
+        runners: [
+          { name: 'A', number: 1, bookmakers: [{ key: 'tab', win_price: 2.0, place_price: 1.2, age_seconds: 10 }] },
+          { name: 'B', number: 2, bookmakers: [{ key: 'tab', win_price: 3.0, place_price: 1.5, age_seconds: 10 }] },
+          { name: 'C', number: 3, bookmakers: [{ key: 'tab', win_price: 5.0, place_price: 1.8, age_seconds: 10 }] },
+          { name: 'D', number: 4, bookmakers: [{ key: 'tab', win_price: 8.0, place_price: 2.2, age_seconds: 10 }] },
+        ],
+      }),
+      { now: NOW },
+    )
+    expect(results[0].place!.paidPlaces).toBe(1)
+    expect(results[0].place!.modelProbability).toBe(results[0].modelProbability)
+  })
+
+  it('an 8+ runner horse field pays 3 places', () => {
+    const results = generateRaceRecommendations(
+      race({
+        category: 'horse',
+        runners: Array.from({ length: 8 }, (_, i) => ({
+          name: `Horse ${i + 1}`,
+          number: i + 1,
+          bookmakers: [{ key: 'tab', win_price: 3 + i, place_price: 1.5 + i * 0.2, age_seconds: 10 }],
+        })),
+      }),
+      { now: NOW },
+    )
+    expect(results[0].place!.paidPlaces).toBe(3)
   })
 })

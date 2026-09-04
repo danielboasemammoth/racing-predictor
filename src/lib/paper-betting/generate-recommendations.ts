@@ -10,13 +10,16 @@ import { buildRunnerMarketView } from '@/lib/puntersedge/tab-extraction'
 import { noVigProbabilities } from '@/lib/betting/odds-math'
 import { deriveConfidence, type ConfidenceLevel } from '@/lib/betting/confidence'
 import { DEFAULT_THRESHOLDS, recommend, type Decision, type RecommendationThresholds } from '@/lib/betting/recommendation-engine'
-import { harvilleTop3Probabilities } from '@/lib/betting/harville'
+import { harvillePlaceProbabilities } from '@/lib/betting/harville'
+import { paidPlacesCount } from '@/lib/betting/place-rules'
 import type { PeNextToGoRace } from '@/lib/puntersedge/types'
 
 export const MARKET_CONSENSUS_MODEL_VERSION = 'market-consensus-v1'
 
 export interface PlaceRecommendation {
   modelProbability: number
+  /** How many finishing positions this field size/category actually pays a place dividend on - see src/lib/betting/place-rules.ts. */
+  paidPlaces: number
   decision: Decision
   edgePoints: number | null
   expectedValueRatio: number | null
@@ -42,7 +45,7 @@ export interface RunnerRecommendation {
   expectedValueRatio: number | null
   reasons: string[]
   failedCriteria: string[]
-  /** Harville-derived top-3 probability vs TAB place price - null when there's no win model probability or no TAB place price. */
+  /** Harville-derived paid-place probability vs TAB place price - null when there's no win model probability or no TAB place price. */
   place: PlaceRecommendation | null
 }
 
@@ -81,10 +84,11 @@ export function generateRaceRecommendations(race: PeNextToGoRace, options: Gener
   const modelProbabilityByIndex = new Map<number, number>()
   validIndices.forEach((originalIndex, position) => modelProbabilityByIndex.set(originalIndex, noVigField[position]))
 
-  // Harville top-3 probabilities computed over the same priced subset of the field - see
-  // src/lib/betting/harville.ts for the approximation this makes (always top-3, not the exact
-  // number of places TAB actually pays for this field size).
-  const harvilleField = harvilleTop3Probabilities(noVigField)
+  // Harville place probabilities computed over the same priced subset of the field, using the
+  // actual number of paid places for this category/field size (see src/lib/betting/place-rules.ts)
+  // - NOT always top-3 (e.g. AU greyhound racing standardly pays only 1st-2nd).
+  const paidPlaces = paidPlacesCount(race.category, (race.runners ?? []).length)
+  const harvilleField = harvillePlaceProbabilities(noVigField, paidPlaces)
   const placeProbabilityByIndex = new Map<number, number>()
   validIndices.forEach((originalIndex, position) => placeProbabilityByIndex.set(originalIndex, harvilleField[position]))
 
@@ -125,6 +129,7 @@ export function generateRaceRecommendations(race: PeNextToGoRace, options: Gener
         ? null
         : {
             modelProbability: placeModelProbability,
+            paidPlaces,
             ...recommend(
               {
                 modelProbability: placeModelProbability,

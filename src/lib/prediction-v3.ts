@@ -1,5 +1,7 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
 import { averageSectionalRating } from '@/lib/sectional-speed'
+import { harvillePlaceProbabilities } from '@/lib/betting/harville'
+import { paidPlacesCount } from '@/lib/betting/place-rules'
 
 export interface PredictionModelConfig {
   version: string
@@ -367,20 +369,10 @@ function placeProbabilities(scores: number[], temperature: number) {
   const strengths = calibratedScores.map((value) => Math.exp(value - maximum))
   const total = strengths.reduce((sum, strength) => sum + strength, 0)
   const win = strengths.map((strength) => strength / total)
-  const top3 = strengths.map(() => 0)
-  for (let first = 0; first < strengths.length; first += 1) {
-    top3[first] += win[first]
-    for (let second = 0; second < strengths.length; second += 1) {
-      if (second === first) continue
-      const secondProbability = win[first] * strengths[second] / (total - strengths[first])
-      top3[second] += secondProbability
-      for (let third = 0; third < strengths.length; third += 1) {
-        if (third === first || third === second) continue
-        top3[third] += secondProbability * strengths[third] / (total - strengths[first] - strengths[second])
-      }
-    }
-  }
-  return { win, top3: top3.map((value) => clamp(value)) }
+  // Paid-place count is field-size dependent (horse racing: 1-2-3 for 8+ starters, 1-2 for 5-7,
+  // win-only below that - see src/lib/betting/place-rules.ts), NOT always top-3.
+  const top3 = harvillePlaceProbabilities(win, paidPlacesCount('horse', win.length))
+  return { win, top3 }
 }
 
 export function predictContextualRace(
