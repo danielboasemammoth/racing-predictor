@@ -73,6 +73,23 @@ export interface PeResultDeduction {
   scratched_at: string
 }
 
+/**
+ * A single win/place fixed or mid-tote dividend line. `market` is the authoritative signal for
+ * "did this position actually get paid" - verified live (2026-09-04): `placings` can list more
+ * finishers (e.g. 1st-4th) than actually paid a PLC dividend (e.g. greyhound racing standardly
+ * pays only 1st-2nd place regardless of field size, unlike horse racing which scales 1-2-3 for
+ * 8+ runners). Never infer "this runner placed" from mere presence in `placings` - cross-check
+ * against a PLC line here instead.
+ */
+export interface PeStraightDividend {
+  name: string
+  number: number
+  position: number
+  market: 'WIN' | 'PLC'
+  product: string
+  amount: number
+}
+
 export interface PeRaceResult {
   race_id: string
   venue: string
@@ -80,10 +97,14 @@ export interface PeRaceResult {
   category: RacingCategory
   status: 'final' | 'interim'
   country: string | null
-  /** Only the dividend-bearing placegetters (paid places for this field size) - not the full field. */
+  /** The finishing order PuntersEdge returned (commonly top 4) - NOT all of these paid a place dividend, see PeStraightDividend. */
   placings: PeResultPlacing[]
   deductions?: PeResultDeduction[]
-  dividends?: Record<string, unknown>
+  dividends?: {
+    straight?: PeStraightDividend[]
+    exotics?: unknown[]
+    straight_types?: string[]
+  }
 }
 
 export interface PeUsage {

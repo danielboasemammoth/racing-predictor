@@ -127,14 +127,14 @@ export interface PaperAccountRow {
   staking_method: string
 }
 
-export async function getOrCreateAccount(admin: SupabaseClient, name: string, startingBankroll: number): Promise<PaperAccountRow> {
+export async function getOrCreateAccount(admin: SupabaseClient, name: string, startingBankroll: number, stakingMethod?: string): Promise<PaperAccountRow> {
   const existing = await admin.from('paper_accounts').select('*').eq('name', name).maybeSingle()
   if (existing.error) throw new Error(`Failed to look up paper account ${name}: ${existing.error.message}`)
   if (existing.data) return existing.data as PaperAccountRow
 
   const created = await admin
     .from('paper_accounts')
-    .insert({ name, starting_bankroll: startingBankroll, current_bankroll: startingBankroll })
+    .insert({ name, starting_bankroll: startingBankroll, current_bankroll: startingBankroll, ...(stakingMethod ? { staking_method: stakingMethod } : {}) })
     .select('*')
     .single()
   if (created.error) throw new Error(`Failed to create paper account ${name}: ${created.error.message}`)
@@ -146,15 +146,21 @@ export async function getOrCreateAccount(admin: SupabaseClient, name: string, st
  * accumulated net profit/loss rather than wiping it: current_bankroll becomes
  * newStartingBankroll + (old current_bankroll - old starting_bankroll). Never rewrites individual
  * bets' own recorded bankroll_after - those remain an honest historical record of the old basis.
+ * `stakingMethod`, when passed, is applied alongside the rebase (it only ever affects future bets).
  */
-export async function updateStartingBankroll(admin: SupabaseClient, accountId: string, newStartingBankroll: number): Promise<PaperAccountRow> {
+export async function updateStartingBankroll(admin: SupabaseClient, accountId: string, newStartingBankroll: number, stakingMethod?: string): Promise<PaperAccountRow> {
   const existing = await admin.from('paper_accounts').select('*').eq('id', accountId).single()
   if (existing.error) throw new Error(`Failed to load paper account ${accountId}: ${existing.error.message}`)
   const netProfit = (existing.data.current_bankroll as number) - (existing.data.starting_bankroll as number)
 
   const updated = await admin
     .from('paper_accounts')
-    .update({ starting_bankroll: newStartingBankroll, current_bankroll: newStartingBankroll + netProfit, updated_at: new Date().toISOString() })
+    .update({
+      starting_bankroll: newStartingBankroll,
+      current_bankroll: newStartingBankroll + netProfit,
+      updated_at: new Date().toISOString(),
+      ...(stakingMethod ? { staking_method: stakingMethod } : {}),
+    })
     .eq('id', accountId)
     .select('*')
     .single()
@@ -163,18 +169,52 @@ export async function updateStartingBankroll(admin: SupabaseClient, accountId: s
 }
 
 /** Deletes all bets for an account and resets it to a fresh bankroll - destructive, admin-confirmed only. */
-export async function resetAccount(admin: SupabaseClient, accountId: string, newStartingBankroll: number): Promise<PaperAccountRow> {
+export async function resetAccount(admin: SupabaseClient, accountId: string, newStartingBankroll: number, stakingMethod?: string): Promise<PaperAccountRow> {
+  const betIds = await admin.from('paper_bets').select('id').eq('account_id', accountId)
+  if (betIds.error) throw new Error(`Failed to list bets for account ${accountId}: ${betIds.error.message}`)
+  const ids = (betIds.data ?? []).map((row) => row.id as string)
+
+  // pe_settlement_audit references paper_bets without ON DELETE CASCADE on some databases
+  // (fixed in migrate-paper-betting-cascade-settlement-audit.sql) - clear it explicitly first
+  // so the bet delete below doesn't fail with a foreign key violation.
+  if (ids.length > 0) {
+    const deleteAudit = await admin.from('pe_settlement_audit').delete().in('paper_bet_id', ids)
+    if (deleteAudit.error) throw new Error(`Failed to clear settlement audit for account ${accountId}: ${deleteAudit.error.message}`)
+  }
+
   const deleteBets = await admin.from('paper_bets').delete().eq('account_id', accountId)
   if (deleteBets.error) throw new Error(`Failed to clear bets for account ${accountId}: ${deleteBets.error.message}`)
 
   const updated = await admin
     .from('paper_accounts')
-    .update({ starting_bankroll: newStartingBankroll, current_bankroll: newStartingBankroll, updated_at: new Date().toISOString() })
+    .update({
+      starting_bankroll: newStartingBankroll,
+      current_bankroll: newStartingBankroll,
+      updated_at: new Date().toISOString(),
+      ...(stakingMethod ? { staking_method: stakingMethod } : {}),
+    })
     .eq('id', accountId)
     .select('*')
     .single()
   if (updated.error) throw new Error(`Failed to reset account ${accountId}: ${updated.error.message}`)
   return updated.data as PaperAccountRow
+}
+
+/**
+ * Deletes not-yet-settled auto-placed bets so the next PuntersEdge sync recreates them with
+ * up-to-date stakes (e.g. after the user changes the staking method or starting budget) -
+ * settled bets are left untouched since they're honest history, not a live recommendation.
+ */
+export async function deletePendingAutoBets(admin: SupabaseClient, accountId: string): Promise<number> {
+  const { data, error } = await admin
+    .from('paper_bets')
+    .delete()
+    .eq('account_id', accountId)
+    .eq('mode', 'AUTO')
+    .eq('status', 'PENDING')
+    .select('id')
+  if (error) throw new Error(`Failed to clear pending auto bets for account ${accountId}: ${error.message}`)
+  return (data ?? []).length
 }
 
 export interface PlaceBetInput {

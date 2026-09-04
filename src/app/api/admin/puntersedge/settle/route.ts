@@ -8,10 +8,12 @@ import { getPendingBetsForRace, hasSettleableBets, settleBetInDb } from '@/lib/p
 /**
  * Fetches FINAL results (never interim - placings can still change on protest) and settles every
  * matching PENDING paper bet. Matches on the runner's stable number within the race, never on
- * name. `placings` only contains the dividend-bearing placegetters for this field size (verified
- * against a live result) - a runner that is neither scratched nor in `placings` on a FINAL result
- * definitively finished outside the paid places, so WIN and PLACE bets on it settle LOST rather
- * than being left pending forever.
+ * name. `placings` is just the finishing order (commonly top 4) and is NOT reliable for "did this
+ * runner pay a place dividend" - e.g. greyhound racing standardly only pays 1st-2nd place
+ * regardless of field size, so a 3rd/4th-place `placings` entry never has a PLC dividend line
+ * (verified live 2026-09-04). A PLACE bet only wins if its runner has a `market: 'PLC'` line in
+ * `dividends.straight`; a runner that is neither scratched nor place-dividend-paying on a FINAL
+ * result definitively lost the place bet.
  *
  * Skips the PuntersEdge API call entirely (saving 2 credits) when there is no PENDING bet whose
  * race has jumped yet - most scheduled polls have nothing to settle, and each results() call costs
@@ -61,6 +63,9 @@ export async function POST(request: Request) {
 
       const deductedNumbers = new Set((result.deductions ?? []).map((d) => d.number))
       const placingByNumber = new Map(result.placings.map((p) => [p.number, p]))
+      const placeDividendNumbers = new Set(
+        (result.dividends?.straight ?? []).filter((d) => d.market === 'PLC').map((d) => d.number),
+      )
 
       for (const bet of pendingBets) {
         if (deductedNumbers.has(bet.runner_number)) {
@@ -70,8 +75,8 @@ export async function POST(request: Request) {
         }
 
         const placing = placingByNumber.get(bet.runner_number)
-        // WIN only wins for the actual winner; PLACE wins for any dividend-bearing placegetter.
-        const outcome = bet.bet_type === 'WIN' ? (placing?.position === 1 ? 'WON' : 'LOST') : placing ? 'WON' : 'LOST'
+        // WIN only wins for the actual winner; PLACE wins only if the runner actually paid a PLC dividend.
+        const outcome = bet.bet_type === 'WIN' ? (placing?.position === 1 ? 'WON' : 'LOST') : placeDividendNumbers.has(bet.runner_number) ? 'WON' : 'LOST'
         const { returnAmount, profit } = settleBet({ stake: bet.stake, decimalOdds: bet.tab_decimal_odds }, outcome)
         if (await settleBetInDb(admin, bet.id, outcome, returnAmount, profit)) settledCount += 1
       }

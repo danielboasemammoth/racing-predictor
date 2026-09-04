@@ -264,7 +264,7 @@ export default async function PaperBettingPage() {
 
             <section>
               <h2 className="mb-3 text-sm font-semibold text-slate-900">Bankroll Settings</h2>
-              <BankrollSettings currentStartingBankroll={wallet.account.starting_bankroll} betCount={wallet.stats.numberOfBets} />
+              <BankrollSettings currentStartingBankroll={wallet.account.starting_bankroll} currentStakingMethod={wallet.account.staking_method} betCount={wallet.stats.numberOfBets} />
             </section>
 
             <section>

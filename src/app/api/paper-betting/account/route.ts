@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getOrCreateAccount, resetAccount, updateStartingBankroll } from '@/lib/paper-betting/repository'
+import type { StakingMethod } from '@/lib/betting/kelly'
 
 const ACCOUNT_NAME = 'default'
+const VALID_STAKING_METHODS: StakingMethod[] = ['flat-1pct', 'flat-2pct', 'kelly-0.10', 'kelly-0.25']
 
 /** Public read: current account settings + how many bets already exist (so the UI can decide whether to offer a plain edit or require an explicit reset). */
 export async function GET() {
@@ -29,9 +31,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
   }
 
-  const body = (await request.json().catch(() => null)) as { startingBankroll?: number; reset?: boolean } | null
+  const body = (await request.json().catch(() => null)) as { startingBankroll?: number; reset?: boolean; stakingMethod?: string } | null
   if (!body?.startingBankroll || body.startingBankroll <= 0) {
     return NextResponse.json({ success: false, message: 'startingBankroll must be a positive number' }, { status: 400 })
+  }
+  if (body.stakingMethod !== undefined && !VALID_STAKING_METHODS.includes(body.stakingMethod as StakingMethod)) {
+    return NextResponse.json({ success: false, message: `stakingMethod must be one of ${VALID_STAKING_METHODS.join(', ')}` }, { status: 400 })
   }
 
   const admin = createAdminClient()
@@ -40,14 +45,14 @@ export async function POST(request: Request) {
 
   try {
     if (!existing.data) {
-      const account = await getOrCreateAccount(admin, ACCOUNT_NAME, body.startingBankroll)
+      const account = await getOrCreateAccount(admin, ACCOUNT_NAME, body.startingBankroll, body.stakingMethod)
       return NextResponse.json({ success: true, account, message: `Created paper betting account with a $${body.startingBankroll.toFixed(2)} starting budget` })
     }
     if (body.reset) {
-      const account = await resetAccount(admin, existing.data.id as string, body.startingBankroll)
+      const account = await resetAccount(admin, existing.data.id as string, body.startingBankroll, body.stakingMethod)
       return NextResponse.json({ success: true, account, message: `Reset paper betting account: all bet history cleared, new $${body.startingBankroll.toFixed(2)} starting budget` })
     }
-    const account = await updateStartingBankroll(admin, existing.data.id as string, body.startingBankroll)
+    const account = await updateStartingBankroll(admin, existing.data.id as string, body.startingBankroll, body.stakingMethod)
     return NextResponse.json({ success: true, account, message: `Starting budget updated to $${body.startingBankroll.toFixed(2)} (existing profit/loss preserved)` })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to configure paper betting account'
