@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { HistoricalStart } from '@/lib/prediction-v3'
-import { ALL_MODEL_CONFIGS, runConfiguredModel, runEnsemble } from '@/lib/prediction-suite'
+import { ALL_MODEL_CONFIGS, CURRENT_MODEL_VERSIONS, runConfiguredModel, runEnsemble } from '@/lib/prediction-suite'
 import { runMarketBlendModel } from '@/lib/market-blend-model'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { parseStandardTimeDifference } from '@/lib/sectional-speed'
@@ -26,6 +26,8 @@ async function withRetry<T>(fn: () => PromiseLike<T>, attempts = 3, delayMs = 10
 interface PredictionOptions {
   raceId?: string
   mode?: 'all' | 'ensemble' | 'retrospective'
+  /** Retrospective only - caps how many still-missing races are processed in this call, so a large backlog can be caught up in several short, safe requests instead of one long-running one. */
+  batchLimit?: number
 }
 
 interface HistoricalEntryRow {
@@ -75,12 +77,15 @@ async function readOptions(request: Request): Promise<PredictionOptions | null> 
 
   const raceId = 'raceId' in body ? body.raceId : undefined
   const mode = 'mode' in body ? body.mode : undefined
+  const batchLimit = 'batchLimit' in body ? body.batchLimit : undefined
   if (raceId !== undefined && typeof raceId !== 'string') return null
   if (mode !== undefined && !['all', 'ensemble', 'retrospective'].includes(mode as string)) return null
+  if (batchLimit !== undefined && (typeof batchLimit !== 'number' || batchLimit <= 0)) return null
 
   return {
     raceId,
     mode: mode as PredictionOptions['mode'],
+    batchLimit: batchLimit as number | undefined,
   }
 }
 
@@ -102,11 +107,11 @@ export async function POST(request: Request) {
     const raceSelect = 'id, racecourse_id, race_datetime, distance_m, track_condition, race_class'
     let races: Array<{ id: string; racecourse_id: string; race_datetime: string; distance_m: number | null; track_condition: string | null; race_class: string | null }>
     if (options.raceId) {
-      const { data, error } = await supabase.from('races').select(raceSelect).eq('status', status).eq('id', options.raceId)
+      const { data, error } = await withRetry(() => supabase.from('races').select(raceSelect).eq('status', status).eq('id', options.raceId!))
       if (error) throw error
       races = data ?? []
     } else if (status === 'upcoming') {
-      const { data, error } = await supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: true }).limit(50)
+      const { data, error } = await withRetry(() => supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: true }).limit(50))
       if (error) throw error
       races = data ?? []
     } else {
@@ -115,24 +120,64 @@ export async function POST(request: Request) {
       races = []
       const pageSize = 1_000
       for (let offset = 0; ; offset += pageSize) {
-        const { data, error } = await supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: false }).range(offset, offset + pageSize - 1)
+        const { data, error } = await withRetry(() => supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: false }).range(offset, offset + pageSize - 1))
         if (error) throw error
         races.push(...(data ?? []))
         if (!data || data.length < pageSize) break
       }
+
+      // Reprocessing EVERY completed race from scratch on every run scales with total historical
+      // data forever (3000+ races and growing) and was the real cause of this route eventually
+      // timing out - only backfill races still missing at least one CURRENT_MODEL_VERSIONS
+      // prediction (self-heals if a model version is added/renamed later, since that version's
+      // rows would be missing for every already-backfilled race too).
+      // Filtering by race_id chunks (not just model_version) matters: `predictions` only has a
+      // composite (race_id, model_version, predicted_at) index, so a model_version-only filter
+      // can't use it and degrades into a growing sequential scan as the table fills up - confirmed
+      // live via a real Postgres 57014 "statement timeout" once the retrospective row count grew
+      // large enough (batch latency crept from ~30s to ~45s across successive calls before it hit).
+      const expectedVersions = CURRENT_MODEL_VERSIONS.map((v) => `${v}-retrospective`)
+      const backfilledVersionsByRace = new Map<string, Set<string>>()
+      const checkChunkSize = 40
+      for (let offset = 0; offset < races.length; offset += checkChunkSize) {
+        const chunkIds = races.slice(offset, offset + checkChunkSize).map((race) => race.id)
+        const { data, error } = await withRetry(() => supabase
+          .from('predictions')
+          .select('race_id, model_version')
+          .in('race_id', chunkIds)
+          .in('model_version', expectedVersions))
+        if (error) throw error
+        for (const row of data ?? []) {
+          const set = backfilledVersionsByRace.get(row.race_id) ?? new Set<string>()
+          set.add(row.model_version)
+          backfilledVersionsByRace.set(row.race_id, set)
+        }
+      }
+      races = races.filter((race) => (backfilledVersionsByRace.get(race.id)?.size ?? 0) < expectedVersions.length)
+
+      if (options.batchLimit) {
+        // Oldest-first so a multi-call catch-up makes steady chronological progress rather than
+        // jumping around; `races` was fetched newest-first above.
+        races = races.slice(-options.batchLimit)
+      }
     }
 
     if (!races?.length) {
+      // For retrospective mode, "nothing left to backfill" is the expected steady state once
+      // caught up, not an error - the daily pipeline should not treat this as a failure.
+      if (options.mode === 'retrospective') {
+        return NextResponse.json({ success: true, created: 0, skipped: 0, modelVersion: 'v4-model-suite', message: 'No completed races need a retrospective backfill - already up to date' })
+      }
       return NextResponse.json({ success: false, message: `No ${status} races to predict` }, { status: 404 })
     }
 
     const targetEntryRows: RaceEntryWithHorse[] = []
     const raceChunkSize = 40
     for (let offset = 0; offset < races.length; offset += raceChunkSize) {
-      const { data: entryPage, error: targetEntriesError } = await supabase
+      const { data: entryPage, error: targetEntriesError } = await withRetry(() => supabase
         .from('race_entries')
         .select('*, horses(*)')
-        .in('race_id', races.slice(offset, offset + raceChunkSize).map((race) => race.id))
+        .in('race_id', races.slice(offset, offset + raceChunkSize).map((race) => race.id)))
       if (targetEntriesError) throw targetEntriesError
       targetEntryRows.push(...((entryPage ?? []) as RaceEntryWithHorse[]))
     }
@@ -148,7 +193,7 @@ export async function POST(request: Request) {
     for (let horseOffset = 0; horseOffset < targetHorseIds.length; horseOffset += horseChunkSize) {
       const horseIds = targetHorseIds.slice(horseOffset, horseOffset + horseChunkSize)
       for (let offset = 0; ; offset += pageSize) {
-        const { data: historyPage, error: historyError } = await supabase
+        const { data: historyPage, error: historyError } = await withRetry(() => supabase
           .from('race_entries')
           .select(`
             race_id, horse_id, finishing_position, finishing_time, margin,
@@ -161,7 +206,7 @@ export async function POST(request: Request) {
           .eq('races.status', 'completed')
           .neq('status', 'scratched')
           .in('horse_id', horseIds)
-          .range(offset, offset + pageSize - 1)
+          .range(offset, offset + pageSize - 1))
         if (historyError) throw historyError
         historicalRows.push(...(historyPage as unknown as HistoricalEntryRow[]))
         if (!historyPage || historyPage.length < pageSize) break

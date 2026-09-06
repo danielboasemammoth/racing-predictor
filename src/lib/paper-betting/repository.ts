@@ -45,9 +45,15 @@ export async function upsertRaceAndRunners(admin: SupabaseClient, race: PeNextTo
     }))
   if (runnerRows.length === 0) return new Map<number, string>()
 
+  // Upstream occasionally sends two runner entries for the same number within one race (verified
+  // live) - a single upsert batch containing a duplicate (race_id, runner_number) conflict target
+  // crashes with Postgres's "ON CONFLICT DO UPDATE command cannot affect row a second time" rather
+  // than picking a winner. Last occurrence wins (most likely the more complete/recent entry).
+  const dedupedRunnerRows = [...new Map(runnerRows.map((row) => [row.runner_number, row])).values()]
+
   const { data, error: runnerError } = await admin
     .from('pe_runners')
-    .upsert(runnerRows, { onConflict: 'race_id,runner_number' })
+    .upsert(dedupedRunnerRows, { onConflict: 'race_id,runner_number' })
     .select('id, runner_number')
   if (runnerError) throw new Error(`Failed to upsert pe_runners for race ${race.race_id}: ${runnerError.message}`)
 
