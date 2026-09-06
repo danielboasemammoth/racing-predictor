@@ -13,13 +13,92 @@ import {
   placeBet,
   recordApiUsage,
   upsertRaceAndRunners,
+  type PaperAccountRow,
 } from '@/lib/paper-betting/repository'
-import type { RacingCategory } from '@/lib/puntersedge/types'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { PeNextToGoRace, RacingCategory } from '@/lib/puntersedge/types'
 
 const DEFAULT_STARTING_BANKROLL = 500
 // Below this, stop spending credits on next-to-go (2/call) - reserve what's left for settling
 // bets that are already placed, which matters more than discovering new ones.
 const MIN_CREDITS_RESERVE = 20
+
+/** Per-race unit of work for POST's batched loop - upserts, snapshots recs, and auto-places bets for one race. */
+async function processRace(admin: SupabaseClient, account: PaperAccountRow, race: PeNextToGoRace, now: Date) {
+  let betsCreated = 0
+  let watchCount = 0
+  let noBetCount = 0
+
+  const minutesToJump = (new Date(race.start_time).getTime() - now.getTime()) / 60_000
+  const runnerIdByNumber = await upsertRaceAndRunners(admin, race, minutesToJump <= 0 ? 'started' : 'upcoming')
+  const recommendations = generateRaceRecommendations(race, { now })
+
+  await insertOddsSnapshots(admin, race.race_id, recommendations, runnerIdByNumber, minutesToJump)
+  await insertRecommendations(admin, race.race_id, race.category, MARKET_CONSENSUS_MODEL_VERSION, DEFAULT_THRESHOLDS, recommendations, runnerIdByNumber, minutesToJump)
+
+  for (const rec of recommendations) {
+    if (rec.decision === 'WATCH') watchCount += 1
+    if (rec.decision === 'NO_BET') noBetCount += 1
+
+    const runnerId = runnerIdByNumber.get(rec.runnerNumber)
+    if (!runnerId) continue
+
+    if (rec.decision === 'BET' && rec.tabWinPrice != null && rec.modelProbability != null) {
+      const stake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabWinPrice, rec.modelProbability)
+      if (stake > 0) {
+        const result = await placeBet(admin, {
+          accountId: account.id,
+          raceId: race.race_id,
+          runnerId,
+          runnerName: rec.runnerName,
+          category: race.category,
+          source: 'puntersedge',
+          mode: 'AUTO',
+          betType: 'WIN',
+          stake,
+          tabDecimalOdds: rec.tabWinPrice,
+          modelProbability: rec.modelProbability,
+          modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
+          edgePoints: rec.edgePoints,
+          expectedValue: rec.expectedValueRatio,
+          confidenceLevel: rec.confidenceLevel,
+          minutesToJumpAtPlacement: minutesToJump,
+          idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:WIN:${MARKET_CONSENSUS_MODEL_VERSION}`,
+        })
+        if (result.placed) betsCreated += 1
+      }
+    }
+
+    // Harville-derived place edge - separate qualifying decision from the win bet above.
+    if (rec.place?.decision === 'BET' && rec.tabPlacePrice != null) {
+      const placeStake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabPlacePrice, rec.place.modelProbability)
+      if (placeStake > 0) {
+        const result = await placeBet(admin, {
+          accountId: account.id,
+          raceId: race.race_id,
+          runnerId,
+          runnerName: rec.runnerName,
+          category: race.category,
+          source: 'puntersedge',
+          mode: 'AUTO',
+          betType: 'PLACE',
+          stake: placeStake,
+          tabDecimalOdds: rec.tabPlacePrice,
+          modelProbability: rec.place.modelProbability,
+          modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
+          edgePoints: rec.place.edgePoints,
+          expectedValue: rec.place.expectedValueRatio,
+          confidenceLevel: rec.confidenceLevel,
+          minutesToJumpAtPlacement: minutesToJump,
+          idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:PLACE:${MARKET_CONSENSUS_MODEL_VERSION}`,
+        })
+        if (result.placed) betsCreated += 1
+      }
+    }
+  }
+
+  return { betsCreated, watchCount, noBetCount }
+}
 
 /**
  * Fetches the currently priced card from PuntersEdge, upserts races/runners, generates
@@ -68,74 +147,20 @@ export async function POST(request: Request) {
     let watchCount = 0
     let noBetCount = 0
 
-    for (const race of races) {
-      const minutesToJump = (new Date(race.start_time).getTime() - now.getTime()) / 60_000
-      const runnerIdByNumber = await upsertRaceAndRunners(admin, race, minutesToJump <= 0 ? 'started' : 'upcoming')
-      const recommendations = generateRaceRecommendations(race, { now })
-
-      await insertOddsSnapshots(admin, race.race_id, recommendations, runnerIdByNumber, minutesToJump)
-      await insertRecommendations(admin, race.race_id, race.category, MARKET_CONSENSUS_MODEL_VERSION, DEFAULT_THRESHOLDS, recommendations, runnerIdByNumber, minutesToJump)
-      racesProcessed += 1
-
-      for (const rec of recommendations) {
-        if (rec.decision === 'WATCH') watchCount += 1
-        if (rec.decision === 'NO_BET') noBetCount += 1
-
-        const runnerId = runnerIdByNumber.get(rec.runnerNumber)
-        if (!runnerId) continue
-
-        if (rec.decision === 'BET' && rec.tabWinPrice != null && rec.modelProbability != null) {
-          const stake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabWinPrice, rec.modelProbability)
-          if (stake > 0) {
-            const result = await placeBet(admin, {
-              accountId: account.id,
-              raceId: race.race_id,
-              runnerId,
-              runnerName: rec.runnerName,
-              category: race.category,
-              source: 'puntersedge',
-              mode: 'AUTO',
-              betType: 'WIN',
-              stake,
-              tabDecimalOdds: rec.tabWinPrice,
-              modelProbability: rec.modelProbability,
-              modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
-              edgePoints: rec.edgePoints,
-              expectedValue: rec.expectedValueRatio,
-              confidenceLevel: rec.confidenceLevel,
-              minutesToJumpAtPlacement: minutesToJump,
-              idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:WIN:${MARKET_CONSENSUS_MODEL_VERSION}`,
-            })
-            if (result.placed) betsCreated += 1
-          }
-        }
-
-        // Harville-derived place edge - separate qualifying decision from the win bet above.
-        if (rec.place?.decision === 'BET' && rec.tabPlacePrice != null) {
-          const placeStake = recommendedStake(account.staking_method as Parameters<typeof recommendedStake>[0], account.current_bankroll, rec.tabPlacePrice, rec.place.modelProbability)
-          if (placeStake > 0) {
-            const result = await placeBet(admin, {
-              accountId: account.id,
-              raceId: race.race_id,
-              runnerId,
-              runnerName: rec.runnerName,
-              category: race.category,
-              source: 'puntersedge',
-              mode: 'AUTO',
-              betType: 'PLACE',
-              stake: placeStake,
-              tabDecimalOdds: rec.tabPlacePrice,
-              modelProbability: rec.place.modelProbability,
-              modelVersion: MARKET_CONSENSUS_MODEL_VERSION,
-              edgePoints: rec.place.edgePoints,
-              expectedValue: rec.place.expectedValueRatio,
-              confidenceLevel: rec.confidenceLevel,
-              minutesToJumpAtPlacement: minutesToJump,
-              idempotencyKey: `auto:${race.race_id}:${rec.runnerNumber}:PLACE:${MARKET_CONSENSUS_MODEL_VERSION}`,
-            })
-            if (result.placed) betsCreated += 1
-          }
-        }
+    // Each race's DB writes are independent, but were previously awaited fully sequentially -
+    // wall-clock time scaled linearly with race count (4+ round trips/race) and started exceeding
+    // the poller's fixed timeout once ~100+ races were concurrently priced (mid-morning meeting
+    // overlap). Process in bounded-concurrency batches instead so total time approaches one
+    // batch's latency rather than the sum of every race's latency.
+    const RACE_CONCURRENCY = 10
+    for (let i = 0; i < races.length; i += RACE_CONCURRENCY) {
+      const batch = races.slice(i, i + RACE_CONCURRENCY)
+      const results = await Promise.all(batch.map((race) => processRace(admin, account, race, now)))
+      for (const result of results) {
+        racesProcessed += 1
+        betsCreated += result.betsCreated
+        watchCount += result.watchCount
+        noBetCount += result.noBetCount
       }
     }
 

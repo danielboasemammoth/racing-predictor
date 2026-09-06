@@ -12,9 +12,12 @@ export interface StakingCaps {
   maxAbsoluteStake: number
 }
 
+// $1 minStake silently produces a $0 stake (no bet, ever) on any bankroll below $100 at
+// flat-1pct (verified live 2026-09-05 with the real $50 paper-betting bankroll - see
+// /memories/repo/racing-predictor-notes.md) - lowered to $0.50 so small bankrolls can still bet.
 export const DEFAULT_STAKING_CAPS: StakingCaps = {
   maxStakePct: 0.05,
-  minStake: 1,
+  minStake: 0.5,
   maxAbsoluteStake: 100,
 }
 

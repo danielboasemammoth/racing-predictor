@@ -23,13 +23,20 @@ export interface RecommendationThresholds {
   maxMinutesToJump: number
 }
 
+// Tuned 2026-09-05 via scripts/optimize-paper-betting-settings.ts against real yesterday+today AU
+// racing results (see /memories/repo/racing-predictor-notes.md): an exhaustive backtest found NO
+// threshold/staking config with positive net profit on that sample - WIN bets never qualified at
+// any edge floor tested (no exploitable edge vs TAB's win price), and PLACE bets were consistently
+// net-negative below roughly a 15pt edge floor. These values are the closest-to-breakeven,
+// capital-preservation config found, not a discovered winning strategy - see that memory file
+// before assuming this model is profitable.
 export const DEFAULT_THRESHOLDS: RecommendationThresholds = {
-  minEdgePoints: 3,
-  minConfidenceLevel: 'MODERATE',
+  minEdgePoints: 15,
+  minConfidenceLevel: 'LOW',
   maxPriceAgeSeconds: 120,
-  minFeatureCompleteness: 0.6,
+  minFeatureCompleteness: 0.2,
   minMinutesToJump: 1,
-  maxMinutesToJump: 240,
+  maxMinutesToJump: 180,
 }
 
 export interface RecommendationResult {

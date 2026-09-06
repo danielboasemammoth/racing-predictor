@@ -67,8 +67,11 @@ function Invoke-Step {
     $url = "$BaseUrl$Path"
     Write-Log "START $Label ($url)"
     try {
+        # 240s (not 120s): the sync route processes every currently-priced race and can legitimately
+        # take a while during mid-morning meeting overlap even with the route's own batched
+        # concurrency - a client timeout here silently aborts a still-healthy server-side sync.
         $response = Invoke-RestMethod -Uri $url -Method Post -Body "{}" -ContentType "application/json" `
-            -WebSession $WebSession -TimeoutSec 120
+            -WebSession $WebSession -TimeoutSec 240
         if (-not $response -or -not ("success" -in $response.PSObject.Properties.Name)) {
             throw "Unexpected response shape from $url (not this app?): $($response | ConvertTo-Json -Compress -Depth 3)"
         }

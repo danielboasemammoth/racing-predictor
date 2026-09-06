@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_THRESHOLDS, recommend } from '@/lib/betting/recommendation-engine'
 
 const BASE_INPUT = {
-  modelProbability: 0.32,
+  modelProbability: 0.4,
   tabPrice: 4.2,
   tabPriceAgeSeconds: 20,
   confidenceLevel: 'HIGH' as const,
@@ -16,7 +16,7 @@ describe('recommendation engine', () => {
   it('recommends BET when every criterion is satisfied', () => {
     const result = recommend(BASE_INPUT)
     expect(result.decision).toBe('BET')
-    expect(result.edgePoints).toBeCloseTo(8.19, 1)
+    expect(result.edgePoints).toBeCloseTo(16.19, 1)
     expect(result.failedCriteria).toEqual([])
   })
 
@@ -35,7 +35,7 @@ describe('recommendation engine', () => {
   })
 
   it('recommends WATCH for a positive-edge opportunity that fails one soft criterion', () => {
-    const result = recommend({ ...BASE_INPUT, confidenceLevel: 'LOW' })
+    const result = recommend({ ...BASE_INPUT, confidenceLevel: 'VERY_LOW' })
     expect(result.decision).toBe('WATCH')
     expect(result.failedCriteria.length).toBeGreaterThan(0)
   })
