@@ -38,6 +38,10 @@ export interface RunnerRecommendation {
   runnerNumber: number
   runnerName: string
   scratched: boolean
+  /** Non-scratched runners in this race, recorded per-runner for later analysis (e.g. whether
+   * maxOdds should vary by field size - see /memories/repo/racing-predictor-notes.md) - not used
+   * in the decision itself yet. */
+  fieldSize: number
   tabWinPrice: number | null
   tabPlacePrice: number | null
   tabAgeSeconds: number | null
@@ -111,6 +115,7 @@ export function generateRaceRecommendations(race: PeNextToGoRace, options: Gener
   // Harville place probabilities computed over the same priced subset of the field, using the
   // actual number of paid places for this category/field size (see src/lib/betting/place-rules.ts)
   // - NOT always top-3 (e.g. AU greyhound racing standardly pays only 1st-2nd).
+  const activeFieldSize = views.filter(({ runner }) => !scratchedNumbers.has(runner.number)).length
   const paidPlaces = paidPlacesCount(race.category, (race.runners ?? []).length)
   const harvilleField = harvillePlaceProbabilities(noVigField, paidPlaces)
   const placeProbabilityByIndex = new Map<number, number>()
@@ -173,6 +178,7 @@ export function generateRaceRecommendations(race: PeNextToGoRace, options: Gener
       runnerNumber: runner.number,
       runnerName: runner.name,
       scratched,
+      fieldSize: activeFieldSize,
       tabWinPrice: view.tab?.winPrice ?? null,
       tabPlacePrice: view.tab?.placePrice ?? null,
       tabAgeSeconds: view.tab?.ageSeconds ?? null,

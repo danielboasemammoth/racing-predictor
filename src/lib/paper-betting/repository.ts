@@ -284,6 +284,7 @@ export async function insertRecommendations(
       model_version: modelVersion,
       category,
       model_probability: rec.modelProbability,
+      field_size: rec.fieldSize,
       tab_win_price: rec.tabWinPrice,
       tab_place_price: rec.tabPlacePrice,
       tab_age_seconds: rec.tabAgeSeconds,
