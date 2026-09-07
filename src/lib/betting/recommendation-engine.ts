@@ -21,6 +21,8 @@ export interface RecommendationThresholds {
   minFeatureCompleteness: number
   minMinutesToJump: number
   maxMinutesToJump: number
+  /** Reject candidates priced longer than this - see the 2026-09-07 comment below for why. */
+  maxOdds: number
 }
 
 // Tuned 2026-09-05 via scripts/optimize-paper-betting-settings.ts against real yesterday+today AU
@@ -34,6 +36,14 @@ export interface RecommendationThresholds {
 // to 5pts, a level that still filters obvious noise but reliably produces some real bet activity
 // so the account can actually accumulate the real settled-bet history needed to validate/refute
 // this model over the coming weeks - see that memory file before assuming this model is profitable.
+// ADDED 2026-09-07: live data showed BET decisions firing at $41, $41, $41, $41, $34 and even $101
+// off only 5-7pt edges - at those prices (implied win probability 1-2.5%) that edge claims the true
+// probability is 3-4x the market's, which for a market-consensus-only model is almost always thin-
+// liquidity/cross-bookmaker noise rather than genuine insight, not to mention the well-documented
+// favorite-longshot bias (longshots are structurally overbet relative to true winning chances, so a
+// model "finding value" on one is more likely wrong than right). `maxOdds` rejects candidates priced
+// longer than this - a conservative starting heuristic (common professional practice avoids
+// automated staking above ~$15-26 for the same reason), not yet tuned against real settled outcomes.
 export const DEFAULT_THRESHOLDS: RecommendationThresholds = {
   minEdgePoints: 5,
   minConfidenceLevel: 'LOW',
@@ -41,6 +51,7 @@ export const DEFAULT_THRESHOLDS: RecommendationThresholds = {
   minFeatureCompleteness: 0.2,
   minMinutesToJump: 1,
   maxMinutesToJump: 180,
+  maxOdds: 15,
 }
 
 export interface RecommendationResult {
@@ -86,6 +97,7 @@ export function recommend(input: RecommendationInput, thresholds: Recommendation
   }
   if (input.minutesToJump < thresholds.minMinutesToJump) failedCriteria.push('race starts too soon to safely act on')
   if (input.minutesToJump > thresholds.maxMinutesToJump) failedCriteria.push('race is too far away to price reliably')
+  if (input.tabPrice > thresholds.maxOdds) failedCriteria.push(`odds $${input.tabPrice.toFixed(2)} exceed maximum $${thresholds.maxOdds.toFixed(2)} - too long to reliably price`)
 
   const reasons: string[] = [
     `Model probability ${(input.modelProbability * 100).toFixed(1)}% vs TAB implied probability`,

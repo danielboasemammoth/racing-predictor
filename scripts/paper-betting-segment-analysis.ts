@@ -246,6 +246,7 @@ async function main() {
     minFeatureCompleteness: 0,
     minMinutesToJump: 1,
     maxMinutesToJump: 120,
+    maxOdds: Infinity,
   }
 
   const candidates: Array<{ label: string; thresholds: RecommendationThresholds }> = [

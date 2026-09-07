@@ -334,7 +334,7 @@ async function main() {
         for (const minFeatureCompleteness of featCompGrid) {
           for (const minMinutesToJump of minJumpGrid) {
             for (const maxMinutesToJump of maxJumpGrid) {
-              const thresholds: RecommendationThresholds = { minEdgePoints, minConfidenceLevel, maxPriceAgeSeconds, minFeatureCompleteness, minMinutesToJump, maxMinutesToJump }
+              const thresholds: RecommendationThresholds = { minEdgePoints, minConfidenceLevel, maxPriceAgeSeconds, minFeatureCompleteness, minMinutesToJump, maxMinutesToJump, maxOdds: Infinity }
               const bets = qualifyingBets(withOutcome, thresholds)
               thresholdCombosEvaluated += 1
               if (thresholdCombosEvaluated % 200 === 0) {

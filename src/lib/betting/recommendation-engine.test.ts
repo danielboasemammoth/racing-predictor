@@ -61,4 +61,17 @@ describe('recommendation engine', () => {
     const result = recommend({ ...BASE_INPUT, minutesToJump: 600 })
     expect(result.failedCriteria.some((r) => r.includes('too far away'))).toBe(true)
   })
+
+  it('rejects a longshot even with a large edge - favorite-longshot bias/thin-market risk', () => {
+    // implied probability ~2.4% at $41; a modelProbability of 10% is a huge edge on paper, but
+    // this is exactly the pattern that motivated maxOdds - reject rather than trust it.
+    const result = recommend({ ...BASE_INPUT, tabPrice: 41, modelProbability: 0.1 })
+    expect(result.decision).not.toBe('BET')
+    expect(result.failedCriteria.some((r) => r.includes('too long to reliably price'))).toBe(true)
+  })
+
+  it('allows a short-priced runner right at the maxOdds boundary', () => {
+    const result = recommend({ ...BASE_INPUT, tabPrice: DEFAULT_THRESHOLDS.maxOdds, modelProbability: 0.4 })
+    expect(result.failedCriteria.some((r) => r.includes('too long to reliably price'))).toBe(false)
+  })
 })
