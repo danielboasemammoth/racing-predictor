@@ -1,5 +1,7 @@
 import type {
   NextToGoParams,
+  PeGreyhoundForm,
+  PeGreyhoundStats,
   PeNextToGoRace,
   PeRaceResult,
   PeUsage,
@@ -168,6 +170,18 @@ export class PuntersEdgeClient {
   async usage(): Promise<PeUsage> {
     if (this.isDemoMode) throw new PuntersEdgeAuthError('PUNTERSEDGE_API_KEY is not configured')
     return this.request<PeUsage>('/usage')
+  }
+
+  /** GET /v1/racing/greyhounds/form (3cr). Requires a real key - no demo/sandbox equivalent. */
+  async greyhoundForm(dog: string): Promise<PeGreyhoundForm> {
+    if (this.isDemoMode) throw new PuntersEdgeAuthError('PUNTERSEDGE_API_KEY is not configured - greyhound form requires a real key')
+    return this.request<PeGreyhoundForm>('/racing/greyhounds/form', { dog })
+  }
+
+  /** GET /v1/racing/greyhounds/stats (3cr). `by` dimensions: track, distance, box, grade (comma-separated) - defaults to track. */
+  async greyhoundStats(dog: string, by?: Array<'track' | 'distance' | 'box' | 'grade'>): Promise<PeGreyhoundStats> {
+    if (this.isDemoMode) throw new PuntersEdgeAuthError('PUNTERSEDGE_API_KEY is not configured - greyhound stats require a real key')
+    return this.request<PeGreyhoundStats>('/racing/greyhounds/stats', { dog, by: by?.join(',') })
   }
 }
 

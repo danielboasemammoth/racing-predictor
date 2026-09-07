@@ -1,6 +1,7 @@
 <#
 Daily pipeline: sync races, sync results + backfill predictions,
-generate predictions, run backtest, settle paper bets, sync PuntersEdge odds.
+generate predictions, run backtest, settle paper bets, sync PuntersEdge odds,
+prune stale PuntersEdge snapshots.
 
 Mirrors the exact steps defined in src/app/admin/admin-actions.tsx.
 
@@ -107,6 +108,7 @@ try {
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession
+    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/prune" -Label "Prune Stale PuntersEdge Data" -WebSession $webSession
 
     Write-Log "ALL STEPS COMPLETED"
 } catch {

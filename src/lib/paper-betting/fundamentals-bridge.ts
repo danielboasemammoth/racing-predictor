@@ -1,18 +1,15 @@
 /**
- * EXPERIMENTAL - NOT wired into the live sync pipeline (src/app/api/admin/puntersedge/sync).
- *
  * Bridges the PuntersEdge market-consensus baseline with this repo's existing Racing.com horse
- * fundamentals model (prediction-suite.ts), for a future hybrid model once match quality has been
- * verified against real overlapping data. Not enabled by default because:
- *   1. There is no stable ID shared between PuntersEdge and the internal `races` table - matching
- *      is necessarily heuristic (venue name + race number + start-time tolerance), and this repo's
- *      own memory explicitly warns that matching horse races by name/race_number is fragile.
- *   2. No live AU horse race has existed in both systems simultaneously during this session to
- *      validate real match accuracy - shipping this into auto-betting without that validation
- *      risks silently mismatching a horse and blending in the wrong fundamentals probability.
- * Use findMatchingInternalRace() to manually spot-check match quality before ever wiring
- * blendWithFundamentals() into generate-recommendations.ts.
+ * fundamentals model (prediction-suite.ts). Wired into the live sync pipeline (2026-09-07, see
+ * repository.ts's findHorseFundamentalsMatch) for horse-category races only - greyhound/harness
+ * have no internal fundamentals model to bridge to.
+ * Matching is necessarily heuristic (no stable ID is shared between PuntersEdge and the internal
+ * `races` table): venue name + race number + start-time tolerance, via findMatchingInternalRace()
+ * below - conservative by design, returns null (safe fallback to market-consensus-only) on zero OR
+ * multiple candidate matches rather than ever guessing.
  */
+
+import type { PredictedHorse } from '@/lib/types'
 
 export interface InternalRaceCandidate {
   raceId: string
@@ -24,6 +21,19 @@ export interface InternalRaceCandidate {
 
 function normalizeVenueName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+/**
+ * PuntersEdge horse names sometimes carry a trailing country-of-origin suffix for imported horses
+ * (e.g. "Wrist Art (Ire)") that the internal Racing.com-sourced `horses` table never has (verified
+ * live - zero internal horse names contain parentheses) - strip it before comparing.
+ */
+export function normalizeHorseName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\([a-z]{2,4}\)\s*$/i, '')
+    .trim()
 }
 
 /**
@@ -66,4 +76,28 @@ export function blendWithFundamentals(
   })
   const total = blended.reduce((sum, v) => sum + v, 0)
   return total > 0 ? blended.map((v) => v / total) : blended
+}
+
+/**
+ * Maps PuntersEdge runner numbers to the matched internal race's fundamentals win probability, by
+ * normalized-name lookup (no shared ID exists between the two systems). Runners with no name match
+ * (e.g. a very recent name correction) are simply absent from the returned map - the caller treats
+ * a missing entry as "no fundamentals available", falling back to market-only for that runner.
+ */
+export function buildFundamentalsProbabilityMap(
+  runners: Array<{ number: number; name: string }>,
+  internalHorses: PredictedHorse[],
+): Map<number, number> {
+  const probabilityByName = new Map<string, number>()
+  for (const horse of internalHorses) {
+    if (horse.win_probability == null) continue
+    probabilityByName.set(normalizeHorseName(horse.horse_name), horse.win_probability)
+  }
+
+  const result = new Map<number, number>()
+  for (const runner of runners) {
+    const probability = probabilityByName.get(normalizeHorseName(runner.name))
+    if (probability != null) result.set(runner.number, probability)
+  }
+  return result
 }

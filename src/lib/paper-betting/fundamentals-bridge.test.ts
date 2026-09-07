@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { blendWithFundamentals, findMatchingInternalRace, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
+import { blendWithFundamentals, buildFundamentalsProbabilityMap, findMatchingInternalRace, normalizeHorseName, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
+import type { PredictedHorse } from '@/lib/types'
+
+function predictedHorse(overrides: Partial<PredictedHorse> = {}): PredictedHorse {
+  return { horse_id: 'h-1', horse_name: 'Wild Romeo', predicted_position: 1, confidence: 0.5, win_probability: 0.2, ...overrides }
+}
 
 function candidate(overrides: Partial<InternalRaceCandidate> = {}): InternalRaceCandidate {
   return { raceId: 'race-abc', racecourseName: 'Flemington', raceNumber: 4, raceDatetime: '2026-09-01T05:00:00Z', ...overrides }
@@ -56,5 +61,46 @@ describe('blendWithFundamentals', () => {
     const blended = blendWithFundamentals([0.5, 0.5], [0.9, 0.1], 1)
     expect(blended[0]).toBeCloseTo(0.9, 5)
     expect(blended[1]).toBeCloseTo(0.1, 5)
+  })
+})
+
+describe('normalizeHorseName', () => {
+  it('lowercases and trims whitespace', () => {
+    expect(normalizeHorseName('  Wild Romeo  ')).toBe('wild romeo')
+  })
+
+  it('strips a trailing country-of-origin suffix', () => {
+    expect(normalizeHorseName('Wrist Art (Ire)')).toBe('wrist art')
+    expect(normalizeHorseName('Little She (Fra)')).toBe('little she')
+  })
+
+  it('does not alter a name with no suffix', () => {
+    expect(normalizeHorseName('Norflondonforever')).toBe('norflondonforever')
+  })
+})
+
+describe('buildFundamentalsProbabilityMap', () => {
+  it('maps a runner number to the fundamentals probability by normalized name', () => {
+    const map = buildFundamentalsProbabilityMap(
+      [{ number: 4, name: 'Wrist Art (Ire)' }],
+      [predictedHorse({ horse_name: 'Wrist Art', win_probability: 0.35 })],
+    )
+    expect(map.get(4)).toBeCloseTo(0.35, 5)
+  })
+
+  it('omits a runner with no name match', () => {
+    const map = buildFundamentalsProbabilityMap(
+      [{ number: 1, name: 'Unknown Horse' }],
+      [predictedHorse({ horse_name: 'Wild Romeo', win_probability: 0.2 })],
+    )
+    expect(map.has(1)).toBe(false)
+  })
+
+  it('omits an internal horse with no win_probability', () => {
+    const map = buildFundamentalsProbabilityMap(
+      [{ number: 1, name: 'Wild Romeo' }],
+      [predictedHorse({ horse_name: 'Wild Romeo', win_probability: undefined })],
+    )
+    expect(map.has(1)).toBe(false)
   })
 })

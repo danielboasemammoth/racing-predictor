@@ -134,3 +134,61 @@ export interface ResultsParams {
   limit?: number
   offset?: number
 }
+
+/** One past run from GET /v1/racing/greyhounds/form (3cr) - verified live 2026-09-07. */
+export interface PeGreyhoundFormRun {
+  date: string
+  track: string
+  distance_m: number
+  grade: string | null
+  race_number: number
+  box: number | null
+  rug: number | null
+  weight_kg: number | null
+  sp: number | null
+  position: number | null
+  scratched: boolean
+  time_s: number | null
+  win_time_s: number | null
+  /** e.g. "6.50L" - human-readable margin behind the winner (or ahead, if this dog won). */
+  margin: string | null
+  /** Margin in seconds behind the winner - null for the winner's own run and some historical rows. */
+  margin_s: number | null
+  grade_in: string | null
+  grade_out: string | null
+  trainer: { id: number; name: string } | null
+}
+
+/** `ambiguous`/`candidates` signal PuntersEdge couldn't uniquely resolve the dog name - treat as no data, never guess a candidate. */
+export interface PeGreyhoundForm {
+  dog_id: number
+  dog_name: string
+  ambiguous: boolean
+  candidates: Array<{ dog_id: number; dog_name: string }>
+  runs: PeGreyhoundFormRun[]
+}
+
+export interface PeGreyhoundStatsGroup {
+  track: string | null
+  distance_m: number | null
+  box: number | null
+  grade: string | null
+  starts: number
+  wins: number
+  places: number
+  win_pct: number
+  place_pct: number
+  avg_time_s: number | null
+  best_time_s: number | null
+}
+
+/** GET /v1/racing/greyhounds/stats (3cr). `by` accepts track/distance/box/grade, comma-separated - defaults to track. */
+export interface PeGreyhoundStats {
+  dog_id: number
+  dog_name: string
+  ambiguous: boolean
+  candidates: Array<{ dog_id: number; dog_name: string }>
+  group_by: string[]
+  groups: PeGreyhoundStatsGroup[]
+}
+

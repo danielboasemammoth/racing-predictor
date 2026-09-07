@@ -12,9 +12,16 @@ import { deriveConfidence, type ConfidenceLevel } from '@/lib/betting/confidence
 import { DEFAULT_THRESHOLDS, recommend, type Decision, type RecommendationThresholds } from '@/lib/betting/recommendation-engine'
 import { harvillePlaceProbabilities } from '@/lib/betting/harville'
 import { paidPlacesCount } from '@/lib/betting/place-rules'
+import { blendWithFundamentals } from '@/lib/paper-betting/fundamentals-bridge'
 import type { PeNextToGoRace } from '@/lib/puntersedge/types'
 
 export const MARKET_CONSENSUS_MODEL_VERSION = 'market-consensus-v1'
+/** market-consensus-v1 blended with the internal Racing.com horse fundamentals model - used only
+ * for horse races where findHorseFundamentalsMatch (repository.ts) found a real match. */
+export const MARKET_FUNDAMENTALS_HYBRID_MODEL_VERSION = 'market-fundamentals-hybrid-v1'
+/** market-consensus-v1 blended with the greyhound form/box-stats model - used only for greyhound
+ * races where findGreyhoundFundamentalsMatch (repository.ts) found usable data. OFF by default. */
+export const GREYHOUND_FUNDAMENTALS_HYBRID_MODEL_VERSION = 'greyhound-fundamentals-hybrid-v1'
 
 export interface PlaceRecommendation {
   modelProbability: number
@@ -56,6 +63,13 @@ export interface GenerateRecommendationsOptions {
   calibrationSampleSize?: number
   /** From real settled-bet history; 0.5 (neutral) until enough paper bets exist to measure it. */
   historicalCalibration?: number
+  /** Fundamentals win probability per runner number, from a matched internal model (horse) or a
+   * dedicated fundamentals model (greyhound) - absent/missing runner numbers fall back to
+   * market-only. See fundamentals-bridge.ts. */
+  fundamentalsProbabilityByRunnerNumber?: Map<number, number>
+  /** Weight given to fundamentals vs market-consensus when blending, 0-1. Not yet tuned against
+   * real settled-bet outcomes - 0.5 is a defensible, non-extreme starting point. */
+  fundamentalsBlendWeight?: number
 }
 
 const DISPERSION_DISAGREEMENT_SCALE = 0.05 // 5 percentage points of implied-probability stdev treated as high disagreement
@@ -80,7 +94,17 @@ export function generateRaceRecommendations(race: PeNextToGoRace, options: Gener
     .map((runner) => ({ runner, view: buildRunnerMarketView(runner) }))
   const referencePrices = views.map(({ view }) => view.consensus?.medianPrice ?? view.tab?.winPrice ?? null)
   const validIndices = referencePrices.map((p, i) => (p != null ? i : -1)).filter((i) => i >= 0)
-  const noVigField = noVigProbabilities(validIndices.map((i) => referencePrices[i] as number))
+  const marketField = noVigProbabilities(validIndices.map((i) => referencePrices[i] as number))
+
+  // Blend in fundamentals (when the caller found a match) BEFORE deriving Harville place
+  // probabilities below, so place probabilities are also fundamentals-aware, not market-only.
+  const noVigField = options.fundamentalsProbabilityByRunnerNumber
+    ? blendWithFundamentals(
+        marketField,
+        validIndices.map((originalIndex) => options.fundamentalsProbabilityByRunnerNumber!.get(views[originalIndex].runner.number) ?? null),
+        options.fundamentalsBlendWeight ?? 0.5,
+      )
+    : marketField
   const modelProbabilityByIndex = new Map<number, number>()
   validIndices.forEach((originalIndex, position) => modelProbabilityByIndex.set(originalIndex, noVigField[position]))
 

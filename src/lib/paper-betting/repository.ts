@@ -1,10 +1,191 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { PeNextToGoRace } from '@/lib/puntersedge/types'
+import type { PeGreyhoundFormRun, PeGreyhoundStatsGroup, PeNextToGoRace } from '@/lib/puntersedge/types'
+import type { PuntersEdgeClient } from '@/lib/puntersedge/client'
 import type { RunnerRecommendation } from '@/lib/paper-betting/generate-recommendations'
 import type { RecommendationThresholds } from '@/lib/betting/recommendation-engine'
 import type { BetResult } from '@/lib/betting/paper-wallet'
+import type { PredictedHorse, PredictionPayload } from '@/lib/types'
+import { findMatchingInternalRace, buildFundamentalsProbabilityMap, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
+import { computeGreyhoundFundamentalsProbabilities, type GreyhoundDogInput } from '@/lib/paper-betting/greyhound-fundamentals'
+
+/** The production ensemble model version (see prediction-suite.ts) - the fundamentals side of the horse blend. */
+const HORSE_FUNDAMENTALS_MODEL_VERSION = 'v4.1-ensemble'
 
 /** Thin DB access layer for the paper-betting/value-engine tables (supabase/migrate-paper-betting.sql). */
+
+/**
+ * For a horse-category PuntersEdge race, finds the matching internal (Racing.com) race and blends
+ * in its latest v4.1-ensemble prediction as a fundamentals win-probability-per-runner-number map.
+ * Returns null (safe fallback to market-consensus-only) whenever any step doesn't cleanly resolve -
+ * no unique venue+race_number+time match, no stored prediction yet, or no runner names matched.
+ */
+export async function findHorseFundamentalsMatch(admin: SupabaseClient, race: PeNextToGoRace): Promise<Map<number, number> | null> {
+  if (race.category !== 'horse') return null
+
+  const startTime = new Date(race.start_time)
+  const windowStart = new Date(startTime.getTime() - 60 * 60_000).toISOString()
+  const windowEnd = new Date(startTime.getTime() + 60 * 60_000).toISOString()
+
+  const { data: candidateRows, error: candidateError } = await admin
+    .from('races')
+    .select('id, race_number, race_datetime, racecourses(name)')
+    .gte('race_datetime', windowStart)
+    .lte('race_datetime', windowEnd)
+  if (candidateError) throw new Error(`Failed to look up candidate internal races: ${candidateError.message}`)
+
+  const candidates: InternalRaceCandidate[] = (candidateRows ?? []).map((row) => {
+    const racecourse = Array.isArray(row.racecourses) ? row.racecourses[0] : row.racecourses
+    return {
+      raceId: row.id as string,
+      racecourseName: (racecourse as { name?: string } | null)?.name ?? '',
+      raceNumber: row.race_number as number,
+      raceDatetime: row.race_datetime as string,
+    }
+  })
+
+  const match = findMatchingInternalRace(race.venue, race.race_number, race.start_time, candidates)
+  if (!match) return null
+
+  const { data: predictionRows, error: predictionError } = await admin
+    .from('predictions')
+    .select('predictions')
+    .eq('race_id', match.raceId)
+    .eq('model_version', HORSE_FUNDAMENTALS_MODEL_VERSION)
+    .order('predicted_at', { ascending: false })
+    .limit(1)
+  if (predictionError) throw new Error(`Failed to look up internal prediction for race ${match.raceId}: ${predictionError.message}`)
+
+  const payload = predictionRows?.[0]?.predictions as PredictionPayload | undefined
+  const allHorses: PredictedHorse[] | undefined = payload?.all_horses
+  if (!allHorses?.length) return null
+
+  const runners = (race.runners ?? [])
+    .filter((runner): runner is typeof runner & { number: number } => runner.number != null)
+    .map((runner) => ({ number: runner.number, name: runner.name }))
+  const fundamentalsProbabilityByRunnerNumber = buildFundamentalsProbabilityMap(runners, allHorses)
+  return fundamentalsProbabilityByRunnerNumber.size > 0 ? fundamentalsProbabilityByRunnerNumber : null
+}
+
+// --- Greyhound fundamentals (client + cache) ---------------------------------------------------
+// Built 2026-09-07, OFF by default (see ENABLE_GREYHOUND_FUNDAMENTALS in the sync route) - form +
+// stats cost 3cr each (6cr/dog). A 14-day cache TTL + a hard per-poll new-fetch cap keep this
+// within a sustainable slice of the monthly credit budget - see the constants below for the math.
+
+/** How long a cached form/stats entry is considered fresh - a dog's history barely changes between
+ * races (typically ~1-2 weeks apart for an active dog), so this doesn't need to be short-lived. */
+const GREYHOUND_CACHE_MAX_AGE_HOURS = 24 * 14
+
+interface GreyhoundFundamentalsCacheRow {
+  dog_name: string
+  dog_id: number | null
+  ambiguous: boolean
+  form: PeGreyhoundFormRun[] | null
+  box_stats: PeGreyhoundStatsGroup[] | null
+  fetched_at: string
+}
+
+/**
+ * Fails soft (logs + returns null) rather than throwing - a missing/broken cache table (e.g. the
+ * migration hasn't been run yet) must degrade to "no fundamentals data", never crash the whole
+ * batched sync run the way the pe_runners upsert bug did earlier - see repo notes.
+ */
+async function getCachedGreyhoundFundamentals(admin: SupabaseClient, dogName: string): Promise<GreyhoundFundamentalsCacheRow | null> {
+  const { data, error } = await admin
+    .from('pe_greyhound_fundamentals_cache')
+    .select('dog_name, dog_id, ambiguous, form, box_stats, fetched_at')
+    .eq('dog_name', normalizeDogNameKey(dogName))
+    .maybeSingle()
+  if (error) {
+    console.error(`Greyhound fundamentals cache read failed for ${dogName} (degrading to no cache):`, error.message)
+    return null
+  }
+  if (!data) return null
+  const ageHours = (Date.now() - new Date(data.fetched_at as string).getTime()) / 3_600_000
+  return ageHours <= GREYHOUND_CACHE_MAX_AGE_HOURS ? (data as GreyhoundFundamentalsCacheRow) : null
+}
+
+async function upsertGreyhoundFundamentalsCache(
+  admin: SupabaseClient,
+  dogName: string,
+  dogId: number | null,
+  ambiguous: boolean,
+  form: PeGreyhoundFormRun[] | null,
+  boxStats: PeGreyhoundStatsGroup[] | null,
+): Promise<void> {
+  const { error } = await admin.from('pe_greyhound_fundamentals_cache').upsert({
+    dog_name: normalizeDogNameKey(dogName),
+    dog_id: dogId,
+    ambiguous,
+    form,
+    box_stats: boxStats,
+    fetched_at: new Date().toISOString(),
+  })
+  if (error) console.error(`Greyhound fundamentals cache write failed for ${dogName} (data will be re-fetched next time):`, error.message)
+}
+
+function normalizeDogNameKey(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+/**
+ * Read-through cache: fetches (and caches) form + box stats for one dog, spending PuntersEdge
+ * credits only on a cache miss/stale entry, up to `newFetchBudget.remaining` per sync run.
+ * Returns null (never throws) on any PuntersEdge error for a single dog - one dog's API hiccup
+ * should degrade to "no fundamentals for this dog", not fail the whole race.
+ */
+async function getOrFetchGreyhoundDogData(
+  admin: SupabaseClient,
+  client: Pick<PuntersEdgeClient, 'greyhoundForm' | 'greyhoundStats'>,
+  dogName: string,
+  newFetchBudget: { remaining: number },
+): Promise<{ form: PeGreyhoundFormRun[] | null; boxStats: PeGreyhoundStatsGroup[] | null } | null> {
+  const cached = await getCachedGreyhoundFundamentals(admin, dogName)
+  if (cached) return { form: cached.ambiguous ? null : cached.form, boxStats: cached.ambiguous ? null : cached.box_stats }
+
+  if (newFetchBudget.remaining <= 0) return null
+  newFetchBudget.remaining -= 1
+
+  try {
+    const [form, boxStats] = await Promise.all([client.greyhoundForm(dogName), client.greyhoundStats(dogName, ['box'])])
+    const ambiguous = form.ambiguous || boxStats.ambiguous
+    await upsertGreyhoundFundamentalsCache(admin, dogName, form.dog_id ?? null, ambiguous, ambiguous ? null : form.runs, ambiguous ? null : boxStats.groups)
+    return ambiguous ? null : { form: form.runs, boxStats: boxStats.groups }
+  } catch {
+    // Best-effort - cache nothing so the next poll retries this dog rather than assuming failure forever.
+    return null
+  }
+}
+
+/**
+ * For a greyhound-category race, builds a fundamentals win-probability-per-runner-number map from
+ * cached/freshly-fetched form + box stats (see computeGreyhoundFundamentalsProbabilities). Returns
+ * null (safe fallback to market-consensus-only) when no runner has any usable data.
+ */
+export async function findGreyhoundFundamentalsMatch(
+  admin: SupabaseClient,
+  client: Pick<PuntersEdgeClient, 'greyhoundForm' | 'greyhoundStats'>,
+  race: PeNextToGoRace,
+  newFetchBudget: { remaining: number },
+): Promise<Map<number, number> | null> {
+  if (race.category !== 'greyhound') return null
+
+  const runners = (race.runners ?? []).filter((runner): runner is typeof runner & { number: number } => runner.number != null)
+  if (runners.length === 0) return null
+
+  const dogs: GreyhoundDogInput[] = []
+  for (const runner of runners) {
+    const data = await getOrFetchGreyhoundDogData(admin, client, runner.name, newFetchBudget)
+    dogs.push({
+      runnerNumber: runner.number,
+      form: data?.form ?? null,
+      boxStatsGroups: data?.boxStats ?? null,
+      currentBox: runner.barrier ?? null,
+    })
+  }
+
+  const probabilities = computeGreyhoundFundamentalsProbabilities(dogs)
+  return probabilities.size > 0 ? probabilities : null
+}
 
 export async function upsertRaceAndRunners(admin: SupabaseClient, race: PeNextToGoRace, status: 'upcoming' | 'started' | 'final' = 'upcoming') {
   const { error: raceError } = await admin.from('pe_races').upsert(

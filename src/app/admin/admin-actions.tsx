@@ -56,6 +56,12 @@ const actions: AdminAction[] = [
     detail: 'Fetch final PuntersEdge results and settle every matching pending paper bet',
     steps: [{ path: '/api/admin/puntersedge/settle', label: 'Settling paper bets' }],
   },
+  {
+    id: 'puntersedge-prune',
+    label: 'Prune Stale PuntersEdge Data',
+    detail: 'Delete superseded odds/recommendation snapshots (keeps only the latest per race+runner and anything linked to a real bet) to keep database size under control',
+    steps: [{ path: '/api/admin/puntersedge/prune', label: 'Pruning stale snapshots' }],
+  },
 ]
 
 export function AdminActions() {
