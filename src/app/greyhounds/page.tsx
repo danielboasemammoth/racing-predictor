@@ -63,7 +63,7 @@ export default async function GreyhoundsPage() {
         {raceGroups.map((group) => (
           <section key={group.raceId} className="rounded-lg border border-slate-200 bg-white p-4">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">
-              {group.venue} R{group.raceNumber} · {new Date(group.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
+              {group.venue} R{group.raceNumber} · {new Date(group.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', timeZone: 'Australia/Sydney' })}
             </h2>
             <ul className="space-y-2">
               {group.rows.map((rec) => {

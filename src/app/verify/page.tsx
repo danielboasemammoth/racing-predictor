@@ -167,7 +167,7 @@ async function RaceCard({ race }: { race: VerifyRace }) {
       <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row">
         <div>
           <h2 className="text-lg font-bold text-slate-900">
-            {race.racecourse} — {new Date(race.race_datetime).toLocaleString('en-AU')}
+            {race.racecourse} — {new Date(race.race_datetime).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })}
           </h2>
           <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium text-slate-700">
             {race.distance_m && <span className="rounded bg-slate-100 px-2 py-1">{race.distance_m}m</span>}

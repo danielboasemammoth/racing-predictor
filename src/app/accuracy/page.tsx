@@ -204,7 +204,7 @@ export default async function AccuracyPage() {
               <div className="bg-white rounded-xl border border-slate-200 p-6">
                 <p className="text-sm text-slate-600 mb-1">Latest Period</p>
                 <p className="text-3xl font-bold text-slate-900">
-                  {new Date(latest.period_start).toLocaleDateString('en-AU', { month: 'short', day: 'numeric' })} – {new Date(latest.period_end).toLocaleDateString('en-AU', { month: 'short', day: 'numeric' })}
+                  {new Date(latest.period_start).toLocaleDateString('en-AU', { month: 'short', day: 'numeric', timeZone: 'Australia/Sydney' })} – {new Date(latest.period_end).toLocaleDateString('en-AU', { month: 'short', day: 'numeric', timeZone: 'Australia/Sydney' })}
                 </p>
                 <p className="text-xs text-slate-500 mt-1">{latest.total_races} races</p>
               </div>
@@ -217,7 +217,7 @@ export default async function AccuracyPage() {
                   <div key={log.id} className="flex items-center justify-between py-3 border-b border-slate-100 last:border-b-0">
                     <div>
                       <p className="text-sm font-medium text-slate-900">
-                        {new Date(log.period_start).toLocaleDateString('en-AU')} – {new Date(log.period_end).toLocaleDateString('en-AU')}
+                        {new Date(log.period_start).toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney' })} – {new Date(log.period_end).toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney' })}
                       </p>
                       <p className="text-xs text-slate-500">{log.total_races} races • {log.model_version || 'unknown model'}</p>
                     </div>

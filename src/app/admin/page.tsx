@@ -198,7 +198,7 @@ export default async function AdminPage({
                 <h3 className="text-sm font-medium text-slate-700 mb-2">Pending Paper Bets</h3>
                 <p className="text-sm text-slate-700">
                   {puntersEdge.pendingBets.count} pending
-                  {puntersEdge.pendingBets.oldestPlacedAt && ` (oldest placed ${new Date(puntersEdge.pendingBets.oldestPlacedAt).toLocaleString('en-AU')})`}
+                  {puntersEdge.pendingBets.oldestPlacedAt && ` (oldest placed ${new Date(puntersEdge.pendingBets.oldestPlacedAt).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })})`}
                 </p>
               </div>
             </div>

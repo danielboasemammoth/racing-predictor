@@ -44,7 +44,7 @@ export function RefreshRaceButton({ raceId }: { raceId: string }) {
         {status === 'refreshing' ? 'Refreshing…' : 'Refresh Race'}
       </button>
       {updatedAt && status === 'idle' && (
-        <p className="text-xs text-slate-500">Updated: {new Date(updatedAt).toLocaleTimeString('en-AU')}</p>
+        <p className="text-xs text-slate-500">Updated: {new Date(updatedAt).toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney' })}</p>
       )}
       {status === 'error' && message && <p className="text-xs text-red-700">{message}</p>}
     </div>
