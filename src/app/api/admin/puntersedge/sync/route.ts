@@ -37,7 +37,16 @@ const MIN_CREDITS_RESERVE = 20
 // and cap new (not-yet-cached) fetches per sync run so cost is spread across many polls rather
 // than spent all at once - a 14-day cache TTL (see repository.ts) means the "backlog" of distinct
 // AU dogs gets covered gradually, not instantly.
-const ENABLE_GREYHOUND_FUNDAMENTALS = true
+// DISABLED 2026-09-08: live settled results showed this model performing dramatically worse than
+// the market-consensus baseline it's blended with, and worse than the horse fundamentals model
+// (identical blend architecture) - greyhound PLACE bets off this model were -73% to -82% ROI at a
+// 4% win rate against an implied breakeven of ~13% (avg odds ~$7.80), and greyhound WIN bets were
+// 0-for-6+. That gap, isolated to this one model while the shared framework (thresholds, blend
+// weight, maxOdds) performs fine for horses, points at a calibration problem in the greyhound
+// score itself (recent-form/box-fit weights), not the betting logic - see the 2026-09-08 entry in
+// /memories/repo/racing-predictor-notes.md before re-enabling. Falling back to market-consensus-v1
+// for greyhound (same as before this model existed) until it's investigated further.
+const ENABLE_GREYHOUND_FUNDAMENTALS = false
 const GREYHOUND_FUNDAMENTALS_MAX_MINUTES_TO_JUMP = 90
 const GREYHOUND_FUNDAMENTALS_MAX_NEW_FETCHES_PER_SYNC = 10
 
