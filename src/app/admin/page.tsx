@@ -105,6 +105,7 @@ export default async function AdminPage({
               <p className="text-sm text-slate-600 mt-1">Data ingestion and model controls</p>
             </div>
             <div className="flex items-center gap-4">
+              <a href="/admin/research" className="text-sm font-medium text-teal-700 hover:text-teal-900">Segment Explorer</a>
               <form action={logout}>
                 <button type="submit" className="text-sm font-medium text-slate-600 hover:text-slate-900">Sign out</button>
               </form>
