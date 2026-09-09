@@ -136,16 +136,81 @@ const COHORT_TIERS: CohortTier[] = [
   },
 ]
 
+interface CohortIndex {
+  /** History grouped by `probabilityBand|gapBand|agreementBand`, `probabilityBand|gapBand`, `probabilityBand|agreementBand`, and `probabilityBand` respectively - one Map per non-catch-all tier above. */
+  byTierKey: Array<Map<string, HistoricalRaceFeatures[]>>
+  overallBaseline: number
+}
+
+/**
+ * Pages that reconstruct a whole day's (or weeks') worth of historical picks call
+ * computeReliabilityScore once per candidate, all against the SAME `history` array reference -
+ * without this, every single call independently re-scans the full history array up to 4 times
+ * (once per tier) plus once more for overallBaseline, which measurably degraded a real page to
+ * ~17s (found + fixed 2026-09-09, see /picks-history). Keyed by array identity (not content) via
+ * a WeakMap so this is purely a performance cache - passing a different history array (e.g. in a
+ * test) never reuses another call's index, and repeated calls with the same array reference
+ * (the common real-world case - the array is loaded once per page render) build the grouping
+ * exactly once instead of on every call.
+ */
+const cohortIndexCache = new WeakMap<HistoricalRaceFeatures[], CohortIndex>()
+
+/** Same tier-key format used both to index a historical row and to look up an incoming prediction's key - null means that row can never populate/match that tier (e.g. missing gap data). */
+function tierKeyFromBands(tierIndex: number, pBand: string, gBand: string | null, aBand: string | null): string | null {
+  if (tierIndex === 0) return gBand != null && aBand != null ? `${pBand}|${gBand}|${aBand}` : null
+  if (tierIndex === 1) return gBand != null ? `${pBand}|${gBand}` : null
+  if (tierIndex === 2) return aBand != null ? `${pBand}|${aBand}` : null
+  return pBand
+}
+
+function rowTierKey(tierIndex: number, row: HistoricalRaceFeatures): string | null {
+  if (row.probability == null) return null
+  return tierKeyFromBands(
+    tierIndex,
+    probabilityBand(row.probability),
+    row.gap != null ? predictionGapBand(row.gap) : null,
+    row.totalBaseModels != null ? agreementBand(row.agreeing ?? 0, row.totalBaseModels) : null,
+  )
+}
+
+function inputTierKey(tierIndex: number, input: ReliabilityInput): string | null {
+  return tierKeyFromBands(tierIndex, probabilityBand(input.probability), predictionGapBand(input.gap), agreementBand(input.agreeing, input.totalBaseModels))
+}
+
+function buildCohortIndex(history: HistoricalRaceFeatures[]): CohortIndex {
+  const byTierKey: Array<Map<string, HistoricalRaceFeatures[]>> = [new Map(), new Map(), new Map(), new Map()]
+  for (const row of history) {
+    for (let tierIndex = 0; tierIndex < byTierKey.length; tierIndex += 1) {
+      const key = rowTierKey(tierIndex, row)
+      if (key === null) continue
+      const bucket = byTierKey[tierIndex].get(key)
+      if (bucket) bucket.push(row); else byTierKey[tierIndex].set(key, [row])
+    }
+  }
+  const overallBaseline = history.length ? history.filter((r) => r.correctWinner).length / history.length : 0
+  return { byTierKey, overallBaseline }
+}
+
+function getCohortIndex(history: HistoricalRaceFeatures[]): CohortIndex {
+  let index = cohortIndexCache.get(history)
+  if (!index) {
+    index = buildCohortIndex(history)
+    cohortIndexCache.set(history, index)
+  }
+  return index
+}
+
 /** Builds the ONE comparable-race cohort for this prediction via tiered relaxation - never a sum of overlapping buckets. */
 export function computeComparableCohort(input: ReliabilityInput, history: HistoricalRaceFeatures[]): ComparableCohort {
-  const overallBaseline = history.length ? history.filter((r) => r.correctWinner).length / history.length : 0
+  const index = getCohortIndex(history)
 
-  for (const tier of COHORT_TIERS) {
-    const isLastTier = tier === COHORT_TIERS[COHORT_TIERS.length - 1]
-    const matches = history.filter((row) => tier.matches(input, row))
+  for (let tierIndex = 0; tierIndex < COHORT_TIERS.length; tierIndex += 1) {
+    const tier = COHORT_TIERS[tierIndex]
+    const isLastTier = tierIndex === COHORT_TIERS.length - 1
+    const matches = isLastTier ? history : (index.byTierKey[tierIndex].get(inputTierKey(tierIndex, input) ?? '') ?? [])
     if (matches.length >= MIN_CREDIBLE_SAMPLE || isLastTier) {
       const wins = matches.filter((row) => row.correctWinner).length
-      const stats = summarizeBucket(tier.criteria.join('+'), wins, matches.length, overallBaseline)
+      const stats = summarizeBucket(tier.criteria.join('+'), wins, matches.length, index.overallBaseline)
       return { ...stats, criteriaUsed: tier.criteria }
     }
   }

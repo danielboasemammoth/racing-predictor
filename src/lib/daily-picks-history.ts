@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Prediction, Race, RaceWithPrediction } from '@/lib/types'
-import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
+import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { candidatesForDate, melbourneDateKey, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
 
 export interface HistoricalDailyPick extends DailyPick {
@@ -60,35 +60,60 @@ export async function loadDailyPicksHistory(
     chunks.push(raceIds.slice(offset, offset + CHUNK_SIZE))
   }
 
-  const predictionRows: Prediction[] = []
+  const predictionRows: Array<{ id: string; race_id: string; model_version: string; predicted_at: string; podium: Prediction['predictions']['podium'] | null }> = []
   const entryRows: Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }> = []
-  for (const chunk of chunks) {
-    const [predictionResult, entryResult] = await Promise.all([
-      supabase.from('predictions').select('*').in('race_id', chunk).order('predicted_at', { ascending: false }),
+  // Chunks are fetched in small concurrent BATCHES, not one at a time and not all at once - fully
+  // sequential chunk fetching was the dominant cost behind this page taking ~17s+ even after
+  // narrowing the columns selected; fetching every chunk at once instead tripped a genuine
+  // Postgres statement timeout (too much concurrent load against the same table). A bounded batch
+  // size mirrors the same pattern already used for PuntersEdge sync (see
+  // /memories/repo/racing-predictor-notes.md) - fixed 2026-09-09.
+  const CONCURRENT_CHUNK_BATCH = 3
+  for (let i = 0; i < chunks.length; i += CONCURRENT_CHUNK_BATCH) {
+    const batch = chunks.slice(i, i + CONCURRENT_CHUNK_BATCH)
+    const batchResults = await Promise.all(batch.map((chunk) => Promise.all([
+      // Only the podium (top 3) is ever read from a prediction on this page (see candidatesForDate/
+      // historyStarts) - selecting the full jsonb `predictions` payload (which can include a large
+      // all_horses array and per-horse feature_snapshots) was slow enough at this table's current
+      // size to trip a Postgres statement timeout and break this whole page (fixed 2026-09-09).
+      supabase.from('predictions').select('id, race_id, model_version, predicted_at, podium:predictions->podium').in('race_id', chunk).order('predicted_at', { ascending: false }),
       supabase.from('race_entries').select('race_id, horse_id, finishing_position, status').in('race_id', chunk),
-    ])
-    if (predictionResult.error) throw predictionResult.error
-    if (entryResult.error) throw entryResult.error
-    predictionRows.push(...(predictionResult.data as Prediction[]))
-    entryRows.push(...(entryResult.data as Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }>))
+    ])))
+    for (const [predictionResult, entryResult] of batchResults) {
+      if (predictionResult.error) throw predictionResult.error
+      if (entryResult.error) throw entryResult.error
+      predictionRows.push(...(predictionResult.data as typeof predictionRows))
+      entryRows.push(...(entryResult.data as Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }>))
+    }
   }
 
   // Completed races must use retrospective predictions (built only from pre-race history) -
   // the live predictions for the same race can be stale (e.g. still including a horse that was
   // scratched afterwards). Mirrors the same preference used on the race detail page.
   const modelsByRace = new Map<string, Prediction[]>()
-  for (const prediction of predictionRows) {
-    if (!prediction.model_version.includes('retrospective')) continue
-    const baseVersion = prediction.model_version.replace('-retrospective', '')
+  for (const row of predictionRows) {
+    if (!row.model_version.includes('retrospective') || !row.podium?.length) continue
+    const baseVersion = row.model_version.replace('-retrospective', '')
     if (!CURRENT_MODEL_VERSIONS.includes(baseVersion)) continue
-    const models = modelsByRace.get(prediction.race_id) ?? []
-    if (!models.some((model) => model.model_version.replace('-retrospective', '') === baseVersion)) models.push(prediction)
-    modelsByRace.set(prediction.race_id, models)
+    const models = modelsByRace.get(row.race_id) ?? []
+    if (models.some((model) => model.model_version.replace('-retrospective', '') === baseVersion)) continue
+    // historyStarts/all_horses/confidence_scores/predicted_times are never read from a
+    // reconstructed historical pick (see PickCard/candidatesForDate) - only podium is needed here.
+    models.push({
+      id: row.id,
+      race_id: row.race_id,
+      model_version: row.model_version,
+      predicted_at: row.predicted_at,
+      predictions: { podium: row.podium, all_horses: [] },
+      confidence_scores: { overall: 0 },
+      predicted_times: {},
+    })
+    modelsByRace.set(row.race_id, models)
   }
 
   const racesWithPredictions: RaceWithPrediction[] = typedRaces.map((race) => {
     const models = modelsByRace.get(race.id) ?? []
-    const primary = models.find((model) => model.model_version.replace('-retrospective', '') === 'v4.1-ensemble')
+    const primary = models.find((model) => model.model_version.replace('-retrospective', '') === PRODUCTION_MODEL_VERSION)
       ?? models[0]
       ?? null
     return { ...race, prediction: primary, model_predictions: models }

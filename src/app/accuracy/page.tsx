@@ -1,7 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { SiteNav } from '@/components/site-nav'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
-import type { PredictionPayload } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,76 +16,98 @@ async function getAccuracyLogs() {
   return data || []
 }
 
-interface ScoredPrediction {
+interface ScoredPredictionRow {
+  id: string
   model_version: string
-  predictions: PredictionPayload
-  actual_results: {
-    podium?: string[]
-    winner_top3?: boolean
-    podium_overlap?: number
-    ordered_trifecta?: boolean
-    winner_brier_score?: number
-    winner_log_loss?: number
-  } | null
+  predicted_winner_id: string | null
+  predicted_win_probability: string | null
+  predicted_confidence: string | null
+  actual_winner_id: string | null
+  winner_top3: string | null
+  podium_overlap: string | null
+  ordered_trifecta: string | null
+  winner_brier_score: string | null
+  winner_log_loss: string | null
 }
 
 async function getModelMetrics() {
   const supabase = await createClient()
-  const data: ScoredPrediction[] = []
-  const pageSize = 1_000
-  for (let offset = 0; ; offset += pageSize) {
-    const { data: page, error } = await supabase
+  const data: ScoredPredictionRow[] = []
+  // Larger than a typical page size on purpose - each row is now just a handful of small scalar
+  // fields (not the full jsonb payload), so a bigger page trades a little per-request payload for
+  // far fewer sequential round trips (tens of thousands of rows would otherwise mean dozens of
+  // requests at 1,000/page).
+  const pageSize = 5_000
+  // Keyset (id > lastId) pagination, not offset/.range() - the predictions table has grown to
+  // tens of thousands of rows, and offset pagination re-scans+discards every prior row on each
+  // page, degrading toward a Postgres statement timeout on later pages. Also selects only the
+  // handful of scalar fields actually needed (via JSON path operators) instead of the full
+  // multi-KB jsonb `predictions`/`actual_results` payload per row - this alone cut one page's
+  // query time from ~3s to ~0.4s in a live timing check (see the /accuracy and /picks-history
+  // 500 error fixed 2026-09-09).
+  let lastId: string | null = null
+  for (;;) {
+    // Must be a single string literal (not built via array().join()) - Supabase's generated
+    // client types the .select() overload from the literal string itself, and a computed
+    // `string` falls back to an untyped/error result shape at compile time.
+    let query = supabase
       .from('predictions')
-      .select('model_version, predictions, actual_results')
+      .select(`
+        id,
+        model_version,
+        predicted_winner_id:predictions->podium->0->>horse_id,
+        predicted_win_probability:predictions->podium->0->>win_probability,
+        predicted_confidence:predictions->podium->0->>confidence,
+        actual_winner_id:actual_results->podium->>0,
+        winner_top3:actual_results->>winner_top3,
+        podium_overlap:actual_results->>podium_overlap,
+        ordered_trifecta:actual_results->>ordered_trifecta,
+        winner_brier_score:actual_results->>winner_brier_score,
+        winner_log_loss:actual_results->>winner_log_loss
+      `)
       .not('actual_results', 'is', null)
-      .range(offset, offset + pageSize - 1)
+      .order('id', { ascending: true })
+      .limit(pageSize)
+    if (lastId) query = query.gt('id', lastId)
+    const { data: page, error } = await query
     if (error) throw error
-    data.push(...((page ?? []) as ScoredPrediction[]))
-    if (!page || page.length < pageSize) break
+    if (!page?.length) break
+    data.push(...(page as unknown as ScoredPredictionRow[]))
+    lastId = page[page.length - 1].id
+    if (page.length < pageSize) break
   }
 
   const groups = Map.groupBy(data, (prediction) => prediction.model_version)
   return [...groups].map(([modelVersion, predictions]) => {
-    const valid = predictions.filter((prediction) => prediction.actual_results?.podium?.length)
-    const winnerHits = valid.filter((prediction) =>
-      prediction.predictions.podium[0]?.horse_id === prediction.actual_results?.podium?.[0],
-    ).length
-    const calibrationGroups = Map.groupBy(valid, (prediction) => {
-      const probability = prediction.predictions.podium[0]?.win_probability
-        ?? prediction.predictions.podium[0]?.confidence
-        ?? 0
-      return Math.min(90, Math.floor(probability * 10) * 10)
-    })
+    const valid = predictions.filter((prediction) => prediction.actual_winner_id !== null)
+    const winnerHits = valid.filter((prediction) => prediction.predicted_winner_id === prediction.actual_winner_id).length
+    const predictedProbability = (prediction: ScoredPredictionRow) =>
+      Number(prediction.predicted_win_probability ?? prediction.predicted_confidence ?? 0)
+    const calibrationGroups = Map.groupBy(valid, (prediction) => Math.min(90, Math.floor(predictedProbability(prediction) * 10) * 10))
     return {
       modelVersion,
       races: valid.length,
       winnerAccuracy: valid.length ? winnerHits / valid.length : 0,
       winnerTop3Accuracy: valid.length
-        ? valid.filter((prediction) => prediction.actual_results?.winner_top3).length / valid.length
+        ? valid.filter((prediction) => prediction.winner_top3 === 'true').length / valid.length
         : 0,
       podiumOverlap: valid.length
-        ? valid.reduce((sum, prediction) => sum + (prediction.actual_results?.podium_overlap ?? 0), 0) / valid.length
+        ? valid.reduce((sum, prediction) => sum + Number(prediction.podium_overlap ?? 0), 0) / valid.length
         : 0,
       trifectaAccuracy: valid.length
-        ? valid.filter((prediction) => prediction.actual_results?.ordered_trifecta).length / valid.length
+        ? valid.filter((prediction) => prediction.ordered_trifecta === 'true').length / valid.length
         : 0,
       brierScore: valid.length
-        ? valid.reduce((sum, prediction) => sum + (prediction.actual_results?.winner_brier_score ?? 0), 0) / valid.length
+        ? valid.reduce((sum, prediction) => sum + Number(prediction.winner_brier_score ?? 0), 0) / valid.length
         : 0,
       logLoss: valid.length
-        ? valid.reduce((sum, prediction) => sum + (prediction.actual_results?.winner_log_loss ?? 0), 0) / valid.length
+        ? valid.reduce((sum, prediction) => sum + Number(prediction.winner_log_loss ?? 0), 0) / valid.length
         : 0,
       calibration: [...calibrationGroups].sort(([left], [right]) => left - right).map(([band, bucket]) => ({
         band,
         races: bucket.length,
-        predicted: bucket.reduce((sum, prediction) => sum + (
-          prediction.predictions.podium[0]?.win_probability
-          ?? prediction.predictions.podium[0]?.confidence
-          ?? 0
-        ), 0) / bucket.length,
-        observed: bucket.filter((prediction) =>
-          prediction.predictions.podium[0]?.horse_id === prediction.actual_results?.podium?.[0],
-        ).length / bucket.length,
+        predicted: bucket.reduce((sum, prediction) => sum + predictedProbability(prediction), 0) / bucket.length,
+        observed: bucket.filter((prediction) => prediction.predicted_winner_id === prediction.actual_winner_id).length / bucket.length,
       })),
     }
   }).filter((metric) => metric.races > 0).sort((left, right) => right.races - left.races)
