@@ -3,9 +3,15 @@
  * (distance, race type, field size, barrier, track, probability, gap, agreement, and
  * interactions) and reports which ones actually hold up out-of-sample.
  *
- * Discovery vs production: this script only PRINTS/WRITES findings for a human (or a later
- * step) to review - it does not feed the Reliability Score automatically. Per the spec, a
- * newly discovered pattern must be validated before it's allowed to affect production scoring.
+ * The actual load/compute/publish work (loading completed races, building analysis rows,
+ * computing the calibration table, and publishing both snapshots to Supabase) lives in
+ * `src/lib/reliability-refresh.ts` so it can ALSO run as a scheduled admin action
+ * (`/api/admin/reliability-refresh`, wired into the daily pipeline) - this script is now a thin
+ * wrapper that calls the same shared function and additionally prints the full discovery/holdout
+ * diagnostic report for a human to review. Discovery vs production: the segment-by-segment
+ * breakdown below is for a human (or a later step) to review - only probability/gap/agreement are
+ * validated and fed into the published calibration table; a newly discovered segment pattern must
+ * be validated before it's allowed to affect production scoring (per spec).
  */
 import 'dotenv/config'
 import { config } from 'dotenv'
@@ -14,184 +20,23 @@ import {
   type BucketStats,
   MIN_CREDIBLE_SAMPLE,
   agreementBand,
-  barrierThird,
   bucketize,
-  classifyRaceType,
   distanceBand,
   fieldSizeBand,
-  isAgeRestricted,
-  isCountryBoosted,
-  isSexRestricted,
   marketImpliedProbability,
   modelEdge,
   modelEdgeBand,
   predictionGapBand,
   probabilityBand,
 } from '../src/lib/reliability-analysis'
-import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '../src/lib/prediction-suite'
-import { computeComparableCohort, computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '../src/lib/reliability-score'
+import { computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '../src/lib/reliability-score'
 import { flatStakeReport } from '../src/lib/roi-analysis'
+import { refreshReliabilityCalibration, type RaceAnalysisRow } from '../src/lib/reliability-refresh'
 import { createScriptClient } from './supabase-client'
 
 config({ path: '.env.local' })
 
 const supabase = createScriptClient()
-// v4.1-ensemble (the pure fundamentals ensemble, no longer Champion) is excluded from "base
-// model" agreement counting alongside PRODUCTION_MODEL_VERSION itself - both are derived/blended
-// outputs, not independent fundamentals variants.
-const BASE_MODEL_VERSIONS = CURRENT_MODEL_VERSIONS.filter((version) => version !== 'v4.1-ensemble' && version !== PRODUCTION_MODEL_VERSION)
-const ENSEMBLE_VERSION = `${PRODUCTION_MODEL_VERSION}-retrospective`
-
-interface RaceRow {
-  id: string
-  race_datetime: string
-  distance_m: number | null
-  race_class: string | null
-  track_condition: string | null
-  racecourse_id: string
-}
-
-interface EntryRow {
-  race_id: string
-  horse_id: string
-  barrier_number: number | null
-  finishing_position: number | null
-  status: string
-  sectional_times: { odds?: Array<{ win?: number | string | null }> } | null
-}
-
-interface PredictionRow {
-  race_id: string
-  model_version: string
-  predictions: { podium: Array<{ horse_id: string; win_probability?: number; confidence: number }> }
-}
-
-interface RaceAnalysisRow {
-  raceId: string
-  raceDatetime: string
-  racecourseId: string
-  correctWinner: boolean
-  distanceM: number | null
-  raceType: string
-  countryBoosted: boolean
-  sexRestricted: boolean
-  ageRestricted: boolean
-  fieldSize: number
-  trackCondition: string | null
-  barrierThird: 'inside' | 'middle' | 'outside' | null
-  probability: number
-  gap: number
-  agreeing: number
-  totalBaseModels: number
-  /** Best recorded win price from Racing.com's own feed - NOT a confirmed TAB/Betfair price. */
-  bestRecordedOdds: number | null
-}
-
-async function loadCompletedRaces(): Promise<RaceRow[]> {
-  const races: RaceRow[] = []
-  for (let offset = 0; ; offset += 1_000) {
-    const { data, error } = await supabase
-      .from('races')
-      .select('id, race_datetime, distance_m, race_class, track_condition, racecourse_id')
-      .eq('status', 'completed')
-      .order('race_datetime', { ascending: true })
-      .range(offset, offset + 999)
-    if (error) throw error
-    races.push(...((data ?? []) as RaceRow[]))
-    if (!data || data.length < 1_000) break
-  }
-  return races
-}
-
-async function loadInChunks<T>(raceIds: string[], loader: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
-  const rows: T[] = []
-  for (let offset = 0; offset < raceIds.length; offset += 40) {
-    rows.push(...(await loader(raceIds.slice(offset, offset + 40))))
-  }
-  return rows
-}
-
-async function loadEntries(raceIds: string[]): Promise<EntryRow[]> {
-  return loadInChunks(raceIds, async (chunk) => {
-    const { data, error } = await supabase
-      .from('race_entries')
-      .select('race_id, horse_id, barrier_number, finishing_position, status, sectional_times')
-      .in('race_id', chunk)
-    if (error) throw error
-    return (data ?? []) as EntryRow[]
-  })
-}
-
-async function loadRetrospectivePredictions(raceIds: string[]): Promise<PredictionRow[]> {
-  const versions = [...BASE_MODEL_VERSIONS.map((version) => `${version}-retrospective`), ENSEMBLE_VERSION]
-  return loadInChunks(raceIds, async (chunk) => {
-    const { data, error } = await supabase
-      .from('predictions')
-      .select('race_id, model_version, predictions')
-      .in('race_id', chunk)
-      .in('model_version', versions)
-      .order('predicted_at', { ascending: false })
-    if (error) throw error
-    return (data ?? []) as PredictionRow[]
-  })
-}
-
-function buildAnalysisRows(races: RaceRow[], entries: EntryRow[], predictions: PredictionRow[]): RaceAnalysisRow[] {
-  const entriesByRace = Map.groupBy(entries, (entry) => entry.race_id)
-  const predictionsByRace = Map.groupBy(predictions, (prediction) => prediction.race_id)
-
-  return races.flatMap((race) => {
-    const raceEntries = (entriesByRace.get(race.id) ?? []).filter((entry) => entry.status !== 'scratched')
-    const winnerId = raceEntries.find((entry) => entry.finishing_position === 1)?.horse_id
-    if (!winnerId || raceEntries.length < 4) return []
-
-    const racePredictions = predictionsByRace.get(race.id) ?? []
-    // Keep only the most recent snapshot per model_version (predictions are ordered desc above).
-    const latestByModel = new Map<string, PredictionRow>()
-    for (const prediction of racePredictions) {
-      if (!latestByModel.has(prediction.model_version)) latestByModel.set(prediction.model_version, prediction)
-    }
-    const ensemble = latestByModel.get(ENSEMBLE_VERSION)
-    const predictedWinner = ensemble?.predictions.podium[0]
-    const second = ensemble?.predictions.podium[1]
-    if (!predictedWinner) return []
-
-    const baseModelPicks = BASE_MODEL_VERSIONS
-      .map((version) => latestByModel.get(`${version}-retrospective`)?.predictions.podium[0]?.horse_id)
-      .filter((horseId): horseId is string => Boolean(horseId))
-    const agreeing = baseModelPicks.filter((horseId) => horseId === predictedWinner.horse_id).length
-
-    const barrier = raceEntries.find((entry) => entry.horse_id === predictedWinner.horse_id)?.barrier_number
-    const probability = predictedWinner.win_probability ?? predictedWinner.confidence
-    const secondProbability = second ? (second.win_probability ?? second.confidence) : 0
-
-    const winnerEntry = raceEntries.find((entry) => entry.horse_id === predictedWinner.horse_id)
-    const recordedPrices = (winnerEntry?.sectional_times?.odds ?? [])
-      .map((quote) => Number(quote.win))
-      .filter((price) => Number.isFinite(price) && price > 0)
-    const bestRecordedOdds = recordedPrices.length ? Math.max(...recordedPrices) : null
-
-    return [{
-      raceId: race.id,
-      raceDatetime: race.race_datetime,
-      racecourseId: race.racecourse_id,
-      correctWinner: predictedWinner.horse_id === winnerId,
-      distanceM: race.distance_m,
-      raceType: classifyRaceType(race.race_class),
-      countryBoosted: isCountryBoosted(race.race_class),
-      sexRestricted: isSexRestricted(race.race_class),
-      ageRestricted: isAgeRestricted(race.race_class),
-      fieldSize: raceEntries.length,
-      trackCondition: race.track_condition,
-      barrierThird: barrier ? barrierThird(barrier, raceEntries.length) : null,
-      probability,
-      gap: Math.max(0, probability - secondProbability),
-      agreeing,
-      totalBaseModels: baseModelPicks.length,
-      bestRecordedOdds,
-    }]
-  })
-}
 
 function reportBuckets(title: string, buckets: BucketStats[]) {
   console.log(`\n## ${title}`)
@@ -291,51 +136,15 @@ function reportProfitability(rows: RaceAnalysisRow[], calibration: CalibrationTa
 }
 
 async function main() {
-  console.log('Loading completed races, entries, and retrospective predictions...')
-  const races = await loadCompletedRaces()
-  const entries = await loadEntries(races.map((race) => race.id))
-  const predictions = await loadRetrospectivePredictions(races.map((race) => race.id))
-  const rows = buildAnalysisRows(races, entries, predictions)
-    .sort((left, right) => new Date(left.raceDatetime).getTime() - new Date(right.raceDatetime).getTime())
+  console.log('Loading completed races, entries, and retrospective predictions, and publishing calibration...')
+  const { rows, validationEnd, calibration, historyPayload } = await refreshReliabilityCalibration(supabase)
+  console.log(`Built ${rows.length} analyzable races and published both snapshots to Supabase (analysis_snapshots table).`)
 
-  console.log(`Built ${rows.length} analyzable races (of ${races.length} completed races).`)
-
-  const trainEnd = Math.floor(rows.length * 0.7)
-  const validationEnd = Math.floor(rows.length * 0.85)
   const discovery = rows.slice(0, validationEnd) // train + validation, per spec section 27
   const holdout = rows.slice(validationEnd) // most recent 15%, never used for pattern discovery
 
   analyzeSlice('DISCOVERY (first 85% chronologically)', discovery)
   analyzeSlice('HOLDOUT (most recent 15%, untouched until now)', holdout)
-
-  // Only probability, gap, and agreement showed directionally-consistent lift between discovery
-  // and holdout in practice - the rest (race type, field size, track condition, barrier, venue)
-  // reversed sign or had too few holdout samples to trust. Per spec section 38, only validated
-  // signals are promoted into production scoring; everything else stays "discovery only" above.
-  const overallBaseline = rows.filter((r) => r.correctWinner).length / rows.length
-  const probabilityBuckets = bucketize(rows, (r) => probabilityBand(r.probability), (r) => r.correctWinner)
-  const gapBuckets = bucketize(rows, (r) => predictionGapBand(r.gap), (r) => r.correctWinner)
-  const agreementBuckets = bucketize(rows, (r) => agreementBand(r.agreeing, r.totalBaseModels), (r) => r.correctWinner)
-
-  // Raw comparable-cohort rate (pre-rescale) for every historical race, using the SAME single
-  // joint-cohort tiered lookup the live score uses (computeComparableCohort) - never the old
-  // "sum three overlapping buckets" blend, which double/triple-counted the same races.
-  const rawRates = rows.map((row) =>
-    computeComparableCohort(
-      { probability: row.probability, gap: row.gap, agreeing: row.agreeing, totalBaseModels: row.totalBaseModels },
-      rows,
-    ).shrunkStrikeRate,
-  )
-
-  const calibration = {
-    generatedAt: new Date().toISOString(),
-    totalRaces: rows.length,
-    overallBaseline,
-    probability: probabilityBuckets,
-    gap: gapBuckets,
-    agreement: agreementBuckets,
-    rawRateRange: { min: Math.min(...rawRates), max: Math.max(...rawRates) },
-  }
 
   mkdirSync('scripts/output', { recursive: true })
   writeFileSync('scripts/output/reliability-calibration.json', JSON.stringify(calibration, null, 2))
@@ -344,22 +153,8 @@ async function main() {
   reportCalibrationMonotonicity(rows, calibration, rows)
   reportProfitability(rows, calibration, rows)
 
-  const historyPayload = { generatedAt: new Date().toISOString(), trainEnd, validationEnd, rows }
-  writeFileSync(
-    'scripts/output/reliability-analysis-rows.json',
-    JSON.stringify(historyPayload, null, 2),
-  )
+  writeFileSync('scripts/output/reliability-analysis-rows.json', JSON.stringify(historyPayload, null, 2))
   console.log('\nWrote scripts/output/reliability-analysis-rows.json for downstream use (Reliability Score weighting, similarity engine).')
-
-  // Local files are handy for manual inspection but don't persist across serverless deployments -
-  // publish to Supabase so the live app can read the latest calibration/history at request time.
-  const { error: calibrationError } = await supabase.from('analysis_snapshots')
-    .upsert({ kind: 'reliability-calibration', payload: calibration, generated_at: calibration.generatedAt }, { onConflict: 'kind' })
-  if (calibrationError) throw calibrationError
-  const { error: historyError } = await supabase.from('analysis_snapshots')
-    .upsert({ kind: 'race-feature-history', payload: historyPayload, generated_at: historyPayload.generatedAt }, { onConflict: 'kind' })
-  if (historyError) throw historyError
-  console.log('Published both snapshots to Supabase (analysis_snapshots table).')
 }
 
 main().catch((error: unknown) => {

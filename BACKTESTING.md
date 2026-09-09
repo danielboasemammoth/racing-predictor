@@ -54,7 +54,7 @@ as final.
 
 - `npx tsx --env-file=.env.local scripts/train-logit-weights.ts` (or `-kfold`) - re-fits `v5-trained`'s weights.
 - `npx tsx --env-file=.env.local scripts/feature-ablation.ts` - feature-group ablation.
-- `npx tsx --env-file=.env.local scripts/reliability-analysis.ts` - republishes the live Reliability Score calibration table + historical feature rows used by the Segment Explorer (`/admin/research`) and the home page's Reliability Score.
+- `npx tsx --env-file=.env.local scripts/reliability-analysis.ts` - republishes the live Reliability Score calibration table + historical feature rows used by the Segment Explorer (`/admin/research`) and the home page's Reliability Score. **As of 2026-09-09 this also runs automatically every night** as the "Refresh Reliability Calibration" step in the scheduled daily pipeline (`scripts/windows/run-daily-tasks.ps1` -> `/api/admin/reliability-refresh`, shared logic in `src/lib/reliability-refresh.ts`) - the script itself is now a thin wrapper that also prints the full discovery/holdout diagnostic report, useful for a periodic manual review but no longer required just to keep the calibration current.
 - `npx tsx --env-file=.env.local scripts/train-place-model.ts` - separate PLACE-target experiment (see MODEL_RESEARCH.md).
 - `POST /api/admin/backtest` (admin-authenticated, or via the "Run Backtest" button on `/admin`) - full-history batch re-score powering `/accuracy`.
 

@@ -45,6 +45,12 @@ const actions: AdminAction[] = [
     steps: [{ path: '/api/admin/backtest', label: 'Scoring predictions' }],
   },
   {
+    id: 'reliability-refresh',
+    label: 'Refresh Reliability Calibration',
+    detail: 'Republish the Reliability Score calibration table + comparable-race history from every completed race - keeps the home page Reliability Score, Segment Explorer, and similar-races data current as the dataset grows',
+    steps: [{ path: '/api/admin/reliability-refresh', label: 'Republishing reliability calibration' }],
+  },
+  {
     id: 'puntersedge-sync',
     label: 'Sync PuntersEdge Odds & Recommendations',
     detail: 'Pull the current TAB-priced card (horse/greyhound/harness), store odds snapshots, and generate BET/WATCH/NO BET recommendations - auto-places paper bets for qualifying BETs',
