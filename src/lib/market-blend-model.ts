@@ -1,14 +1,15 @@
 /**
- * CHALLENGER model (audit spec Parts 10/15/41/47) - NOT wired into the primary production pick.
- * The production ensemble (v4.1-ensemble) uses zero market information; a chronological
+ * Champion model (audit spec Parts 10/15/41/47) - PROMOTED 2026-09-09, see
+ * prediction-suite.ts::PRODUCTION_MODEL_VERSION and MODEL_PROMOTION.md for the evidence trail.
+ * The pure fundamentals ensemble (v4.1-ensemble) uses zero market information; a chronological
  * discovery/holdout experiment (scripts/experiment-market-reranker.ts, 2026-09) found the raw
- * market favourite alone beats it by roughly 2x on genuine holdout winner accuracy (33.8% vs
- * 21.8%), and accuracy fell monotonically as more weight was put on the fundamentals model at
- * every tested blend ratio. This challenger blends the ensemble's own probability with the
- * race's normalized market-implied probability (from Racing.com's own recorded price feed - NOT
- * a confirmed TAB/Betfair price), predominantly toward the market. It is generated and stored
- * every time the production ensemble is, exactly like v4.1-ensemble, so it can accumulate its
- * own live frozen track record before ever being considered for promotion over the Champion.
+ * market favourite alone beats it by roughly 2x on genuine holdout winner accuracy (38.5% vs
+ * 22.4%), and accuracy fell monotonically as more weight was put on the fundamentals model at
+ * every tested blend ratio. This model blends the ensemble's own probability with the race's
+ * normalized market-implied probability (from Racing.com's own recorded price feed - NOT a
+ * confirmed TAB/Betfair price), predominantly toward the market. It is generated and stored every
+ * time the fundamentals ensemble is, so v4.1-ensemble remains available for comparison on
+ * /accuracy even though it is no longer the primary pick.
  */
 import { normalizedMarketProbabilities } from '@/lib/reliability-analysis'
 import type { ModelSuiteResult } from '@/lib/prediction-suite'

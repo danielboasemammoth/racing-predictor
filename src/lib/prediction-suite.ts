@@ -13,9 +13,18 @@ export interface ModelSuiteResult extends ContextualPredictionResult {
 
 export const ALL_MODEL_CONFIGS = Object.values(MODEL_CONFIGS)
 export const PRODUCTION_ENSEMBLE_CONFIGS = [MODEL_CONFIGS.optimized, MODEL_CONFIGS.connections]
-// v6-market-blend (src/lib/market-blend-model.ts) is a CHALLENGER, generated alongside the
-// production ensemble but not selected as the primary pick anywhere - see that file for why.
 export const CURRENT_MODEL_VERSIONS = [...Object.values(MODEL_CONFIGS).map((config) => config.version), 'v4.1-ensemble', 'v6-market-blend']
+/**
+ * Champion model version - the single source of truth for "which prediction is THE pick" wherever
+ * that matters (home page, race detail page, reliability calibration). Promoted from
+ * 'v4.1-ensemble' to 'v6-market-blend' on 2026-09-09 after v6-market-blend beat the champion on
+ * every promotion criterion in MODEL_PROMOTION.md: live paired-sample winner accuracy (28.0% vs
+ * 20.6% on 175 real scored races), Brier score (0.0866 vs 0.0892) and log loss (2.087 vs 2.172) -
+ * consistent in both chronological halves of that sample (31.0%/24.1% then 25.0%/17.0%), and
+ * matching the independent offline discovery/holdout experiments (experiment-market-reranker.ts:
+ * 38.5% vs 22.4% holdout). See MODEL_RESEARCH.md and MODEL_PROMOTION.md for the full record.
+ */
+export const PRODUCTION_MODEL_VERSION = 'v6-market-blend'
 
 function component(modelVersion: string, result: ContextualPredictionResult) {
   const winner = result.predictions.podium[0]

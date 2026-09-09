@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { Race, RaceWithPrediction, Prediction } from '@/lib/types'
 import { getDailyPicks, getTomorrowPicks, type DailyPicksFilterOptions } from '@/lib/daily-picks'
-import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
+import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { loadReliabilityContext } from '@/lib/reliability-context'
 import { SiteNav } from '@/components/site-nav'
 import { PaperBetButton } from '@/components/paper-bet-button'
@@ -76,7 +76,7 @@ async function getUpcomingRaces(): Promise<RaceWithPrediction[]> {
   })
 
   for (const [raceId, models] of modelsByRace) {
-    const primary = models.find((model) => model.model_version === 'v4.1-ensemble') ?? models[0]
+    const primary = models.find((model) => model.model_version === PRODUCTION_MODEL_VERSION) ?? models[0]
     if (primary) predictionMap.set(raceId, primary)
   }
 
@@ -350,7 +350,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                             .map((model) => {
                               const winner = model.predictions.podium[0]
                               return (
-                                <div key={model.model_version} className={`border px-3 py-2 ${model.model_version === 'v4.1-ensemble' ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                                <div key={model.model_version} className={`border px-3 py-2 ${model.model_version === PRODUCTION_MODEL_VERSION ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
                                   <p className="truncate text-[11px] font-semibold text-slate-500" title={model.model_version}>{model.model_version.replace('v4-', '')}</p>
                                   <p className="mt-1 truncate text-xs font-bold text-slate-900">{winner?.horse_name ?? 'No pick'}</p>
                                   <p className="text-xs text-slate-600">{((model.confidence_scores.winner ?? 0) * 100).toFixed(1)}%</p>
@@ -406,7 +406,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                                 winPrice={horse.win_odds}
                                 placePrice={horse.place_odds ?? null}
                                 modelProbability={horse.win_probability ?? horse.confidence}
-                                modelVersion={race.prediction?.model_version ?? 'v4.1-ensemble'}
+                                modelVersion={race.prediction?.model_version ?? PRODUCTION_MODEL_VERSION}
                               />
                               <p className="mt-1 text-[10px] text-slate-400">Recorded price (Racing.com feed - not a confirmed TAB/Betfair price)</p>
                             </div>

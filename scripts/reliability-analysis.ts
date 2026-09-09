@@ -28,7 +28,7 @@ import {
   predictionGapBand,
   probabilityBand,
 } from '../src/lib/reliability-analysis'
-import { CURRENT_MODEL_VERSIONS } from '../src/lib/prediction-suite'
+import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '../src/lib/prediction-suite'
 import { computeComparableCohort, computeReliabilityScore, reliabilityCalibrationBands, type CalibrationTable } from '../src/lib/reliability-score'
 import { flatStakeReport } from '../src/lib/roi-analysis'
 import { createScriptClient } from './supabase-client'
@@ -36,10 +36,11 @@ import { createScriptClient } from './supabase-client'
 config({ path: '.env.local' })
 
 const supabase = createScriptClient()
-// v6-market-blend is a challenger derived from the ensemble's own output, not an independent
-// fundamentals variant - excluded from "base model" agreement counting like v4.1-ensemble is.
-const BASE_MODEL_VERSIONS = CURRENT_MODEL_VERSIONS.filter((version) => version !== 'v4.1-ensemble' && version !== 'v6-market-blend')
-const ENSEMBLE_VERSION = 'v4.1-ensemble-retrospective'
+// v4.1-ensemble (the pure fundamentals ensemble, no longer Champion) is excluded from "base
+// model" agreement counting alongside PRODUCTION_MODEL_VERSION itself - both are derived/blended
+// outputs, not independent fundamentals variants.
+const BASE_MODEL_VERSIONS = CURRENT_MODEL_VERSIONS.filter((version) => version !== 'v4.1-ensemble' && version !== PRODUCTION_MODEL_VERSION)
+const ENSEMBLE_VERSION = `${PRODUCTION_MODEL_VERSION}-retrospective`
 
 interface RaceRow {
   id: string

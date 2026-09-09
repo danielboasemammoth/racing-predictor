@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import type { Prediction, Race, RaceEntryWithHorse } from '@/lib/types'
-import { CURRENT_MODEL_VERSIONS } from '@/lib/prediction-suite'
+import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { computeRaceReliability, loadReliabilityContext } from '@/lib/reliability-context'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { RefreshRaceButton } from './refresh-race-button'
@@ -50,7 +50,7 @@ async function getRaceData(raceId: string) {
     if (!CURRENT_MODEL_VERSIONS.includes(baseVersion)) continue
     if (!modelPredictions.some((model) => model.model_version.replace('-retrospective', '') === baseVersion)) modelPredictions.push(prediction)
   }
-  const prediction = modelPredictions.find((model) => model.model_version.replace('-retrospective', '') === 'v4.1-ensemble')
+  const prediction = modelPredictions.find((model) => model.model_version.replace('-retrospective', '') === PRODUCTION_MODEL_VERSION)
     ?? modelPredictions[0]
     ?? null
 
@@ -181,7 +181,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                     const winner = model.predictions.podium[0]
                     const baseVersion = model.model_version.replace('-retrospective', '')
                     return (
-                      <div key={model.model_version} className={`border p-3 ${baseVersion === 'v4.1-ensemble' ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
+                      <div key={model.model_version} className={`border p-3 ${baseVersion === PRODUCTION_MODEL_VERSION ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50'}`}>
                         <p className="text-xs font-semibold text-slate-500">{baseVersion}</p>
                         <p className="mt-1 font-bold text-slate-900">{winner?.horse_name ?? 'No pick'}</p>
                         <p className="text-sm text-slate-600">Winner confidence {((model.confidence_scores.winner ?? 0) * 100).toFixed(1)}%</p>
@@ -420,7 +420,7 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
                               winOdds={predicted.win_odds}
                               winProbability={predicted.win_probability ?? predicted.confidence}
                               confidence={predicted.confidence}
-                              modelVersion={filteredPrediction?.model_version ?? 'v4.1-ensemble'}
+                              modelVersion={filteredPrediction?.model_version ?? PRODUCTION_MODEL_VERSION}
                             />
                           )}
                         </td>
