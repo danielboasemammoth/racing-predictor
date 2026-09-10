@@ -34,8 +34,13 @@ describe('kelly staking', () => {
     expect(recommendedStake('kelly-0.10', 1000, 2.0, 0.3)).toBe(0)
   })
 
-  it('returns 0 when the stake would fall below the minimum', () => {
+  it('floors a genuine stake up to the minimum instead of discarding the bet', () => {
     const stake = recommendedStake('flat-1pct', 10, 4.2, 0.32, { maxStakePct: 1, minStake: 5, maxAbsoluteStake: 1000 })
+    expect(stake).toBe(5)
+  })
+
+  it('returns 0 when the bankroll cannot even afford the minimum stake', () => {
+    const stake = recommendedStake('flat-1pct', 3, 4.2, 0.32, { maxStakePct: 1, minStake: 5, maxAbsoluteStake: 1000 })
     expect(stake).toBe(0)
   })
 

@@ -51,6 +51,12 @@ const actions: AdminAction[] = [
     steps: [{ path: '/api/admin/reliability-refresh', label: 'Republishing reliability calibration' }],
   },
   {
+    id: 'reliability-auto-bet',
+    label: 'Auto-Place Reliability Bets',
+    detail: 'Auto-place WIN paper bets for today/tomorrow\'s Reliability Score shortlist picks (score >= 80) - the internal-model counterpart to PuntersEdge auto-betting',
+    steps: [{ path: '/api/admin/reliability-auto-bet', label: 'Placing reliability-based paper bets' }],
+  },
+  {
     id: 'puntersedge-sync',
     label: 'Sync PuntersEdge Odds & Recommendations',
     detail: 'Pull the current TAB-priced card (horse/greyhound/harness), store odds snapshots, and generate BET/WATCH/NO BET recommendations - auto-places paper bets for qualifying BETs',

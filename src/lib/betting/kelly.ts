@@ -47,8 +47,14 @@ const FLAT_STAKE_PCT: Record<'flat-1pct' | 'flat-2pct', number> = {
 }
 
 function clampStake(rawStake: number, bankroll: number, caps: StakingCaps): number {
+  if (rawStake <= 0) return 0 // no genuine edge/stake desired - never invent one just to hit the floor
+  if (bankroll < caps.minStake) return 0 // can't even afford the minimum stake - a real "can't bet" case
   const capped = Math.min(rawStake, bankroll * caps.maxStakePct, caps.maxAbsoluteStake)
-  return capped < caps.minStake ? 0 : Math.round(capped * 100) / 100
+  // A bet worth making should still happen even if maxStakePct/the raw edge would round it under
+  // the minimum - floor UP to minStake rather than discarding the bet entirely (2026-09-10: the
+  // previous "round down to 0" behavior meant a genuine edge could silently never bet at all on a
+  // modest bankroll, e.g. flat-1pct on $48.50 = $0.485, just under the $0.50 floor).
+  return Math.round(Math.max(capped, caps.minStake) * 100) / 100
 }
 
 /**
