@@ -68,7 +68,7 @@ export async function loadDailyPicksHistory(
   // Postgres statement timeout (too much concurrent load against the same table). A bounded batch
   // size mirrors the same pattern already used for PuntersEdge sync (see
   // /memories/repo/racing-predictor-notes.md) - fixed 2026-09-09.
-  const CONCURRENT_CHUNK_BATCH = 3
+  const CONCURRENT_CHUNK_BATCH = 6
   for (let i = 0; i < chunks.length; i += CONCURRENT_CHUNK_BATCH) {
     const batch = chunks.slice(i, i + CONCURRENT_CHUNK_BATCH)
     const batchResults = await Promise.all(batch.map((chunk) => Promise.all([

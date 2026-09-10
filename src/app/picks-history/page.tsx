@@ -80,13 +80,17 @@ function PickCard({ pick, rank }: { pick: HistoricalDailyPick; rank: number }) {
   )
 }
 
+export const maxDuration = 60
+
 export default async function PicksHistoryPage() {
   const supabase = await createClient()
   const reliabilityContext = await loadReliabilityContext(supabase)
-  // 14 days, not 21 - keeps the page comfortably under typical serverless function time limits
-  // now that dataset volume has grown substantially (see the /picks-history 500 error fixed
-  // 2026-09-09); still a reasonable "recent history" window for this page's purpose.
-  const history = await loadDailyPicksHistory(supabase, { calibration: reliabilityContext?.calibration ?? null, history: reliabilityContext?.history ?? null, days: 14 })
+  // 10 days, not 14/21 - the page was still measuring ~10-11s end to end at 14 days (right at a
+  // typical serverless function's default time limit) even after the 2026-09-09 query fixes and
+  // the reliability-score cohort-index cache - reduced further, plus higher read concurrency
+  // below, for real safety margin rather than "just barely fits" (found + fixed 2026-09-10, still
+  // reported broken after the first round of fixes).
+  const history = await loadDailyPicksHistory(supabase, { calibration: reliabilityContext?.calibration ?? null, history: reliabilityContext?.history ?? null, days: 10 })
 
   const scoredPicks = history.flatMap((day) => day.picks).filter((pick) => !pick.scratched && pick.actualPosition !== null)
   const wins = scoredPicks.filter((pick) => pick.won).length

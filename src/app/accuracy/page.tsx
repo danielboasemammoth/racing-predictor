@@ -3,6 +3,7 @@ import { SiteNav } from '@/components/site-nav'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 async function getAccuracyLogs() {
   const supabase = await createClient()
