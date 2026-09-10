@@ -85,12 +85,13 @@ export const maxDuration = 60
 export default async function PicksHistoryPage() {
   const supabase = await createClient()
   const reliabilityContext = await loadReliabilityContext(supabase)
-  // 10 days, not 14/21 - the page was still measuring ~10-11s end to end at 14 days (right at a
-  // typical serverless function's default time limit) even after the 2026-09-09 query fixes and
-  // the reliability-score cohort-index cache - reduced further, plus higher read concurrency
-  // below, for real safety margin rather than "just barely fits" (found + fixed 2026-09-10, still
-  // reported broken after the first round of fixes).
-  const history = await loadDailyPicksHistory(supabase, { calibration: reliabilityContext?.calibration ?? null, history: reliabilityContext?.history ?? null, days: 10 })
+  // 7 days, not 10/14/21 - the user's actual Vercel function logs confirmed a genuine Postgres
+  // `57014 statement timeout`, not just marginal slowness - raising read concurrency to "fix" the
+  // earlier slowness (2026-09-10) very likely made this WORSE via query contention against
+  // Supabase's connection limits (reverted in daily-picks-history.ts). A materially smaller window
+  // is the safest lever left short of a larger architectural change (e.g. a precomputed daily
+  // snapshot) - revisit if this history window ever needs to be longer.
+  const history = await loadDailyPicksHistory(supabase, { calibration: reliabilityContext?.calibration ?? null, history: reliabilityContext?.history ?? null, days: 7 })
 
   const scoredPicks = history.flatMap((day) => day.picks).filter((pick) => !pick.scratched && pick.actualPosition !== null)
   const wins = scoredPicks.filter((pick) => pick.won).length

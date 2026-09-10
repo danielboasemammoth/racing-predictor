@@ -53,8 +53,12 @@ export async function loadDailyPicksHistory(
   const raceIds = typedRaces.map((race) => race.id)
 
   // A large date range can cover hundreds of races - chunk the .in() lookups so the request URL
-  // never grows large enough to trip a "Bad Request" from Postgrest/the edge proxy.
-  const CHUNK_SIZE = 100
+  // never grows large enough to trip a "Bad Request" from Postgrest/the edge proxy, AND so no
+  // single query's IN() list is large enough to risk a Postgres statement timeout on its own
+  // (confirmed live via Vercel's function logs 2026-09-10: a real `57014 canceling statement due
+  // to statement timeout` from Supabase, not just a slow page - a smaller chunk directly reduces
+  // the cost of each individual statement, not just the total wall-clock time across all of them).
+  const CHUNK_SIZE = 50
   const chunks: string[][] = []
   for (let offset = 0; offset < raceIds.length; offset += CHUNK_SIZE) {
     chunks.push(raceIds.slice(offset, offset + CHUNK_SIZE))
@@ -65,10 +69,13 @@ export async function loadDailyPicksHistory(
   // Chunks are fetched in small concurrent BATCHES, not one at a time and not all at once - fully
   // sequential chunk fetching was the dominant cost behind this page taking ~17s+ even after
   // narrowing the columns selected; fetching every chunk at once instead tripped a genuine
-  // Postgres statement timeout (too much concurrent load against the same table). A bounded batch
-  // size mirrors the same pattern already used for PuntersEdge sync (see
-  // /memories/repo/racing-predictor-notes.md) - fixed 2026-09-09.
-  const CONCURRENT_CHUNK_BATCH = 6
+  // Postgres statement timeout (too much concurrent load against the same table). Kept at 3, not
+  // pushed higher - a higher concurrency (6) measured marginally faster locally but is the likely
+  // cause of a genuine `57014` statement timeout seen live on Vercel (concurrent queries against
+  // the same table/index appear to contend under Supabase's connection limits in a way this
+  // local machine's testing didn't surface) - reverted 2026-09-10, prioritize reliability over a
+  // couple of seconds of wall-clock time here.
+  const CONCURRENT_CHUNK_BATCH = 3
   for (let i = 0; i < chunks.length; i += CONCURRENT_CHUNK_BATCH) {
     const batch = chunks.slice(i, i + CONCURRENT_CHUNK_BATCH)
     const batchResults = await Promise.all(batch.map((chunk) => Promise.all([
