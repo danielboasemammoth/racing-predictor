@@ -4,12 +4,15 @@ import type { PuntersEdgeClient } from '@/lib/puntersedge/client'
 import type { RunnerRecommendation } from '@/lib/paper-betting/generate-recommendations'
 import type { RecommendationThresholds } from '@/lib/betting/recommendation-engine'
 import type { BetResult } from '@/lib/betting/paper-wallet'
+import { settleBet } from '@/lib/betting/paper-wallet'
+import { paidPlacesCount } from '@/lib/betting/place-rules'
 import type { PredictedHorse, PredictionPayload } from '@/lib/types'
 import { findMatchingInternalRace, buildFundamentalsProbabilityMap, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
 import { computeGreyhoundFundamentalsProbabilities, type GreyhoundDogInput } from '@/lib/paper-betting/greyhound-fundamentals'
+import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 
-/** The production ensemble model version (see prediction-suite.ts) - the fundamentals side of the horse blend. */
-const HORSE_FUNDAMENTALS_MODEL_VERSION = 'v4.1-ensemble'
+/** The current Champion model version (see prediction-suite.ts) - the fundamentals side of the horse blend. */
+const HORSE_FUNDAMENTALS_MODEL_VERSION = PRODUCTION_MODEL_VERSION
 
 /** Thin DB access layer for the paper-betting/value-engine tables (supabase/migrate-paper-betting.sql). */
 
@@ -510,6 +513,85 @@ export async function hasSettleableBets(admin: SupabaseClient, bufferMinutes = 1
   const races = await admin.from('pe_races').select('id').in('id', raceIds).lte('start_time', cutoff).limit(1)
   if (races.error) throw new Error(`Failed to check for settleable bets: ${races.error.message}`)
   return (races.data ?? []).length > 0
+}
+
+/**
+ * Settles PENDING internal-source (home-page "manual" horse) paper bets directly against the
+ * app's own races/race_entries tables - no external API call needed since results are already
+ * scraped in-house. Previously these bets had NO settlement path at all (getPendingBetsForRace/
+ * hasSettleableBets both filter to source='puntersedge' only) and sat PENDING forever - see repo
+ * notes. A 'cancelled' race refunds the stake (ABANDONED); a 'completed' race resolves each bet
+ * from its runner's race_entries row (SCRATCHED if scratched, else WIN/PLACE result against
+ * paidPlacesCount for the actual active field size).
+ */
+export async function settleInternalBets(admin: SupabaseClient): Promise<{ settledCount: number; skipped: number }> {
+  const { data: pendingBets, error: pendingError } = await admin
+    .from('paper_bets')
+    .select('id, race_id, runner_id, stake, tab_decimal_odds, bet_type')
+    .eq('status', 'PENDING')
+    .eq('source', 'internal')
+  if (pendingError) throw new Error(`Failed to load pending internal bets: ${pendingError.message}`)
+  if (!pendingBets?.length) return { settledCount: 0, skipped: 0 }
+
+  const raceIds = [...new Set(pendingBets.map((b) => b.race_id as string))]
+  const { data: races, error: racesError } = await admin.from('races').select('id, status').in('id', raceIds)
+  if (racesError) throw new Error(`Failed to load races for internal bet settlement: ${racesError.message}`)
+  const raceStatusById = new Map((races ?? []).map((r) => [r.id as string, r.status as string]))
+
+  const settleableRaceIds = raceIds.filter((id) => raceStatusById.get(id) === 'completed')
+  const entriesByRace = new Map<string, { horse_id: string; finishing_position: number | null; status: string }[]>()
+  if (settleableRaceIds.length > 0) {
+    const { data: entries, error: entriesError } = await admin
+      .from('race_entries')
+      .select('race_id, horse_id, finishing_position, status')
+      .in('race_id', settleableRaceIds)
+    if (entriesError) throw new Error(`Failed to load race entries for internal bet settlement: ${entriesError.message}`)
+    for (const entry of entries ?? []) {
+      const list = entriesByRace.get(entry.race_id as string) ?? []
+      list.push(entry as { horse_id: string; finishing_position: number | null; status: string })
+      entriesByRace.set(entry.race_id as string, list)
+    }
+  }
+
+  let settledCount = 0
+  let skipped = 0
+  for (const bet of pendingBets) {
+    const raceId = bet.race_id as string
+    const raceStatus = raceStatusById.get(raceId)
+
+    if (raceStatus === 'cancelled') {
+      const { returnAmount, profit } = settleBet({ stake: bet.stake as number, decimalOdds: bet.tab_decimal_odds as number }, 'ABANDONED')
+      if (await settleBetInDb(admin, bet.id as string, 'ABANDONED', returnAmount, profit)) settledCount += 1
+      continue
+    }
+    if (raceStatus !== 'completed') {
+      skipped += 1
+      continue
+    }
+
+    const raceEntries = entriesByRace.get(raceId) ?? []
+    const entry = raceEntries.find((e) => e.horse_id === bet.runner_id)
+    if (!entry || (entry.finishing_position == null && entry.status !== 'scratched')) {
+      skipped += 1
+      continue
+    }
+
+    let outcome: Exclude<BetResult, 'PENDING'>
+    if (entry.status === 'scratched') {
+      outcome = 'SCRATCHED'
+    } else if (bet.bet_type === 'WIN') {
+      outcome = entry.finishing_position === 1 ? 'WON' : 'LOST'
+    } else {
+      const activeFieldSize = raceEntries.filter((e) => e.status !== 'scratched').length
+      const paidPlaces = paidPlacesCount('horse', activeFieldSize)
+      outcome = (entry.finishing_position as number) <= paidPlaces ? 'WON' : 'LOST'
+    }
+
+    const { returnAmount, profit } = settleBet({ stake: bet.stake as number, decimalOdds: bet.tab_decimal_odds as number }, outcome)
+    if (await settleBetInDb(admin, bet.id as string, outcome, returnAmount, profit)) settledCount += 1
+  }
+
+  return { settledCount, skipped }
 }
 
 /** Latest recorded PuntersEdge credit usage, or null if none has been recorded yet. */

@@ -3,21 +3,25 @@ import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getPuntersEdgeClient } from '@/lib/puntersedge/client'
 import { settleBet } from '@/lib/betting/paper-wallet'
-import { getPendingBetsForRace, hasSettleableBets, settleBetInDb } from '@/lib/paper-betting/repository'
+import { getPendingBetsForRace, hasSettleableBets, settleBetInDb, settleInternalBets } from '@/lib/paper-betting/repository'
 
 /**
+ * Settles every PENDING paper bet: internal-source (home-page horse) bets first, resolved
+ * directly from the app's own races/race_entries tables (no external API call), then
+ * PuntersEdge-source bets via the results() API.
+ *
  * Fetches FINAL results (never interim - placings can still change on protest) and settles every
- * matching PENDING paper bet. Matches on the runner's stable number within the race, never on
- * name. `placings` is just the finishing order (commonly top 4) and is NOT reliable for "did this
- * runner pay a place dividend" - e.g. greyhound racing standardly only pays 1st-2nd place
- * regardless of field size, so a 3rd/4th-place `placings` entry never has a PLC dividend line
- * (verified live 2026-09-04). A PLACE bet only wins if its runner has a `market: 'PLC'` line in
- * `dividends.straight`; a runner that is neither scratched nor place-dividend-paying on a FINAL
+ * matching PENDING PuntersEdge paper bet. Matches on the runner's stable number within the race,
+ * never on name. `placings` is just the finishing order (commonly top 4) and is NOT reliable for
+ * "did this runner pay a place dividend" - e.g. greyhound racing standardly only pays 1st-2nd
+ * place regardless of field size, so a 3rd/4th-place `placings` entry never has a PLC dividend
+ * line (verified live 2026-09-04). A PLACE bet only wins if its runner has a `market: 'PLC'` line
+ * in `dividends.straight`; a runner that is neither scratched nor place-dividend-paying on a FINAL
  * result definitively lost the place bet.
  *
- * Skips the PuntersEdge API call entirely (saving 2 credits) when there is no PENDING bet whose
- * race has jumped yet - most scheduled polls have nothing to settle, and each results() call costs
- * credits regardless of how many (if any) results it returns.
+ * Skips the PuntersEdge API call entirely (saving 2 credits) when there is no PENDING PuntersEdge
+ * bet whose race has jumped yet - most scheduled polls have nothing to settle, and each results()
+ * call costs credits regardless of how many (if any) results it returns.
  */
 export async function POST(request: Request) {
   if (!(await hasAdminSession())) {
@@ -38,14 +42,17 @@ export async function POST(request: Request) {
   const client = getPuntersEdgeClient()
 
   try {
+    const internalResult = await settleInternalBets(admin)
+
     if (!(await hasSettleableBets(admin))) {
       return NextResponse.json({
         success: true,
         resultsChecked: 0,
-        settledCount: 0,
+        settledCount: internalResult.settledCount,
         skippedNoPendingBets: 0,
         skippedApiCall: true,
-        message: 'No pending bets past their jump time - skipped the PuntersEdge results call',
+        internalSettledCount: internalResult.settledCount,
+        message: `No PuntersEdge pending bets past their jump time - skipped the PuntersEdge results call (settled ${internalResult.settledCount} internal bet${internalResult.settledCount === 1 ? '' : 's'})`,
       })
     }
 
@@ -85,12 +92,14 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       resultsChecked: results.length,
-      settledCount,
+      settledCount: settledCount + internalResult.settledCount,
       skippedNoPendingBets,
-      message: `Checked ${results.length} final result${results.length === 1 ? '' : 's'}, settled ${settledCount} paper bet${settledCount === 1 ? '' : 's'}`,
+      internalSettledCount: internalResult.settledCount,
+      message: `Checked ${results.length} final result${results.length === 1 ? '' : 's'}, settled ${settledCount} PuntersEdge bet${settledCount === 1 ? '' : 's'} + ${internalResult.settledCount} internal bet${internalResult.settledCount === 1 ? '' : 's'}`,
     })
   } catch (error) {
     console.error('PuntersEdge settlement failed', error)
     return NextResponse.json({ success: false, message: 'Paper bet settlement failed' }, { status: 500 })
   }
 }
+
