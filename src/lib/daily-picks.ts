@@ -3,9 +3,6 @@ import { classifyRaceType } from '@/lib/reliability-analysis'
 import { computeReliabilityScore, CLASSIFICATION_RANK, type CalibrationTable, type ReliabilityResult } from '@/lib/reliability-score'
 import type { HistoricalRaceFeatures } from '@/lib/similar-races'
 
-/** Standalone "high conviction" threshold on raw model win probability - shared by the home page's picks list and its auto-bet counterpart so the two can never drift apart. */
-export const MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION = 0.35
-
 export interface DailyPick {
   race: RaceWithPrediction
   horse: PredictedHorse

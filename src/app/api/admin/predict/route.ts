@@ -6,6 +6,8 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { parseStandardTimeDifference } from '@/lib/sectional-speed'
 import type { RaceEntryWithHorse } from '@/lib/types'
 import { hasAdminSession } from '@/lib/admin-auth'
+import { getTabPricesForInternalRaces, type InternalRaceRef, type TabPrice } from '@/lib/paper-betting/internal-tab-odds'
+import { normalizeHorseName } from '@/lib/paper-betting/fundamentals-bridge'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -104,16 +106,26 @@ export async function POST(request: Request) {
     const runFullSuite = options.mode === 'all' || options.mode === 'retrospective'
 
     const supabase = createAdminClient()
-    const raceSelect = 'id, racecourse_id, race_datetime, distance_m, track_condition, race_class'
-    let races: Array<{ id: string; racecourse_id: string; race_datetime: string; distance_m: number | null; track_condition: string | null; race_class: string | null }>
+    const raceSelect = 'id, racecourse_id, race_number, race_datetime, distance_m, track_condition, race_class, racecourses(name)'
+    let races: Array<{ id: string; racecourse_id: string; race_number: number; race_datetime: string; distance_m: number | null; track_condition: string | null; race_class: string | null; racecourses: { name: string } | { name: string }[] | null }>
     if (options.raceId) {
       const { data, error } = await withRetry(() => supabase.from('races').select(raceSelect).eq('status', status).eq('id', options.raceId!))
       if (error) throw error
       races = data ?? []
     } else if (status === 'upcoming') {
-      const { data, error } = await withRetry(() => supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: true }).limit(50))
-      if (error) throw error
-      races = data ?? []
+      // Was a flat .limit(50) - fine when this repo only scraped VIC, but national multi-state
+      // scraping (100-270+ races/day, up to 3 days forward already in the DB as 'upcoming') meant
+      // only the earliest ~50 races chronologically ever got predictions - every afternoon/evening
+      // race nationwide silently never got one from the nightly run. Paginate through all of them,
+      // same pattern as the retrospective branch below.
+      races = []
+      const pageSize = 1_000
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await withRetry(() => supabase.from('races').select(raceSelect).eq('status', status).order('race_datetime', { ascending: true }).range(offset, offset + pageSize - 1))
+        if (error) throw error
+        races.push(...(data ?? []))
+        if (!data || data.length < pageSize) break
+      }
     } else {
       // Retrospective backfills cover every completed race - Supabase caps an unpaginated
       // select at 1000 rows, which silently truncated this to only the most recent races.
@@ -238,6 +250,17 @@ export async function POST(request: Request) {
     const predictedRaceIds: string[] = []
     const suffix = options.mode === 'retrospective' ? '-retrospective' : ''
 
+    // Real TAB Fixed prices only ever apply to races that haven't jumped yet - only bother for
+    // 'upcoming' predict runs, never retrospective/completed backfills.
+    let tabPricesByRace = new Map<string, Map<string, TabPrice>>()
+    if (status === 'upcoming') {
+      const raceRefs: InternalRaceRef[] = races.map((race) => {
+        const racecourse = Array.isArray(race.racecourses) ? race.racecourses[0] : race.racecourses
+        return { id: race.id, racecourseName: racecourse?.name ?? '', raceNumber: race.race_number, raceDatetime: race.race_datetime }
+      }).filter((ref) => ref.racecourseName !== '')
+      tabPricesByRace = await getTabPricesForInternalRaces(supabase, raceRefs)
+    }
+
     for (const race of races) {
       const typedEntries = (entriesByRace.get(race.id) ?? [])
         .filter((entry) => entry.status !== 'scratched')
@@ -246,7 +269,17 @@ export async function POST(request: Request) {
         continue
       }
 
-      const oddsByHorse = Object.fromEntries(typedEntries.map((entry) => [entry.horse_id, bestOdds(entry)]))
+      const tabPricesForRace = tabPricesByRace.get(race.id)
+      const oddsByHorse = Object.fromEntries(typedEntries.map((entry) => {
+        const racingComOdds = bestOdds(entry)
+        const tabPrice = entry.horses ? tabPricesForRace?.get(normalizeHorseName(entry.horses.name)) : undefined
+        return [entry.horse_id, {
+          win: tabPrice?.win ?? racingComOdds.win,
+          place: tabPrice?.place ?? racingComOdds.place,
+          winSource: tabPrice?.win != null ? 'tab' as const : 'racing_com' as const,
+          placeSource: tabPrice?.place != null ? 'tab' as const : 'racing_com' as const,
+        }]
+      }))
 
       const input = {
         race: {

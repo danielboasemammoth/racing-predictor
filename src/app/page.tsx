@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { getDailyPicks, getTomorrowPicks, MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
+import { getDailyPicks, getTomorrowPicks, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { loadReliabilityContext } from '@/lib/reliability-context'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
@@ -102,16 +102,12 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   baseFilters.calibration = reliabilityContext?.calibration ?? null
   baseFilters.history = reliabilityContext?.history ?? null
 
-  // Two independent, uncapped (no top-N limit) lists: the Reliability-gated conservative
-  // shortlist (Average+ classification, no active veto) and a standalone high-conviction list
-  // gated purely on raw model win probability, bypassing the Reliability gate entirely.
+  // Uncapped (no top-N limit) Reliability-gated conservative shortlist (Average+
+  // classification, no active veto).
   const conservativeFilters: DailyPicksFilterOptions = { ...baseFilters }
-  const highConvictionFilters: DailyPicksFilterOptions = { ...baseFilters, minWinProbability: MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, skipQualificationGate: true }
 
   const conservativePicks = byRaceStartTime(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
   const tomorrowConservativePicks = byRaceStartTime(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
-  const dailyPicks = byRaceStartTime(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters))
-  const tomorrowPicks = byRaceStartTime(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters))
 
   function filterLink(overrides: Partial<{ minReliability?: string; maidenOnly?: string }>) {
     const next = new URLSearchParams()
@@ -214,55 +210,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               </details>
             )}
 
-            {dailyPicks.length > 0 ? (
-              <section aria-labelledby="daily-picks-title" className="border-y border-indigo-200 bg-indigo-50 px-4 py-6 sm:px-6">
-                <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
-                  <div>
-                    <p className="text-xs font-bold uppercase text-indigo-800">High-conviction picks</p>
-                    <h2 id="daily-picks-title" className="mt-1 text-xl font-bold text-slate-900">Today&apos;s highest-conviction picks</h2>
-                    <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                      Every race today with a model win probability above {(MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION * 100).toFixed(0)}%, ranked by win and top-three probability, separation from the next runner, and pre-race form depth. Payout is not considered.
-                    </p>
-                  </div>
-                  <p className="text-xs text-slate-500">Relative model confidence, not a guarantee.</p>
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  {dailyPicks.map((pick, index) => (
-                    <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Today" accent="indigo" />
-                  ))}
-                </div>
-              </section>
-            ) : reliabilityContext ? (
-              <section aria-labelledby="daily-picks-title" className="border-y border-slate-200 bg-slate-50 px-4 py-6 sm:px-6">
-                <p className="text-xs font-bold uppercase text-slate-500">High-conviction picks</p>
-                <h2 id="daily-picks-title" className="mt-1 text-lg font-bold text-slate-900">No high-conviction picks currently qualify</h2>
-                <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                  No upcoming race today has a model win probability above {(MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION * 100).toFixed(0)}%. This is a normal outcome, not an error - the list is never filled just to have content.
-                </p>
-              </section>
-            ) : null}
-
-            {tomorrowPicks.length > 0 && (
-              <details className="border border-slate-200 bg-white px-4 py-4 sm:px-6">
-                <summary className="cursor-pointer list-none">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-bold uppercase text-slate-500">High-conviction picks</p>
-                      <h2 className="mt-1 text-lg font-bold text-slate-900">Tomorrow&apos;s highest-conviction picks</h2>
-                    </div>
-                    <span className="text-sm font-medium text-teal-700">Show ▾</span>
-                  </div>
-                </summary>
-
-                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  {tomorrowPicks.map((pick, index) => (
-                    <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Tomorrow" accent="slate" />
-                  ))}
-                </div>
-              </details>
-            )}
-
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-900">Upcoming Races</h2>
               <span className="text-sm text-slate-600">{races.length} races</span>
@@ -358,7 +305,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                                 modelProbability={horse.win_probability ?? horse.confidence}
                                 modelVersion={race.prediction?.model_version ?? PRODUCTION_MODEL_VERSION}
                               />
-                              <p className="mt-1 text-[10px] text-slate-400">Recorded price (Racing.com feed - not a confirmed TAB/Betfair price)</p>
+                              <p className="mt-1 text-[10px] text-slate-400">
+                                {horse.win_odds_source === 'tab' ? 'Real TAB Fixed Win price' : 'Recorded price (Racing.com feed - not a confirmed TAB/Betfair price)'}
+                              </p>
                             </div>
                           ) : null}
                         </div>
@@ -388,9 +337,33 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                         <p className="text-xs font-semibold uppercase text-slate-600">Value watch</p>
                         <div className="mt-2 flex flex-wrap gap-2">
                           {race.prediction.predictions.value_opportunities.slice(0, 3).map((opportunity) => (
-                            <span key={`${opportunity.horse_id}-${opportunity.market}`} className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-900">
-                              <strong>{opportunity.horse_name}</strong> · {opportunity.market} {(opportunity.probability * 100).toFixed(0)}% · ${opportunity.return_10.toFixed(2)} / $10
+                            <span
+                              key={`${opportunity.horse_id}-${opportunity.market}`}
+                              className={`rounded-md border px-2.5 py-1.5 text-xs ${opportunity.market === 'place' ? 'border-sky-200 bg-sky-50 text-sky-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}
+                            >
+                              <strong>{opportunity.horse_name}</strong> · {opportunity.market === 'place' ? 'PLACE VALUE' : 'win'} {(opportunity.probability * 100).toFixed(0)}% · ${opportunity.return_10.toFixed(2)} / $10
                             </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {race.prediction.predictions.place_hedges?.length ? (
+                      <div className="mt-3 border-t border-slate-100 pt-3">
+                        <p className="text-xs font-semibold uppercase text-slate-600">Place hedge opportunities</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Split a stake across these runners for PLACE (proportional to their odds) so whichever one places pays out the same amount. Both/all can place at once - this is not a guaranteed-win bet, it spreads risk across more than one runner.
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          {race.prediction.predictions.place_hedges.slice(0, 2).map((hedge, hedgeIndex) => (
+                            <div key={hedgeIndex} className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-900">
+                              <p className="font-semibold">
+                                {hedge.horses.map((horse) => `${horse.horse_name} (${(horse.stake_share * 100).toFixed(0)}% of stake @ $${horse.place_odds.toFixed(2)})`).join(' + ')}
+                              </p>
+                              <p className="mt-1">
+                                {(hedge.prob_at_least_one_places * 100).toFixed(0)}% chance at least one places · {(hedge.combined_edge * 100).toFixed(0)}% combined edge · ${(hedge.guaranteed_profit_per_10 + 10).toFixed(2)} return / $10 if exactly one hits
+                              </p>
+                            </div>
                           ))}
                         </div>
                       </div>

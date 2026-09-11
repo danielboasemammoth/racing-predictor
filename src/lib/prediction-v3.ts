@@ -1,6 +1,7 @@
 import type { JsonValue, PredictedHorse, PredictionPayload, RaceEntryWithHorse } from '@/lib/types'
 import { averageSectionalRating } from '@/lib/sectional-speed'
 import { harvillePlaceProbabilities } from '@/lib/betting/harville'
+import { findPlaceHedgeOpportunities } from '@/lib/betting/place-hedge'
 import { paidPlacesCount } from '@/lib/betting/place-rules'
 
 export interface PredictionModelConfig {
@@ -146,6 +147,9 @@ export interface HistoricalStart {
 export interface EntryOdds {
   win?: number
   place?: number
+  /** Whether win/place came from a real TAB Fixed Win/Place price (via the PuntersEdge bridge) or Racing.com's own recorded (unconfirmed) feed - see internal-tab-odds.ts. Defaults to 'racing_com' when omitted. */
+  winSource?: 'tab' | 'racing_com'
+  placeSource?: 'tab' | 'racing_com'
 }
 
 export interface ContextualPredictionInput {
@@ -429,8 +433,8 @@ export function predictContextualRace(
       confidence: entry.winProbability,
       win_probability: entry.winProbability,
       top3_probability: entry.top3Probability,
-      ...(entry.odds.win ? { win_odds: entry.odds.win, win_return_10: entry.odds.win * 10, win_value_edge: winEdge } : {}),
-      ...(entry.odds.place ? { place_odds: entry.odds.place, place_return_10: entry.odds.place * 10, place_value_edge: placeEdge } : {}),
+      ...(entry.odds.win ? { win_odds: entry.odds.win, win_return_10: entry.odds.win * 10, win_value_edge: winEdge, win_odds_source: entry.odds.winSource ?? 'racing_com' } : {}),
+      ...(entry.odds.place ? { place_odds: entry.odds.place, place_return_10: entry.odds.place * 10, place_value_edge: placeEdge, place_odds_source: entry.odds.placeSource ?? 'racing_com' } : {}),
       value_rating: bestEdge >= 0.2 ? 'strong' : bestEdge > 0 ? 'positive' : 'neutral',
     }
   })
@@ -450,6 +454,16 @@ export function predictContextualRace(
       ? [{ horse_id: horse.horse_id, horse_name: horse.horse_name, market: 'place' as const, probability: horse.top3_probability ?? 0, odds: horse.place_odds, return_10: horse.place_return_10!, value_edge: horse.place_value_edge! }]
       : []),
   ]).sort((left, right) => right.value_edge - left.value_edge)
+  const placeHedges = findPlaceHedgeOpportunities(
+    calibrated.map((entry) => ({
+      horseId: entry.horseId,
+      horseName: entry.horseName,
+      winProbability: entry.winProbability,
+      placeProbability: entry.top3Probability,
+      placeOdds: entry.odds.place,
+    })),
+    paidPlacesCount('horse', calibrated.length),
+  )
   const featureSnapshots = Object.fromEntries(calibrated.map((entry) => [entry.horseId, {
     features: Object.fromEntries(Object.entries(entry.features)),
     recent_starts: entry.recentStarts.map((start) => ({
@@ -478,6 +492,18 @@ export function predictContextualRace(
         notable_value: trifectaProbability >= 0.02 && 10 / trifectaProbability >= 100,
       },
       value_opportunities: valueOpportunities.slice(0, 5),
+      place_hedges: placeHedges.map((hedge) => ({
+        horses: hedge.horses.map((horse) => ({
+          horse_id: horse.horseId,
+          horse_name: horse.horseName,
+          place_odds: horse.placeOdds,
+          place_probability: horse.placeProbability,
+          stake_share: horse.stakeShare,
+        })),
+        combined_edge: hedge.combinedEdge,
+        prob_at_least_one_places: hedge.probAtLeastOnePlaces,
+        guaranteed_profit_per_10: hedge.guaranteedProfitPer10,
+      })),
       feature_snapshots: featureSnapshots,
     },
     confidence_scores: {

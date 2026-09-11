@@ -311,11 +311,11 @@ export default async function RaceDetailPage({ params }: { params: Promise<{ id:
             <h2 className="text-lg font-semibold text-slate-900">Model Edge</h2>
             <p className="mt-1 text-sm text-slate-600">
               A separate question from Reliability: is this pick priced attractively, not just likely to win.
-              Uses the best price recorded in Racing.com&apos;s own feed - not a confirmed TAB Fixed Win or Betfair SP.
+              Uses a real TAB Fixed Win price when PuntersEdge has matched and priced this race, otherwise the best price recorded in Racing.com&apos;s own feed (not a confirmed TAB Fixed Win or Betfair SP).
             </p>
             <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
               <div>
-                <p className="text-xs text-slate-500">Best recorded price</p>
+                <p className="text-xs text-slate-500">Best available price</p>
                 <p className="mt-0.5 text-lg font-bold text-slate-900">${raceReliability.modelEdge.bestRecordedOdds.toFixed(2)}</p>
               </div>
               <div>

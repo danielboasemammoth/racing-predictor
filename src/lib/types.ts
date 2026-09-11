@@ -88,6 +88,9 @@ export interface PredictedHorse {
   place_return_10?: number
   win_value_edge?: number
   place_value_edge?: number
+  /** Whether win_odds/place_odds is a real TAB Fixed price (via the PuntersEdge bridge) or Racing.com's own recorded (unconfirmed) feed. Absent on older stored predictions - treat as 'racing_com'. */
+  win_odds_source?: 'tab' | 'racing_com'
+  place_odds_source?: 'tab' | 'racing_com'
   value_rating?: 'strong' | 'positive' | 'neutral'
 }
 
@@ -110,6 +113,13 @@ export interface PredictionPayload {
     odds: number
     return_10: number
     value_edge: number
+  }>
+  /** Positive-edge multi-runner PLACE dutches - see src/lib/betting/place-hedge.ts. Never manufactured just to have content; an empty array is a normal outcome. */
+  place_hedges?: Array<{
+    horses: { horse_id: string; horse_name: string; place_odds: number; place_probability: number; stake_share: number }[]
+    combined_edge: number
+    prob_at_least_one_places: number
+    guaranteed_profit_per_10: number
   }>
   feature_snapshots?: Record<string, JsonValue>
   model_components?: Array<{

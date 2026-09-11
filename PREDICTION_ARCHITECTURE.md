@@ -67,6 +67,18 @@ PuntersEdge system). A genuinely independent PLACE classifier was built and eval
 experiment (`scripts/train-place-model.ts`) - see MODEL_RESEARCH.md for the out-of-sample result
 and whether it has been promoted.
 
+## Multi-runner PLACE hedging
+
+`src/lib/betting/place-hedge.ts` (added 2026-09-11) finds positive-edge multi-runner PLACE
+dutches - stakes split proportional to 1/odds so whichever ONE hedge member places, the payout is
+identical. Unlike WIN dutching, PLACE markets pay multiple runners at once, so the combined
+expected value only needs each runner's own marginal place probability (linearity of expectation),
+while the "chance at least one places" headline stat needs the genuine JOINT place probability -
+computed via `jointPlaceProbability()`, an extension of the same Plackett-Luce model
+`harvillePlaceProbabilities()` already uses, not an independent/approximate estimate. Wired into
+`prediction-v3.ts` as `predictions.place_hedges`, surfaced on the home page per race. Only ever
+returns combinations with a genuinely positive combined edge.
+
 ## Data leakage audit (spec section 2)
 
 Every one of the 13 features is derived exclusively from `availableHistory` (starts strictly
@@ -93,16 +105,14 @@ CALIBRATION.md for the full mechanics.
 picks: a race only qualifies for that gate if a Reliability Score was computed, has no active
 hard veto, and classifies at `Average` or above. There is no Top-N cap - `getDailyPicks(...,
 limit)` only caps the DISPLAYED count, the gate itself is threshold-based, not count-based.
-As of 2026-09-11, the home page's "Today's/Tomorrow's highest-conviction picks" section no
-longer uses this Reliability gate by default - it uses a standalone
-`minWinProbability`/`MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION` (0.35) filter instead
-(`skipQualificationGate: true`), showing every qualifying race uncapped. The Reliability gate
-itself is untouched and still selectable via the "Reliability >= 80" filter toggle/`minReliability`
-option - both filters can be combined via `DailyPicksFilterOptions`.
-A separate "Today's/Tomorrow's conservative picks" section (also uncapped) was restored the same
-day, using the Reliability gate directly (no `skipQualificationGate`/`minWinProbability`) - the
-home page now shows BOTH lists side by side (conservative shortlist AND high-conviction), each
-independently uncapped.
+As of 2026-09-11, the home page's "Today's/Tomorrow's conservative picks" section is uncapped
+(no top-N limit), ranked by Reliability Score, using the Reliability gate directly (no
+`skipQualificationGate`/`minWinProbability`).
+A standalone "highest-conviction picks" list gated purely on raw model win probability > 35%
+(bypassing the Reliability gate) was tried the same day and rolled back shortly after - a raw
+win-probability threshold with no historical calibration behind it wasn't meaningfully better
+than just backing the favourite. The `minWinProbability` filter option on
+`DailyPicksFilterOptions` still exists (generic, tested) but nothing in the app currently sets it.
 
 ## Two separate systems - do not conflate
 

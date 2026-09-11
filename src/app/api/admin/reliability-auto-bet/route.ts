@@ -4,10 +4,10 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { autoPlaceReliabilityBets } from '@/lib/paper-betting/reliability-auto-bet'
 
 /**
- * Auto-places WIN paper bets for today's + tomorrow's picks that qualify via either the
- * Reliability Score shortlist OR the standalone high-conviction win-probability list (see
- * reliability-auto-bet.ts) - the internal-model counterpart to the PuntersEdge sync route's
- * auto-betting. Run this after Refresh Reliability Calibration so it reads fresh calibration data.
+ * Auto-places WIN paper bets for today's + tomorrow's picks that qualify via the Reliability
+ * Score shortlist (see reliability-auto-bet.ts) - the internal-model counterpart to the
+ * PuntersEdge sync route's auto-betting. Run this after Refresh Reliability Calibration so it
+ * reads fresh calibration data.
  */
 export async function POST() {
   if (!await hasAdminSession()) {
