@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { loadReliabilityContext } from '@/lib/reliability-context'
-import { getDailyPicks, getTomorrowPicks, type DailyPick } from '@/lib/daily-picks'
+import { getDailyPicks, getTomorrowPicks, MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, type DailyPick } from '@/lib/daily-picks'
 import { recommendedStake, type StakingMethod } from '@/lib/betting/kelly'
 import { getOrCreateAccount, placeBet } from '@/lib/paper-betting/repository'
 
@@ -24,15 +24,17 @@ export interface ReliabilityAutoBetSummary {
 }
 
 /**
- * Auto-places WIN paper bets (source='internal', mode='AUTO') for today's + tomorrow's Reliability
- * Score shortlist picks that meet MIN_RELIABILITY_FOR_AUTO_BET - the internal-model counterpart to
- * the PuntersEdge sync route's auto-betting, previously the ONLY thing that ever auto-placed a bet.
- * Reuses the exact same qualification gate as the home page's Conservative Shortlist
- * (getDailyPicks/getTomorrowPicks with skipQualificationGate left false) so "shown as high
- * reliability" and "eligible for an auto bet" can never silently drift apart.
- * Idempotent: `auto-reliability:{raceId}:{horseId}:WIN` is stable regardless of which day's run
- * first sees a given race (e.g. surfaced as "tomorrow" then again as "today"), so placeBet's
- * unique-key guard makes a repeat run a safe no-op rather than a double stake.
+ * Auto-places WIN paper bets (source='internal', mode='AUTO') for today's + tomorrow's picks that
+ * qualify via EITHER of two independent gates: the Reliability Score shortlist
+ * (MIN_RELIABILITY_FOR_AUTO_BET, matching the home page's "Reliability >= 80" toggle) or the
+ * standalone high-conviction win-probability list (MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION,
+ * matching the home page's "Today's/Tomorrow's highest-conviction picks" section). A pick
+ * qualifying under both is only ever bet once (deduped by race+horse) so the two gates can never
+ * double-stake the same selection.
+ * Idempotent per gate: `auto-reliability:{raceId}:{horseId}:WIN` / `auto-probability:{raceId}:
+ * {horseId}:WIN` are stable regardless of which day's run first sees a given race (e.g. surfaced
+ * as "tomorrow" then again as "today"), so placeBet's unique-key guard makes a repeat run a safe
+ * no-op rather than a double stake.
  */
 export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new Date()): Promise<ReliabilityAutoBetSummary> {
   const summary: ReliabilityAutoBetSummary = {
@@ -47,16 +49,37 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
   if (!reliabilityContext) return summary // no published calibration yet - nothing to gate on
 
   const races = await getUpcomingRaces(admin)
-  const filters = { calibration: reliabilityContext.calibration, history: reliabilityContext.history, minReliability: MIN_RELIABILITY_FOR_AUTO_BET }
-  const picks: DailyPick[] = [
-    ...getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, filters),
-    ...getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, filters),
+  const reliabilityFilters = { calibration: reliabilityContext.calibration, history: reliabilityContext.history, minReliability: MIN_RELIABILITY_FOR_AUTO_BET }
+  const probabilityFilters = { calibration: reliabilityContext.calibration, history: reliabilityContext.history, minWinProbability: MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, skipQualificationGate: true }
+
+  const reliabilityPicks = [
+    ...getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, reliabilityFilters),
+    ...getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, reliabilityFilters),
   ]
-  if (picks.length === 0) return summary
+  const probabilityPicks = [
+    ...getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, probabilityFilters),
+    ...getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, probabilityFilters),
+  ]
+
+  const seen = new Set<string>()
+  const qualified: { pick: DailyPick; idempotencyPrefix: string }[] = []
+  for (const pick of reliabilityPicks) {
+    const key = `${pick.race.id}:${pick.horse.horse_id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    qualified.push({ pick, idempotencyPrefix: 'auto-reliability' })
+  }
+  for (const pick of probabilityPicks) {
+    const key = `${pick.race.id}:${pick.horse.horse_id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    qualified.push({ pick, idempotencyPrefix: 'auto-probability' })
+  }
+  if (qualified.length === 0) return summary
 
   const account = await getOrCreateAccount(admin, 'default', DEFAULT_STARTING_BANKROLL)
 
-  for (const pick of picks) {
+  for (const { pick, idempotencyPrefix } of qualified) {
     const minutesToJump = (new Date(pick.race.race_datetime).getTime() - now.getTime()) / 60_000
     if (minutesToJump <= 0) continue // race has already jumped - never a valid new bet
 
@@ -90,7 +113,7 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
       expectedValue: null,
       confidenceLevel: null, // Reliability classification (e.g. "Excellent") isn't part of PuntersEdge's confidence_level enum - would violate the column's check constraint.
       minutesToJumpAtPlacement: minutesToJump,
-      idempotencyKey: `auto-reliability:${pick.race.id}:${pick.horse.horse_id}:WIN`,
+      idempotencyKey: `${idempotencyPrefix}:${pick.race.id}:${pick.horse.horse_id}:WIN`,
     })
     if (result.placed) summary.betsPlaced += 1
     else summary.skippedDuplicate += 1
@@ -98,3 +121,4 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
 
   return summary
 }
+

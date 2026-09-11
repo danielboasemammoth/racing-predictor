@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { getDailyPicks, getTomorrowPicks, type DailyPicksFilterOptions } from '@/lib/daily-picks'
+import { getDailyPicks, getTomorrowPicks, MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { loadReliabilityContext } from '@/lib/reliability-context'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
@@ -32,20 +32,81 @@ function getConfidenceColor(conf: number) {
   return 'text-red-700 bg-red-50'
 }
 
+function PickCard({ pick, index, dayLabel, accent }: { pick: DailyPick; index: number; dayLabel: string; accent: 'teal' | 'indigo' | 'slate' }) {
+  const border = accent === 'teal' ? 'border-teal-200 bg-white shadow-sm' : accent === 'indigo' ? 'border-indigo-200 bg-white shadow-sm' : 'border-slate-200 bg-slate-50'
+  const rankLabelColor = accent === 'teal' ? 'text-teal-700' : accent === 'indigo' ? 'text-indigo-700' : 'text-slate-500'
+  const badgeColor = accent === 'teal' ? 'bg-teal-700' : accent === 'indigo' ? 'bg-indigo-700' : 'bg-slate-600'
+  const reliabilityBadgeBg = accent === 'slate' ? 'bg-white' : 'bg-slate-100'
+
+  return (
+    <article className={`border p-5 ${border}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className={`text-xs font-bold uppercase ${rankLabelColor}`}>
+            {index === 0 ? `${dayLabel} · lowest risk` : `${dayLabel} · rank ${index + 1}`}
+          </p>
+          <h3 className="mt-1 text-lg font-bold text-slate-900">{pick.horse.horse_name}</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            {pick.race.racecourses?.name} · Race {pick.race.race_number}
+          </p>
+        </div>
+        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${badgeColor}`}>
+          {index + 1}
+        </span>
+      </div>
+
+      {pick.reliability && (
+        <p className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-semibold text-slate-700 ${reliabilityBadgeBg}`}>
+          Reliability {pick.reliability.score}/100 · {pick.reliability.classification}
+        </p>
+      )}
+
+      <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3">
+        <div>
+          <dt className="text-xs text-slate-500">Win probability</dt>
+          <dd className="mt-0.5 text-xl font-bold text-slate-900">{(pick.winProbability * 100).toFixed(0)}%</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-slate-500">Top-three probability</dt>
+          <dd className="mt-0.5 text-xl font-bold text-teal-800">{(pick.top3Probability * 100).toFixed(0)}%</dd>
+        </div>
+      </dl>
+
+      <div className="mt-3 space-y-1 text-xs text-slate-600">
+        <p>{(pick.leadOverSecond * 100).toFixed(1)} percentage-point lead over the next runner</p>
+        <p>{pick.historyStarts > 0 ? `${pick.historyStarts} prior starts analysed` : 'Limited prior-race history available'}</p>
+        <p>{formatDateTime(pick.race.race_datetime)} · {formatDistance(pick.race.distance_m || 0)}</p>
+      </div>
+
+      <Link href={`/races/${pick.race.id}`} className="mt-4 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900">
+        Review race details →
+      </Link>
+    </article>
+  )
+}
+
 export default async function Home({ searchParams }: { searchParams: Promise<{ minReliability?: string; maidenOnly?: string }> }) {
   const params = await searchParams
-  const filters: DailyPicksFilterOptions = {
+  const baseFilters: DailyPicksFilterOptions = {
     minReliability: params.minReliability ? Number(params.minReliability) : undefined,
     maidenOnly: params.maidenOnly === '1',
   }
 
   const supabase = await createClient()
   const [races, reliabilityContext] = await Promise.all([getUpcomingRaces(supabase), loadReliabilityContext(supabase)])
-  filters.calibration = reliabilityContext?.calibration ?? null
-  filters.history = reliabilityContext?.history ?? null
+  baseFilters.calibration = reliabilityContext?.calibration ?? null
+  baseFilters.history = reliabilityContext?.history ?? null
 
-  const dailyPicks = getDailyPicks(races, new Date(), 3, filters)
-  const tomorrowPicks = getTomorrowPicks(races, new Date(), 3, filters)
+  // Two independent, uncapped (no top-N limit) lists: the Reliability-gated conservative
+  // shortlist (Average+ classification, no active veto) and a standalone high-conviction list
+  // gated purely on raw model win probability, bypassing the Reliability gate entirely.
+  const conservativeFilters: DailyPicksFilterOptions = { ...baseFilters }
+  const highConvictionFilters: DailyPicksFilterOptions = { ...baseFilters, minWinProbability: MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, skipQualificationGate: true }
+
+  const conservativePicks = getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters)
+  const tomorrowConservativePicks = getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters)
+  const dailyPicks = getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters)
+  const tomorrowPicks = getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters)
 
   function filterLink(overrides: Partial<{ minReliability?: string; maidenOnly?: string }>) {
     const next = new URLSearchParams()
@@ -99,76 +160,80 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               </div>
             )}
 
-            {dailyPicks.length > 0 ? (
-              <section aria-labelledby="daily-picks-title" className="border-y border-teal-200 bg-teal-50 px-4 py-6 sm:px-6">
+            {conservativePicks.length > 0 ? (
+              <section aria-labelledby="conservative-picks-title" className="border-y border-teal-200 bg-teal-50 px-4 py-6 sm:px-6">
                 <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
                   <div>
                     <p className="text-xs font-bold uppercase text-teal-800">Daily conservative shortlist</p>
+                    <h2 id="conservative-picks-title" className="mt-1 text-xl font-bold text-slate-900">Today&apos;s conservative picks</h2>
+                    <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                      Every race today with a Reliability Score of Average or above and no active data-quality veto. Ranked by Reliability Score. Payout is not considered.
+                    </p>
+                  </div>
+                  <p className="text-xs text-slate-500">Relative model confidence, not a guarantee.</p>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  {conservativePicks.map((pick, index) => (
+                    <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Today" accent="teal" />
+                  ))}
+                </div>
+              </section>
+            ) : reliabilityContext ? (
+              <section aria-labelledby="conservative-picks-title" className="border-y border-slate-200 bg-slate-50 px-4 py-6 sm:px-6">
+                <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
+                <h2 id="conservative-picks-title" className="mt-1 text-lg font-bold text-slate-900">No conservative selections currently qualify</h2>
+                <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                  No upcoming race today has a prediction with sufficient evidence and a comparable historical cohort above baseline. This is a normal outcome, not an error - the shortlist is never filled just to have content.
+                </p>
+              </section>
+            ) : null}
+
+            {tomorrowConservativePicks.length > 0 && (
+              <details className="border border-slate-200 bg-white px-4 py-4 sm:px-6">
+                <summary className="cursor-pointer list-none">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
+                      <h2 className="mt-1 text-lg font-bold text-slate-900">Tomorrow&apos;s conservative picks</h2>
+                    </div>
+                    <span className="text-sm font-medium text-teal-700">Show ▾</span>
+                  </div>
+                </summary>
+
+                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  {tomorrowConservativePicks.map((pick, index) => (
+                    <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Tomorrow" accent="slate" />
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {dailyPicks.length > 0 ? (
+              <section aria-labelledby="daily-picks-title" className="border-y border-indigo-200 bg-indigo-50 px-4 py-6 sm:px-6">
+                <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-indigo-800">High-conviction picks</p>
                     <h2 id="daily-picks-title" className="mt-1 text-xl font-bold text-slate-900">Today&apos;s highest-conviction picks</h2>
                     <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                      Ranked by win and top-three probability, separation from the next runner, and pre-race form depth. Payout is not considered.
+                      Every race today with a model win probability above {(MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION * 100).toFixed(0)}%, ranked by win and top-three probability, separation from the next runner, and pre-race form depth. Payout is not considered.
                     </p>
-                    {dailyPicks.length < 3 && (
-                      <p className="mt-1 text-xs text-slate-500">Only {dailyPicks.length} eligible {dailyPicks.length === 1 ? 'race remains' : 'races remain'} today.</p>
-                    )}
                   </div>
                   <p className="text-xs text-slate-500">Relative model confidence, not a guarantee.</p>
                 </div>
 
                 <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
                   {dailyPicks.map((pick, index) => (
-                    <article key={pick.race.id} className="border border-teal-200 bg-white p-5 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-bold uppercase text-teal-700">
-                            {index === 0 ? 'Today · lowest risk' : `Today · rank ${index + 1}`}
-                          </p>
-                          <h3 className="mt-1 text-lg font-bold text-slate-900">{pick.horse.horse_name}</h3>
-                          <p className="mt-1 text-sm text-slate-600">
-                            {pick.race.racecourses?.name} · Race {pick.race.race_number}
-                          </p>
-                        </div>
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-700 text-sm font-bold text-white">
-                          {index + 1}
-                        </span>
-                      </div>
-
-                      {pick.reliability && (
-                        <p className="mt-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          Reliability {pick.reliability.score}/100 · {pick.reliability.classification}
-                        </p>
-                      )}
-
-                      <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3">
-                        <div>
-                          <dt className="text-xs text-slate-500">Win probability</dt>
-                          <dd className="mt-0.5 text-xl font-bold text-slate-900">{(pick.winProbability * 100).toFixed(0)}%</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs text-slate-500">Top-three probability</dt>
-                          <dd className="mt-0.5 text-xl font-bold text-teal-800">{(pick.top3Probability * 100).toFixed(0)}%</dd>
-                        </div>
-                      </dl>
-
-                      <div className="mt-3 space-y-1 text-xs text-slate-600">
-                        <p>{(pick.leadOverSecond * 100).toFixed(1)} percentage-point lead over the next runner</p>
-                        <p>{pick.historyStarts > 0 ? `${pick.historyStarts} prior starts analysed` : 'Limited prior-race history available'}</p>
-                        <p>{formatDateTime(pick.race.race_datetime)} · {formatDistance(pick.race.distance_m || 0)}</p>
-                      </div>
-
-                      <Link href={`/races/${pick.race.id}`} className="mt-4 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900">
-                        Review race details →
-                      </Link>
-                    </article>
+                    <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Today" accent="indigo" />
                   ))}
                 </div>
               </section>
             ) : reliabilityContext ? (
               <section aria-labelledby="daily-picks-title" className="border-y border-slate-200 bg-slate-50 px-4 py-6 sm:px-6">
-                <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
-                <h2 id="daily-picks-title" className="mt-1 text-lg font-bold text-slate-900">No conservative selections currently qualify</h2>
+                <p className="text-xs font-bold uppercase text-slate-500">High-conviction picks</p>
+                <h2 id="daily-picks-title" className="mt-1 text-lg font-bold text-slate-900">No high-conviction picks currently qualify</h2>
                 <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                  No upcoming race today has a prediction with sufficient evidence and a comparable historical cohort above baseline. This is a normal outcome, not an error - the shortlist is never filled just to have content.
+                  No upcoming race today has a model win probability above {(MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION * 100).toFixed(0)}%. This is a normal outcome, not an error - the list is never filled just to have content.
                 </p>
               </section>
             ) : null}
@@ -178,7 +243,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                 <summary className="cursor-pointer list-none">
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
+                      <p className="text-xs font-bold uppercase text-slate-500">High-conviction picks</p>
                       <h2 className="mt-1 text-lg font-bold text-slate-900">Tomorrow&apos;s highest-conviction picks</h2>
                     </div>
                     <span className="text-sm font-medium text-teal-700">Show ▾</span>
@@ -187,49 +252,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
 
                 <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
                   {tomorrowPicks.map((pick, index) => (
-                    <article key={pick.race.id} className="border border-slate-200 bg-slate-50 p-5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-bold uppercase text-slate-500">
-                            {index === 0 ? 'Tomorrow · lowest risk' : `Tomorrow · rank ${index + 1}`}
-                          </p>
-                          <h3 className="mt-1 text-lg font-bold text-slate-900">{pick.horse.horse_name}</h3>
-                          <p className="mt-1 text-sm text-slate-600">
-                            {pick.race.racecourses?.name} · Race {pick.race.race_number}
-                          </p>
-                        </div>
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-600 text-sm font-bold text-white">
-                          {index + 1}
-                        </span>
-                      </div>
-
-                      {pick.reliability && (
-                        <p className="mt-2 inline-block rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-700">
-                          Reliability {pick.reliability.score}/100 · {pick.reliability.classification}
-                        </p>
-                      )}
-
-                      <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-200 py-3">
-                        <div>
-                          <dt className="text-xs text-slate-500">Win probability</dt>
-                          <dd className="mt-0.5 text-xl font-bold text-slate-900">{(pick.winProbability * 100).toFixed(0)}%</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs text-slate-500">Top-three probability</dt>
-                          <dd className="mt-0.5 text-xl font-bold text-teal-800">{(pick.top3Probability * 100).toFixed(0)}%</dd>
-                        </div>
-                      </dl>
-
-                      <div className="mt-3 space-y-1 text-xs text-slate-600">
-                        <p>{(pick.leadOverSecond * 100).toFixed(1)} percentage-point lead over the next runner</p>
-                        <p>{pick.historyStarts > 0 ? `${pick.historyStarts} prior starts analysed` : 'Limited prior-race history available'}</p>
-                        <p>{formatDateTime(pick.race.race_datetime)} · {formatDistance(pick.race.distance_m || 0)}</p>
-                      </div>
-
-                      <Link href={`/races/${pick.race.id}`} className="mt-4 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900">
-                        Review race details →
-                      </Link>
-                    </article>
+                    <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Tomorrow" accent="slate" />
                   ))}
                 </div>
               </details>

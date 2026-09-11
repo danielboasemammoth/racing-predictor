@@ -3,6 +3,9 @@ import { classifyRaceType } from '@/lib/reliability-analysis'
 import { computeReliabilityScore, CLASSIFICATION_RANK, type CalibrationTable, type ReliabilityResult } from '@/lib/reliability-score'
 import type { HistoricalRaceFeatures } from '@/lib/similar-races'
 
+/** Standalone "high conviction" threshold on raw model win probability - shared by the home page's picks list and its auto-bet counterpart so the two can never drift apart. */
+export const MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION = 0.35
+
 export interface DailyPick {
   race: RaceWithPrediction
   horse: PredictedHorse
@@ -20,6 +23,8 @@ export interface DailyPicksFilterOptions {
   calibration?: CalibrationTable | null
   history?: HistoricalRaceFeatures[] | null
   minReliability?: number
+  /** Standalone high-conviction filter on raw model win probability, independent of the Reliability Score gate. */
+  minWinProbability?: number
   maidenOnly?: boolean
   /** Escape hatch for callers that want the raw candidate list without the default qualification gate (e.g. an admin/debug view). Never set true for the public conservative shortlist. */
   skipQualificationGate?: boolean
@@ -85,6 +90,7 @@ export function candidatesForDate(races: RaceWithPrediction[], dateKey: string, 
 
   const filtered = candidates.filter((pick) => {
     if (options.minReliability !== undefined && (pick.reliability?.score ?? -1) < options.minReliability) return false
+    if (options.minWinProbability !== undefined && pick.winProbability < options.minWinProbability) return false
     if (options.maidenOnly && pick.raceType !== 'maiden' && pick.raceType !== 'super-maiden') return false
     // Default qualification gate (spec Parts 20-21): a conservative/high-conviction shortlist must
     // be allowed to contain ZERO picks rather than always filling with the top N regardless of

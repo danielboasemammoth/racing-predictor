@@ -128,6 +128,15 @@ describe('daily conservative picks', () => {
     expect(picks.map((pick) => pick.race.id)).toEqual(['maiden-race'])
   })
 
+  it('filters standalone by minWinProbability, bypassing the Reliability Score gate entirely', () => {
+    const picks = getDailyPicks([
+      race('high-conviction', '2026-08-16T03:00:00Z', 0.4, 0.75, 0.1, 3),
+      race('low-conviction', '2026-08-16T04:00:00Z', 0.2, 0.5, 0.1, 3),
+    ], new Date('2026-08-16T01:00:00Z'), Number.MAX_SAFE_INTEGER, { minWinProbability: 0.35, skipQualificationGate: true })
+
+    expect(picks.map((pick) => pick.race.id)).toEqual(['high-conviction'])
+  })
+
   it('defaults to zero picks when nothing has been evaluated for reliability (spec Parts 20-21)', () => {
     const picks = getDailyPicks([
       race('strong', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2),

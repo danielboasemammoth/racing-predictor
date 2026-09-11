@@ -89,10 +89,20 @@ CALIBRATION.md for the full mechanics.
 
 ## NO PREDICTION support
 
-`src/lib/daily-picks.ts`'s qualification gate can and does return **zero** picks: a race only
-qualifies for the home page's Conservative Shortlist if a Reliability Score was computed, has no
-active hard veto, and classifies at `Average` or above. There is no Top-N cap - `getDailyPicks(...,
+`src/lib/daily-picks.ts`'s Reliability-based qualification gate can and does return **zero**
+picks: a race only qualifies for that gate if a Reliability Score was computed, has no active
+hard veto, and classifies at `Average` or above. There is no Top-N cap - `getDailyPicks(...,
 limit)` only caps the DISPLAYED count, the gate itself is threshold-based, not count-based.
+As of 2026-09-11, the home page's "Today's/Tomorrow's highest-conviction picks" section no
+longer uses this Reliability gate by default - it uses a standalone
+`minWinProbability`/`MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION` (0.35) filter instead
+(`skipQualificationGate: true`), showing every qualifying race uncapped. The Reliability gate
+itself is untouched and still selectable via the "Reliability >= 80" filter toggle/`minReliability`
+option - both filters can be combined via `DailyPicksFilterOptions`.
+A separate "Today's/Tomorrow's conservative picks" section (also uncapped) was restored the same
+day, using the Reliability gate directly (no `skipQualificationGate`/`minWinProbability`) - the
+home page now shows BOTH lists side by side (conservative shortlist AND high-conviction), each
+independently uncapped.
 
 ## Two separate systems - do not conflate
 
