@@ -26,6 +26,11 @@ function formatDistance(m: number) {
   return `${m}m`
 }
 
+/** Nearest race start time first - used to order every picks section for display. */
+function byRaceStartTime(picks: DailyPick[]) {
+  return [...picks].sort((a, b) => new Date(a.race.race_datetime).getTime() - new Date(b.race.race_datetime).getTime())
+}
+
 function getConfidenceColor(conf: number) {
   if (conf >= 0.7) return 'text-green-700 bg-green-50'
   if (conf >= 0.5) return 'text-amber-700 bg-amber-50'
@@ -43,7 +48,7 @@ function PickCard({ pick, index, dayLabel, accent }: { pick: DailyPick; index: n
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className={`text-xs font-bold uppercase ${rankLabelColor}`}>
-            {index === 0 ? `${dayLabel} · lowest risk` : `${dayLabel} · rank ${index + 1}`}
+            {dayLabel}
           </p>
           <h3 className="mt-1 text-lg font-bold text-slate-900">{pick.horse.horse_name}</h3>
           <p className="mt-1 text-sm text-slate-600">
@@ -103,10 +108,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   const conservativeFilters: DailyPicksFilterOptions = { ...baseFilters }
   const highConvictionFilters: DailyPicksFilterOptions = { ...baseFilters, minWinProbability: MIN_WIN_PROBABILITY_FOR_HIGH_CONVICTION, skipQualificationGate: true }
 
-  const conservativePicks = getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters)
-  const tomorrowConservativePicks = getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters)
-  const dailyPicks = getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters)
-  const tomorrowPicks = getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters)
+  const conservativePicks = byRaceStartTime(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
+  const tomorrowConservativePicks = byRaceStartTime(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
+  const dailyPicks = byRaceStartTime(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters))
+  const tomorrowPicks = byRaceStartTime(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, highConvictionFilters))
 
   function filterLink(overrides: Partial<{ minReliability?: string; maidenOnly?: string }>) {
     const next = new URLSearchParams()

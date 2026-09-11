@@ -29,7 +29,7 @@ interface PaperBetRow {
   placed_at: string
 }
 
-function raceLabel(row: PaperBetRow, internalRaces: Map<string, { venue: string; raceNumber: number }>, peRaces: Map<string, { venue: string; race_number: number }>) {
+function raceLabel(row: PaperBetRow, internalRaces: Map<string, { venue: string; raceNumber: number; raceDatetime: string }>, peRaces: Map<string, { venue: string; race_number: number; start_time: string }>) {
   if (row.source === 'internal') {
     const race = internalRaces.get(row.race_id)
     return race ? `${race.venue} R${race.raceNumber}` : `Race ${row.race_id}`
@@ -37,6 +37,12 @@ function raceLabel(row: PaperBetRow, internalRaces: Map<string, { venue: string;
   const race = peRaces.get(row.race_id)
   if (!race) return `Race ${row.race_id}`
   return `${race.venue} R${race.race_number}`
+}
+
+/** Race start time for a bet (not placed_at) - used to order the bet history by race start, not placement time. */
+function raceStartTime(row: PaperBetRow, internalRaces: Map<string, { venue: string; raceNumber: number; raceDatetime: string }>, peRaces: Map<string, { venue: string; race_number: number; start_time: string }>) {
+  if (row.source === 'internal') return internalRaces.get(row.race_id)?.raceDatetime ?? null
+  return peRaces.get(row.race_id)?.start_time ?? null
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -66,19 +72,19 @@ async function loadWallet() {
   if (bets.error) throw bets.error
 
   const internalRaceIds = [...new Set((bets.data ?? []).filter((b) => b.source === 'internal').map((b) => b.race_id))]
-  const internalRaces = new Map<string, { venue: string; raceNumber: number }>()
+  const internalRaces = new Map<string, { venue: string; raceNumber: number; raceDatetime: string }>()
   if (internalRaceIds.length) {
-    const internal = await supabase.from('races').select('id, race_number, racecourses(name)').in('id', internalRaceIds)
+    const internal = await supabase.from('races').select('id, race_number, race_datetime, racecourses(name)').in('id', internalRaceIds)
     for (const row of internal.data ?? []) {
       const course = Array.isArray(row.racecourses) ? row.racecourses[0] : row.racecourses
-      internalRaces.set(row.id, { venue: course?.name ?? 'Unknown venue', raceNumber: row.race_number })
+      internalRaces.set(row.id, { venue: course?.name ?? 'Unknown venue', raceNumber: row.race_number, raceDatetime: row.race_datetime })
     }
   }
 
   const peRaceIds = [...new Set((bets.data ?? []).filter((b) => b.source !== 'internal').map((b) => b.race_id))]
-  const peRaces = new Map<string, { venue: string; race_number: number }>()
+  const peRaces = new Map<string, { venue: string; race_number: number; start_time: string }>()
   if (peRaceIds.length) {
-    const pe = await supabase.from('pe_races').select('id, venue, race_number').in('id', peRaceIds)
+    const pe = await supabase.from('pe_races').select('id, venue, race_number, start_time').in('id', peRaceIds)
     for (const race of pe.data ?? []) peRaces.set(race.id, race)
   }
 
@@ -91,10 +97,20 @@ async function loadWallet() {
     profit: b.profit,
   }))
 
+  // Display order is by RACE start time (latest at top, earliest at bottom), not placement time.
+  const recentBets = [...(bets.data ?? [])].sort((a, b) => {
+    const aTime = raceStartTime(a, internalRaces, peRaces)
+    const bTime = raceStartTime(b, internalRaces, peRaces)
+    if (aTime && bTime) return new Date(bTime).getTime() - new Date(aTime).getTime()
+    if (aTime) return -1
+    if (bTime) return 1
+    return 0
+  }) as PaperBetRow[]
+
   return {
     account: account.data as PaperAccountRow,
     stats: computeWalletStats(account.data.starting_bankroll as number, statsInput),
-    recentBets: (bets.data ?? []) as PaperBetRow[],
+    recentBets,
     internalRaces,
     peRaces,
   }
