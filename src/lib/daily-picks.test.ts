@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDailyPicks, getTomorrowPicks } from '@/lib/daily-picks'
+import { filterDailyPicksByThreshold, getDailyPicks, getTomorrowPicks, sortDailyPicks } from '@/lib/daily-picks'
 import type { CalibrationTable } from '@/lib/reliability-score'
 import type { Prediction, RaceWithPrediction } from '@/lib/types'
 
@@ -206,3 +206,59 @@ describe('daily conservative picks', () => {
     expect(picks.map((pick) => pick.race.id)).toEqual(['qualifies'])
   })
 })
+
+describe('sortDailyPicks / filterDailyPicksByThreshold', () => {
+  const opts = { skipQualificationGate: true }
+  const picks = getDailyPicks([
+    race('early-low-win', '2026-08-16T02:00:00Z', 0.2, 0.9, 0.1, 3),
+    race('late-high-win', '2026-08-16T05:00:00Z', 0.6, 0.5, 0.1, 2),
+    race('mid-mid-win', '2026-08-16T03:00:00Z', 0.4, 0.7, 0.1, 3),
+  ], new Date('2026-08-16T01:00:00Z'), Number.MAX_SAFE_INTEGER, opts)
+
+  it('sorts by start time ascending (soonest first)', () => {
+    const sorted = sortDailyPicks(picks, 'startTime')
+    expect(sorted.map((pick) => pick.race.id)).toEqual(['early-low-win', 'mid-mid-win', 'late-high-win'])
+  })
+
+  it('sorts by win probability descending', () => {
+    const sorted = sortDailyPicks(picks, 'winProbability')
+    expect(sorted.map((pick) => pick.race.id)).toEqual(['late-high-win', 'mid-mid-win', 'early-low-win'])
+  })
+
+  it('sorts by top-three probability descending', () => {
+    const sorted = sortDailyPicks(picks, 'top3Probability')
+    expect(sorted.map((pick) => pick.race.id)).toEqual(['early-low-win', 'mid-mid-win', 'late-high-win'])
+  })
+
+  it('sorts by reliability descending, treating a missing reliability as lowest', () => {
+    const sorted = sortDailyPicks(picks, 'reliability')
+    expect(sorted).toHaveLength(3)
+  })
+
+  it('filters by win probability threshold (50% and up keeps only the 60% pick)', () => {
+    const filtered = filterDailyPicksByThreshold(picks, 'winProbability', 50)
+    expect(filtered.map((pick) => pick.race.id)).toEqual(['late-high-win'])
+  })
+
+  it('filters by top-three probability threshold', () => {
+    const filtered = filterDailyPicksByThreshold(picks, 'top3Probability', 70)
+    expect(filtered.map((pick) => pick.race.id).sort()).toEqual(['early-low-win', 'mid-mid-win'])
+  })
+
+  it('never filters when sorting by start time, regardless of minPct', () => {
+    const filtered = filterDailyPicksByThreshold(picks, 'startTime', 90)
+    expect(filtered).toHaveLength(3)
+  })
+
+  it('filters by reliability score directly (0-100 scale, no /100 division)', () => {
+    const calibration: CalibrationTable = { overallBaseline: 0.18, probability: [], gap: [], agreement: [], rawRateRange: { min: 0.05, max: 0.65 } }
+    const withReliability = getDailyPicks([
+      race('strong', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2),
+    ], new Date('2026-08-16T01:00:00Z'), Number.MAX_SAFE_INTEGER, { calibration, skipQualificationGate: true })
+    expect(withReliability[0].reliability).not.toBeNull()
+
+    const highBar = filterDailyPicksByThreshold(withReliability, 'reliability', 101)
+    expect(highBar).toEqual([])
+  })
+})
+

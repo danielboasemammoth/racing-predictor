@@ -1,11 +1,23 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { getDailyPicks, getTomorrowPicks, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
+import {
+  DEFAULT_PICKS_MIN_PCT,
+  DEFAULT_PICKS_SORT,
+  filterDailyPicksByThreshold,
+  getDailyPicks,
+  getTomorrowPicks,
+  PICKS_SORT_KEYS,
+  sortDailyPicks,
+  type DailyPick,
+  type DailyPicksFilterOptions,
+  type PicksSortKey,
+} from '@/lib/daily-picks'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { loadReliabilityContext } from '@/lib/reliability-context'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { SiteNav } from '@/components/site-nav'
 import { PaperBetButton } from '@/components/paper-bet-button'
+import { PicksSortFilter } from '@/components/picks-sort-filter'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,9 +38,18 @@ function formatDistance(m: number) {
   return `${m}m`
 }
 
-/** Nearest race start time first - used to order every picks section for display. */
-function byRaceStartTime(picks: DailyPick[]) {
-  return [...picks].sort((a, b) => new Date(a.race.race_datetime).getTime() - new Date(b.race.race_datetime).getTime())
+const PICKS_SORT_DESCRIPTIONS: Record<PicksSortKey, string> = {
+  winProbability: 'win probability',
+  top3Probability: 'top-three probability',
+  reliability: 'Reliability Score',
+  startTime: 'start time (soonest first)',
+}
+
+function picksSortFilterSummary(sort: PicksSortKey, minPct: number) {
+  const ranking = `Ranked by ${PICKS_SORT_DESCRIPTIONS[sort]}.`
+  if (sort === 'startTime') return `${ranking} Showing every qualifying race.`
+  const label = sort === 'reliability' ? `${minPct} and up` : `${minPct}% and up`
+  return `${ranking} Showing ${label} on ${PICKS_SORT_DESCRIPTIONS[sort]}.`
 }
 
 function getConfidenceColor(conf: number) {
@@ -90,12 +111,14 @@ function PickCard({ pick, index, dayLabel, accent }: { pick: DailyPick; index: n
   )
 }
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ minReliability?: string; maidenOnly?: string }> }) {
+export default async function Home({ searchParams }: { searchParams: Promise<{ minReliability?: string; maidenOnly?: string; sort?: string; minPct?: string }> }) {
   const params = await searchParams
   const baseFilters: DailyPicksFilterOptions = {
     minReliability: params.minReliability ? Number(params.minReliability) : undefined,
     maidenOnly: params.maidenOnly === '1',
   }
+  const picksSort: PicksSortKey = PICKS_SORT_KEYS.includes(params.sort as PicksSortKey) ? (params.sort as PicksSortKey) : DEFAULT_PICKS_SORT
+  const picksMinPct = params.minPct && !Number.isNaN(Number(params.minPct)) ? Number(params.minPct) : DEFAULT_PICKS_MIN_PCT
 
   const supabase = await createClient()
   const [races, reliabilityContext] = await Promise.all([getUpcomingRaces(supabase), loadReliabilityContext(supabase)])
@@ -103,11 +126,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   baseFilters.history = reliabilityContext?.history ?? null
 
   // Uncapped (no top-N limit) Reliability-gated conservative shortlist (Average+
-  // classification, no active veto).
+  // classification, no active veto). Sort/filter (start time, win/top3 probability,
+  // reliability - see PicksSortFilter) is a presentation-only concern applied after the gate.
   const conservativeFilters: DailyPicksFilterOptions = { ...baseFilters }
 
-  const conservativePicks = byRaceStartTime(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
-  const tomorrowConservativePicks = byRaceStartTime(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
+  const applyPicksSortFilter = (picks: DailyPick[]) => sortDailyPicks(filterDailyPicksByThreshold(picks, picksSort, picksMinPct), picksSort)
+  const conservativePicks = applyPicksSortFilter(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
+  const tomorrowConservativePicks = applyPicksSortFilter(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
 
   function filterLink(overrides: Partial<{ minReliability?: string; maidenOnly?: string }>) {
     const next = new URLSearchParams()
@@ -161,6 +186,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               </div>
             )}
 
+            <PicksSortFilter sort={picksSort} minPct={picksMinPct} />
+
             {conservativePicks.length > 0 ? (
               <section aria-labelledby="conservative-picks-title" className="border-y border-teal-200 bg-teal-50 px-4 py-6 sm:px-6">
                 <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
@@ -168,7 +195,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                     <p className="text-xs font-bold uppercase text-teal-800">Daily conservative shortlist</p>
                     <h2 id="conservative-picks-title" className="mt-1 text-xl font-bold text-slate-900">Today&apos;s conservative picks</h2>
                     <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                      Every race today with a Reliability Score of Average or above and no active data-quality veto. Ranked by Reliability Score. Payout is not considered.
+                      Every race today with a Reliability Score of Average or above and no active data-quality veto. {picksSortFilterSummary(picksSort, picksMinPct)} Payout is not considered.
                     </p>
                   </div>
                   <p className="text-xs text-slate-500">Relative model confidence, not a guarantee.</p>

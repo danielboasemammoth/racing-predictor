@@ -116,3 +116,41 @@ export function getTomorrowPicks(races: RaceWithPrediction[], now = new Date(), 
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
   return candidatesForDate(races, melbourneDateKey(tomorrow), options).slice(0, limit)
 }
+
+/** User-facing sort/filter controls for the conservative shortlist (home page) - independent of the Reliability qualification gate above, which has already run by the time these apply. */
+export const PICKS_SORT_KEYS = ['winProbability', 'top3Probability', 'reliability', 'startTime'] as const
+export type PicksSortKey = typeof PICKS_SORT_KEYS[number]
+
+export const DEFAULT_PICKS_SORT: PicksSortKey = 'winProbability'
+export const DEFAULT_PICKS_MIN_PCT = 50
+/** 10%-increment filter steps, "and up" - matches the win/top3-probability 0-100% scale and the Reliability Score's own 0-100 scale. */
+export const PICKS_FILTER_STEPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90] as const
+
+function sortValue(pick: DailyPick, sort: PicksSortKey): number {
+  switch (sort) {
+    case 'winProbability': return pick.winProbability
+    case 'top3Probability': return pick.top3Probability
+    case 'reliability': return pick.reliability?.score ?? -1
+    case 'startTime': return new Date(pick.race.race_datetime).getTime()
+  }
+}
+
+/** Nearest-start-time-first for 'startTime', otherwise highest-value-first. */
+export function sortDailyPicks(picks: DailyPick[], sort: PicksSortKey): DailyPick[] {
+  const direction = sort === 'startTime' ? 1 : -1
+  return [...picks].sort((left, right) => direction * (sortValue(left, sort) - sortValue(right, sort)))
+}
+
+/**
+ * Filters to picks at/above `minPct` on whichever field is being sorted by - never applies when
+ * sorting by start time (per spec: chronological order shows every qualifying pick, no threshold).
+ * `minPct` is a 0-100 value; win/top3 probability are stored as 0-1 fractions so it's divided by
+ * 100 for those two, but Reliability Score is already 0-100 so it's compared directly.
+ */
+export function filterDailyPicksByThreshold(picks: DailyPick[], sort: PicksSortKey, minPct: number): DailyPick[] {
+  if (sort === 'startTime') return picks
+  if (sort === 'reliability') return picks.filter((pick) => (pick.reliability?.score ?? -1) >= minPct)
+  const threshold = minPct / 100
+  return picks.filter((pick) => sortValue(pick, sort) >= threshold)
+}
+

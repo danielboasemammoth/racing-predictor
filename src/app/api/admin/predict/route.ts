@@ -185,13 +185,25 @@ export async function POST(request: Request) {
 
     const targetEntryRows: RaceEntryWithHorse[] = []
     const raceChunkSize = 40
+    const entryPageSize = 1_000
     for (let offset = 0; offset < races.length; offset += raceChunkSize) {
-      const { data: entryPage, error: targetEntriesError } = await withRetry(() => supabase
-        .from('race_entries')
-        .select('*, horses(*)')
-        .in('race_id', races.slice(offset, offset + raceChunkSize).map((race) => race.id)))
-      if (targetEntriesError) throw targetEntriesError
-      targetEntryRows.push(...((entryPage ?? []) as RaceEntryWithHorse[]))
+      const chunkRaceIds = races.slice(offset, offset + raceChunkSize).map((race) => race.id)
+      // A chunk of 40 races can exceed Postgrest's default ~1000-row cap on a busy day (multiple
+      // large-field metro meetings landing in the same chronological chunk) - without explicit
+      // pagination here, the query silently truncates and drops entries for whichever races don't
+      // fit, which then get wrongly treated as "no valid horses" and skipped entirely. Confirmed
+      // live 2026-09-12: a contiguous ~70-minute, ~31-race window spanning many different
+      // racecourses (including Flemington) had zero predictions for exactly this reason.
+      for (let entryOffset = 0; ; entryOffset += entryPageSize) {
+        const { data: entryPage, error: targetEntriesError } = await withRetry(() => supabase
+          .from('race_entries')
+          .select('*, horses(*)')
+          .in('race_id', chunkRaceIds)
+          .range(entryOffset, entryOffset + entryPageSize - 1))
+        if (targetEntriesError) throw targetEntriesError
+        targetEntryRows.push(...((entryPage ?? []) as RaceEntryWithHorse[]))
+        if (!entryPage || entryPage.length < entryPageSize) break
+      }
     }
     const entriesByRace = Map.groupBy(
       targetEntryRows,
