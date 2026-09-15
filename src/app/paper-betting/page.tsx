@@ -219,6 +219,32 @@ export default async function PaperBettingPage() {
               </table>
             </div>
             <p className="mb-4 text-xs text-slate-600">Historical cohorts include all models and both manual and automatic bets. Estimated ROI is a model forecast, not proven profit. Bets in the same race are correlated; small samples and high hit rates do not establish a profitable strategy.</p>
+            <h3 className="mb-2 text-xs font-semibold uppercase text-slate-500">Policy Results</h3>
+            <div className="mb-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="w-full min-w-[700px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Policy / Source / Model</th>
+                    <th className="px-3 py-2">Market</th>
+                    <th className="px-3 py-2">Bets / Races</th>
+                    <th className="px-3 py-2">Hit Rate</th>
+                    <th className="px-3 py-2">Realised ROI</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {validation.policies.flatMap((policy) => policy.markets.filter((market) => market.label.endsWith('/ all')).map((market) => (
+                    <tr key={`${policy.policyVersion}:${policy.source}:${policy.mode}:${policy.modelVersion}:${market.label}`}>
+                      <td className="px-3 py-2 text-slate-700"><div>{policy.policyVersion}</div><div className="text-xs text-slate-500">{policy.source} / {policy.mode} / {policy.modelVersion}</div></td>
+                      <td className="px-3 py-2 text-slate-700">{market.label.replace(' / all', '')}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.n} / {market.races}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.winRate == null ? 'n/a' : `${(market.winRate * 100).toFixed(1)}%`}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.roiPct == null ? 'n/a' : `${market.roiPct.toFixed(1)}%`}</td>
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mb-4 text-xs text-slate-600">Untagged records have no verified policy version. No settled tagged bets means the new policy has no measured results yet.</p>
             <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
               <table className="w-full min-w-[520px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">

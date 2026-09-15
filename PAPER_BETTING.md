@@ -14,6 +14,12 @@ PuntersEdge continues to evaluate its own WIN and PLACE recommendations separate
 
 ## Performance
 
+### Policy Tracking
+
+Apply `supabase/migrate-paper-betting-policy.sql` in the Supabase SQL editor to enable prospective policy tags. It adds a nullable column and index without changing old records. Internal automatic bets then record `internal-value-v1`; model version and stable duplicate-prevention keys remain unchanged. Before migration, betting continues untagged and the scheduled-job response explicitly reports that tracking is unavailable. Never infer the policy of an untagged bet from its timestamp.
+
+The validation page and read-only performance command separate policies by source, manual/automatic mode, model, and market. The latest internal run's counters are stored in `analysis_snapshots` under `paper-policy-latest-run`; the scheduled response also logs them. Rejection counts record the first failed gate per runner/market, not every possible failure. Races skipped before evaluation are counted separately. This is aggregate diagnostics, not a historical dataset of rejected selections or a counterfactual ROI backtest. No thresholds changed in this tracking milestone.
+
 The paper-betting page separates WIN and PLACE outcomes, including the overlapping subsets whose recorded probability was >=60% and estimated value was positive. It reports bets, distinct races, predicted/actual hit rate, estimated ROI, and realised stake-weighted ROI. These cohorts include previous policies and manual bets; they are not a backtest of the new policy.
 
 Run the read-only model/source breakdown:

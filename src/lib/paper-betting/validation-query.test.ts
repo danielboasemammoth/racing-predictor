@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { computeValidationReport, marketPerformance, type ValidationBet } from './validation-query'
+import { computeValidationReport, marketPerformance, policyPerformance, type ValidationBet } from './validation-query'
 
 const base: ValidationBet = {
   stake: 1, tab_decimal_odds: 2, edge_points: 20, model_probability: 0.7,
@@ -9,6 +9,14 @@ const base: ValidationBet = {
 }
 
 describe('paper-bet market performance', () => {
+  it('never assigns untagged or manual bets to the new automatic policy cohort', () => {
+    const groups = policyPerformance([base, { ...base, policy_version: 'internal-value-v1' },
+      { ...base, policy_version: 'internal-value-v1', mode: 'MANUAL' }])
+    expect(groups).toHaveLength(3)
+    expect(groups.map((group) => [group.policyVersion, group.mode, group.markets[0].n])).toEqual([
+      ['untagged', 'AUTO', 1], ['internal-value-v1', 'AUTO', 1], ['internal-value-v1', 'MANUAL', 1],
+    ])
+  })
   it('separates WIN from PLACE and compares expected with realised results', () => {
     const rows = marketPerformance([base, { ...base, stake: 3, status: 'LOST', profit: -3 },
       { ...base, bet_type: 'WIN', profit: 2, tab_decimal_odds: 3 }])

@@ -3,12 +3,6 @@ import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { autoPlaceReliabilityBets } from '@/lib/paper-betting/reliability-auto-bet'
 
-/**
- * Auto-places WIN paper bets for today's + tomorrow's picks that qualify via the Reliability
- * Score shortlist (see reliability-auto-bet.ts) - the internal-model counterpart to the
- * PuntersEdge sync route's auto-betting. Run this after Refresh Reliability Calibration so it
- * reads fresh calibration data.
- */
 export async function POST() {
   if (!await hasAdminSession()) {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
@@ -17,9 +11,10 @@ export async function POST() {
   try {
     const supabase = createAdminClient()
     const summary = await autoPlaceReliabilityBets(supabase)
+    const rejected = Object.entries(summary.rejectionCounts).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(', ')
     return NextResponse.json({
       success: true,
-      message: `Considered ${summary.candidatesConsidered} qualifying pick${summary.candidatesConsidered === 1 ? '' : 's'}, placed ${summary.betsPlaced} bet${summary.betsPlaced === 1 ? '' : 's'} (${summary.skippedDuplicate} already placed, ${summary.skippedNoOdds} missing odds, ${summary.skippedZeroStake} zero stake)`,
+      message: `${summary.policyVersion}: evaluated ${summary.marketsConsidered} runner/markets, placed ${summary.winBetsPlaced} WIN and ${summary.placeBetsPlaced} PLACE (${summary.skippedDuplicate} duplicates, ${summary.skippedZeroStake} zero stake). Rejections: ${rejected || 'none'}. Race skips: ${JSON.stringify(summary.raceSkips)}.${summary.policyTrackingAvailable ? '' : ' Policy migration missing: new bets remain untagged.'}`,
       ...summary,
     })
   } catch (error) {

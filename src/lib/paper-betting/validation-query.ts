@@ -19,6 +19,37 @@ export interface ValidationBet {
   source: string
   mode: string
   model_version: string
+  policy_version?: string | null
+}
+
+export function policyPerformance(bets: ValidationBet[]) {
+  const groups = new Map<string, ValidationBet[]>()
+  for (const bet of bets) {
+    const key = JSON.stringify([bet.policy_version ?? 'untagged', bet.source, bet.mode, bet.model_version])
+    const group = groups.get(key) ?? []
+    group.push(bet)
+    groups.set(key, group)
+  }
+  return [...groups.values()].map((rows) => ({
+    policyVersion: rows[0].policy_version ?? 'untagged',
+    source: rows[0].source,
+    mode: rows[0].mode,
+    modelVersion: rows[0].model_version,
+    markets: marketPerformance(rows).filter((market) => market.n > 0),
+  }))
+}
+
+export async function loadValidationBets(supabase: SupabaseClient, accountId: string): Promise<ValidationBet[]> {
+  const bets: ValidationBet[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const result = await supabase.from('paper_bets').select('*')
+      .eq('account_id', accountId).in('status', ['WON', 'LOST'])
+      .order('placed_at', { ascending: true }).order('id', { ascending: true }).range(offset, offset + 999)
+    if (result.error) throw result.error
+    const page = (result.data ?? []) as ValidationBet[]
+    bets.push(...page)
+    if (page.length < 1000) return bets
+  }
 }
 
 export function marketPerformance(bets: ValidationBet[]) {
@@ -56,6 +87,7 @@ export interface ValidationWindow {
 export interface ValidationReport {
   totalSettled: number
   markets: ReturnType<typeof marketPerformance>
+  policies: ReturnType<typeof policyPerformance>
   windows: ValidationWindow[]
   calibration: {
     buckets: ReturnType<typeof bucketCalibration>
@@ -68,21 +100,7 @@ export interface ValidationReport {
 
 /** Shared MODEL VALIDATION computation used by /api/paper-betting/validation and the /paper-betting page. */
 export async function computeValidationReport(supabase: SupabaseClient, accountId: string): Promise<ValidationReport> {
-  const bets: ValidationBet[] = []
-  for (let offset = 0; ; offset += 1000) {
-    const settled = await supabase
-      .from('paper_bets')
-      .select('stake, tab_decimal_odds, edge_points, model_probability, status, profit, placed_at, bet_type, race_id, source, mode, model_version')
-      .eq('account_id', accountId)
-      .in('status', ['WON', 'LOST'])
-      .order('placed_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(offset, offset + 999)
-    if (settled.error) throw settled.error
-    const page = (settled.data ?? []) as ValidationBet[]
-    bets.push(...page)
-    if (page.length < 1000) break
-  }
+  const bets = await loadValidationBets(supabase, accountId)
 
   const windows: ValidationWindow[] = [...WINDOW_SIZES, Number.POSITIVE_INFINITY].map((size) => {
     const slice = Number.isFinite(size) ? bets.slice(-size) : bets
@@ -119,6 +137,7 @@ export async function computeValidationReport(supabase: SupabaseClient, accountI
   return {
     totalSettled: bets.length,
     markets: marketPerformance(bets),
+    policies: policyPerformance(bets),
     windows,
     calibration: {
       buckets,

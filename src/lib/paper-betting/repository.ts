@@ -422,6 +422,7 @@ export interface PlaceBetInput {
   tabDecimalOdds: number
   modelProbability: number
   modelVersion: string
+  policyVersion?: string
   edgePoints: number | null
   expectedValue: number | null
   confidenceLevel: string | null
@@ -449,6 +450,7 @@ export async function placeBet(admin: SupabaseClient, input: PlaceBetInput): Pro
       tab_decimal_odds: input.tabDecimalOdds,
       model_probability: input.modelProbability,
       model_version: input.modelVersion,
+      ...(input.policyVersion ? { policy_version: input.policyVersion } : {}),
       edge_points: input.edgePoints,
       expected_value: input.expectedValue,
       confidence_level: input.confidenceLevel,
