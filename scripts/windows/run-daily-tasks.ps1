@@ -63,7 +63,8 @@ function Invoke-Step {
         [string]$Path,
         [string]$Label,
         [string]$Mode,
-        $WebSession
+        $WebSession,
+        [switch]$ContinueOnError
     )
 
     $bodyObj = @{}
@@ -84,8 +85,10 @@ function Invoke-Step {
             throw "Server reported failure: $($response.message)"
         }
         Write-Log "OK    $Label -> $($response.message)"
+        return @{ Ok = $true; Response = $response }
     } catch {
         Write-Log "FAIL  $Label -> $($_.Exception.Message)"
+        if ($ContinueOnError) { return @{ Ok = $false; Response = $null } }
         throw
     }
 }
@@ -97,6 +100,8 @@ try {
     Write-Log "Using app URL: $baseUrl"
     $webSession = New-AdminWebSession -SessionCookieValue (Get-AdminSessionCookie -ProjectRoot $ProjectRoot)
 
+    # These four steps are genuine hard dependencies of each other (predictions need synced races/
+    # results) - still abort the whole run on failure, as before.
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape" -Label "Sync Upcoming Races" -WebSession $webSession
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape-results" -Label "Sync Results" -WebSession $webSession
@@ -104,15 +109,33 @@ try {
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "all" -Label "Generate Predictions" -WebSession $webSession
 
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession
+    # From here on, each step is independent of the others (diagnostics/maintenance, not a data
+    # dependency chain) - continue on failure so one flaky step (e.g. Backtest) never again silently
+    # blocks Settle/Sync/Prune the way it did for ~11 straight days (2026-09-01 to 2026-09-12,
+    # confirmed via the daily-tasks logs) and let pe_recommendations/pe_odds_snapshots bloat to
+    # ~450k stale rows with zero pruning, eventually causing live Postgres statement timeouts.
+    $anyFailures = $false
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
 
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/prune" -Label "Prune Stale PuntersEdge Data" -WebSession $webSession
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    # Prune's own response reports drained:false while a large backlog remains - re-invoke until
+    # actually drained (or a safety cap), rather than leaving a partial prune after one call. A
+    # single call only processes up to MAX_BATCHES_PER_CALL batches (see the route) to stay well
+    # under the platform request-duration ceiling.
+    for ($i = 0; $i -lt 20; $i++) {
+        $prune = Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/prune" -Label "Prune Stale PuntersEdge Data" -WebSession $webSession -ContinueOnError
+        if (-not $prune.Ok) { $anyFailures = $true; break }
+        if ($prune.Response.drained) { break }
+    }
 
-    Write-Log "ALL STEPS COMPLETED"
+    if ($anyFailures) {
+        Write-Log "ALL STEPS ATTEMPTED - ONE OR MORE NON-CRITICAL STEPS FAILED (see FAIL lines above)"
+    } else {
+        Write-Log "ALL STEPS COMPLETED"
+    }
 } catch {
     Write-Log "PIPELINE ABORTED: $($_.Exception.Message)"
     exit 1

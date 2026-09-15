@@ -1,5 +1,5 @@
 <#
-Registers the daily 6am scheduled task. Run this ONCE from an elevated
+Registers hourly runs from 6am through midnight (local Windows time). Run this from an elevated
 PowerShell terminal.
 
 Usage:
@@ -26,20 +26,21 @@ $action = New-ScheduledTaskAction `
     -Execute "wscript.exe" `
     -Argument "`"$vbsPath`""
 
-$trigger = New-ScheduledTaskTrigger -Daily -At 6:00AM
+$trigger = @(0) + @(6..23) | ForEach-Object {
+    New-ScheduledTaskTrigger -Daily -At (Get-Date -Hour $_ -Minute 0 -Second 0)
+}
 
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
-    -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 5)
+    -MultipleInstances IgnoreNew
 
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Description "Scrapes races/results, backfills + generates predictions, backtests, settles paper bets, and syncs PuntersEdge odds daily at 6am" `
+    -Description "Hourly 6am through midnight: scrapes races/results, backfills + generates predictions, backtests, settles paper bets, and syncs PuntersEdge odds" `
     -RunLevel Highest `
     -Force
 

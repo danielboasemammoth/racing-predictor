@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { computeWalletStats, type WalletBetForStats } from '@/lib/betting/paper-wallet'
 import { SiteNav } from '@/components/site-nav'
-import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
+import { opportunityMarkets, queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
 import { computeValidationReport, type ValidationReport } from '@/lib/paper-betting/validation-query'
 import { WhatIfLab } from './what-if-lab'
 import { BankrollSettings } from './bankroll-settings'
@@ -20,6 +20,7 @@ interface PaperBetRow {
   category: string
   source: string
   mode: string
+  bet_type: 'WIN' | 'PLACE'
   stake: number
   tab_decimal_odds: number
   edge_points: number | null
@@ -162,26 +163,28 @@ export default async function PaperBettingPage() {
             </p>
           ) : (
             <ul className="space-y-2">
-              {opportunities.map((rec) => {
+              {opportunities.flatMap((rec) => opportunityMarkets(rec).map((market) => {
                 const race = raceOf(rec)
                 const runner = runnerOf(rec)
-                if (!race || !runner || rec.tab_win_price == null) return null
+                if (!race || !runner || market.price == null) return null
                 return (
                   <li
-                    key={rec.id}
-                    className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2 text-sm ${rec.decision === 'BET' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}
+                    key={`${rec.id}:${market.betType}`}
+                    className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-2 text-sm ${market.decision === 'BET' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}
                   >
                     <span className="font-medium text-slate-900">
                       {race.venue} R{race.race_number} · #{runner.runner_number} {runner.name} ({race.category})
                     </span>
                     <span className="flex flex-wrap gap-3 text-xs text-slate-600">
-                      <span>TAB ${rec.tab_win_price.toFixed(2)}</span>
-                      <span>Edge {rec.edge_points != null ? `${rec.edge_points >= 0 ? '+' : ''}${rec.edge_points.toFixed(1)}pts` : 'n/a'}</span>
-                      <span className="font-semibold">{rec.decision}</span>
+                      <span>{market.betType} · TAB ${market.price.toFixed(2)}</span>
+                      <span>Chance {market.probability == null ? 'n/a' : `${(market.probability * 100).toFixed(1)}%`}</span>
+                      <span>Est. ROI {market.ev == null ? 'n/a' : `${(market.ev * 100).toFixed(1)}%`}</span>
+                      <span>Edge {market.edge != null ? `${market.edge >= 0 ? '+' : ''}${market.edge.toFixed(1)}pts` : 'n/a'}</span>
+                      <span className="font-semibold">{market.decision}</span>
                     </span>
                   </li>
                 )
-              })}
+              }))}
             </ul>
           )}
         </section>
@@ -189,6 +192,33 @@ export default async function PaperBettingPage() {
         {validation && validation.totalSettled > 0 && (
           <section>
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Model Validation</h2>
+            <div className="mb-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Market / Cohort</th>
+                    <th className="px-3 py-2">Bets / Races</th>
+                    <th className="px-3 py-2">Predicted Hit Rate</th>
+                    <th className="px-3 py-2">Actual Hit Rate</th>
+                    <th className="px-3 py-2">Estimated ROI</th>
+                    <th className="px-3 py-2">Realised ROI</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {validation.markets.map((market) => (
+                    <tr key={market.label}>
+                      <td className="px-3 py-2 text-slate-700">{market.label}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.n} / {market.races}{market.races < 30 ? ' (small sample)' : ''}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.expectedHitRate == null ? 'n/a' : `${(market.expectedHitRate * 100).toFixed(1)}%`}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.winRate == null ? 'n/a' : `${(market.winRate * 100).toFixed(1)}%`}</td>
+                      <td className="px-3 py-2 text-slate-700">{market.expectedRoiPct == null ? 'n/a' : `${market.expectedRoiPct.toFixed(1)}%`}</td>
+                      <td className={`px-3 py-2 font-medium ${market.roiPct == null ? 'text-slate-500' : market.roiPct >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{market.roiPct == null ? 'n/a' : `${market.roiPct.toFixed(1)}%`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mb-4 text-xs text-slate-600">Historical cohorts include all models and both manual and automatic bets. Estimated ROI is a model forecast, not proven profit. Bets in the same race are correlated; small samples and high hit rates do not establish a profitable strategy.</p>
             <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
               <table className="w-full min-w-[520px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
@@ -291,6 +321,7 @@ export default async function PaperBettingPage() {
                     <tr>
                       <th className="px-3 py-2">Race</th>
                       <th className="px-3 py-2">Runner</th>
+                      <th className="px-3 py-2">Market</th>
                       <th className="px-3 py-2">Mode</th>
                       <th className="px-3 py-2">Odds</th>
                       <th className="px-3 py-2">Stake</th>
@@ -304,6 +335,7 @@ export default async function PaperBettingPage() {
                       <tr key={bet.id}>
                         <td className="px-3 py-2 text-slate-700">{raceLabel(bet, wallet.internalRaces, wallet.peRaces)}</td>
                         <td className="px-3 py-2 text-slate-900">{bet.runner_name}</td>
+                        <td className="px-3 py-2 font-medium text-slate-700">{bet.bet_type}</td>
                         <td className="px-3 py-2 text-slate-500">{bet.mode}</td>
                         <td className="px-3 py-2 text-slate-700" title={bet.source === 'internal' ? 'Recorded price (Racing.com feed, not confirmed TAB/Betfair)' : 'TAB price'}>
                           ${bet.tab_decimal_odds.toFixed(2)}{bet.source === 'internal' && <span className="ml-1 text-[10px] text-slate-400">rec.</span>}
@@ -320,7 +352,7 @@ export default async function PaperBettingPage() {
                     ))}
                     {wallet.recentBets.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-3 py-6 text-center text-slate-500">No paper bets yet.</td>
+                        <td colSpan={9} className="px-3 py-6 text-center text-slate-500">No paper bets yet.</td>
                       </tr>
                     )}
                   </tbody>

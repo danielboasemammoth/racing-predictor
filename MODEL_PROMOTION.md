@@ -2,12 +2,12 @@
 
 ## Current state - informal, not automated
 
-- **Champion (production)**: `v4.1-ensemble` (`CURRENT_MODEL_VERSIONS` in
-  `src/lib/prediction-suite.ts`) - the only model version read by the home page's
-  Conservative Shortlist (`daily-picks.ts`).
-- **Challenger**: `v6-market-blend` (`src/lib/market-blend-model.ts`) - generated and stored
-  alongside the Champion on every prediction run, accumulating its own live track record, but not
-  read by any user-facing page.
+- **Champion (production)**: `v6-market-blend`, selected by `PRODUCTION_MODEL_VERSION` in
+  `src/lib/prediction-suite.ts`. Promoted on 2026-09-09; the shortlist and horse-fundamentals
+  bridge use this version.
+- **Previous champion**: `v4.1-ensemble`, still generated for comparison. Its top-three
+  probabilities are also inherited unchanged by `v6-market-blend`; the promotion improved
+  WIN predictions, not PLACE calibration.
 - Every other tracked version (`v4-baseline`, `v4-context-form`, `v4-connections`, `v4-optimized`,
   `v5-trained`) exists purely for comparison on `/accuracy` and in research scripts - none of them
   is a "challenger" in the promotion sense, they're the Champion's own component/comparison set.
@@ -36,17 +36,17 @@ genuine out-of-sample split (never the training data):
    `/memories/repo/racing-predictor-notes.md` ("Tuning/tracking register") for a real case where a
    threshold tuned on a 2-3 day sample was overfit and had to be corrected the very next day.
 
-None of `v5-trained` or `v6-market-blend` currently meet criterion 4 well (this dataset spans ~4
-calendar months total) - they are correctly still Challengers, not Champions, regardless of any
-single split's result. The independently-trained PLACE model experiment (see MODEL_RESEARCH.md)
+`v5-trained` remains a comparison model. `v6-market-blend` was promoted after paired live and
+offline evidence; see the current constant's evidence record and the 2026-09-15 audit in
+PAPER_BETTING.md. The independently-trained PLACE model experiment (see MODEL_RESEARCH.md)
 did not even clear criterion 1/2 (it was slightly worse than the existing Harville-derived
 approach on both Brier score and log loss) - it is a rejected experiment, not a Challenger.
 
 ## What would need to change to promote a challenger today
 
 There is no "promote" button or flag. Promotion means a deliberate code change:
-- For a new WIN model: add it to `PRODUCTION_ENSEMBLE_CONFIGS` (prediction-suite.ts) and/or change
-  what `daily-picks.ts` treats as `primary`.
+- For a new WIN model: generate it alongside the current versions, then deliberately update
+  `PRODUCTION_MODEL_VERSION` in `prediction-suite.ts` after it meets the criteria.
 - For a new PLACE model: replace the call to `harvillePlaceProbabilities()` in
   `prediction-v3.ts::placeProbabilities()` with the new model's output (and do the equivalent in
   the PuntersEdge side, `src/lib/betting/harville.ts`'s callers, if promoting there too - these are

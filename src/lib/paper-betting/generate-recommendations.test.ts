@@ -56,6 +56,26 @@ describe('generateRaceRecommendations', () => {
     expect(results[0].decision).toBe('NO_BET')
   })
 
+  it('excludes scratched prices from both win and place probability calculations', () => {
+    const runners = Array.from({ length: 6 }, (_, index) => ({
+      name: `Runner ${index + 1}`,
+      number: index + 1,
+      bookmakers: [{ key: 'tab', win_price: 2 + index, place_price: 1.5, age_seconds: 10 }],
+    }))
+    const withScratch = generateRaceRecommendations(race({
+      runners,
+      scratchings: [{ name: runners[0].name, number: 1 }],
+    }), { now: NOW })
+    const withoutScratch = generateRaceRecommendations(race({ runners: runners.slice(1) }), { now: NOW })
+    expect(withScratch[0].modelProbability).toBeNull()
+    expect(withScratch[0].place).toBeNull()
+    expect(withScratch.slice(1).reduce((sum, runner) => sum + runner.modelProbability!, 0)).toBeCloseTo(1)
+    for (const [index, runner] of withoutScratch.entries()) {
+      expect(withScratch[index + 1].modelProbability).toBeCloseTo(runner.modelProbability!)
+      expect(withScratch[index + 1].place!.modelProbability).toBeCloseTo(runner.place!.modelProbability)
+    }
+  })
+
   it('returns NO_BET with a clear reason when a runner has no market price at all', () => {
     const results = generateRaceRecommendations(
       race({

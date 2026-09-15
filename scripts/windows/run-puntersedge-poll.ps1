@@ -1,31 +1,17 @@
 <#
 Frequent PuntersEdge poll: settle paper bets, then sync odds/recommendations.
 
-Intended to run every 15-60 minutes via Task Scheduler (see register-puntersedge-poll-task.ps1,
-default 60 min on the free tier) - separate from run-daily-tasks.ps1's once-daily 6am pipeline,
-because PuntersEdge only prices a race close to its jump (~15-25 min out), so timely BET/WATCH
-recommendations need much more frequent polling than the daily prediction pipeline.
-
-Credit-conscious in two ways: (1) exits immediately without calling the API at all outside AU
-racing hours (11am-11pm AEST/AEDT, DST-safe via the Windows timezone database) - a 24/7 schedule
-would otherwise burn credits overnight for no benefit, since there is nothing to price then; (2)
-the settle endpoint itself now skips its results() call (2 credits) on ticks with no pending bet
-past its jump time, which measured live as the majority of polls. See the interval math in
-register-puntersedge-poll-task.ps1's header - real measured burn rate on the free tier was ~182
-credits/day at a 15-minute interval, well over the ~50/day the 1,500-credit free tier sustains.
-
--ForceRun bypasses the racing-hours gate below entirely - used only by the two dedicated single-
-fire catchup tasks registered via register-puntersedge-catchup-task.ps1: one at 6am (before the
-main window opens, so anything that jumped right after the previous night's close still gets
-checked promptly rather than waiting for whenever that day's slower full DailySync pipeline
-reaches its own settle/sync steps) and one at 11:30pm (30 minutes after the main window closes,
-for anything that jumped right at the edge of it).
+Scheduled hourly from 6am through midnight via register-puntersedge-poll-task.ps1.
+The runtime guard uses local Windows time to match the scheduler and allows the midnight
+hour for delayed starts. No scheduled runs occur from 1am through 5am.
+PuntersEdge can price races only 15-25 minutes before jump, so hourly polling can miss them.
+-ForceRun bypasses the hours guard for manual recovery.
 #>
 
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
-    [int]$RacingHoursStartAest = 11,
-    [int]$RacingHoursEndAest = 23,
+    [int]$RacingHoursStartAest = 6,
+    [int]$RacingHoursEndAest = 24,
     [switch]$ForceRun
 )
 
@@ -94,13 +80,13 @@ function Invoke-Step {
 }
 
 try {
-    $aestNow = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, "AUS Eastern Standard Time")
-    if (-not $ForceRun -and ($aestNow.Hour -lt $RacingHoursStartAest -or $aestNow.Hour -ge $RacingHoursEndAest)) {
-        Write-Log "Outside AU racing hours ($($aestNow.ToString('HH:mm')) AEST/AEDT) - skipping poll to conserve API credits"
+    $aestNow = Get-Date
+    if (-not $ForceRun -and -not ($RacingHoursEndAest -eq 24 -and $aestNow.Hour -eq 0) -and ($aestNow.Hour -lt $RacingHoursStartAest -or $aestNow.Hour -ge $RacingHoursEndAest)) {
+        Write-Log "Outside scheduled hours ($($aestNow.ToString('HH:mm')) local time) - skipping poll to conserve API credits"
         exit 0
     }
     if ($ForceRun) {
-        Write-Log "Force-run catchup poll ($($aestNow.ToString('HH:mm')) AEST/AEDT)"
+        Write-Log "Force-run poll ($($aestNow.ToString('HH:mm')) local time)"
     }
 
     $app = & (Join-Path $PSScriptRoot "find-or-start-app.ps1") -ProjectRoot $ProjectRoot

@@ -6,6 +6,44 @@ import { detectDrift, type DriftBetSample, type DriftReport } from '@/lib/bettin
 const WINDOW_SIZES = [20, 50, 100, 250, 500] as const
 const DRIFT_RECENT_WINDOW_SIZE = 50
 
+export interface ValidationBet {
+  stake: number
+  tab_decimal_odds: number
+  edge_points: number | null
+  model_probability: number
+  status: 'WON' | 'LOST'
+  profit: number | null
+  placed_at: string
+  bet_type: 'WIN' | 'PLACE'
+  race_id: string
+  source: string
+  mode: string
+  model_version: string
+}
+
+export function marketPerformance(bets: ValidationBet[]) {
+  return (['WIN', 'PLACE'] as const).flatMap((betType) => {
+    const market = bets.filter((bet) => bet.bet_type === betType)
+    return [false, true].map((highChanceValue) => {
+      const selected = market.filter((bet) => !highChanceValue || (
+        bet.model_probability >= 0.6 && bet.model_probability * bet.tab_decimal_odds > 1
+      ))
+      const stake = selected.reduce((sum, bet) => sum + bet.stake, 0)
+      const profit = selected.reduce((sum, bet) => sum + (bet.profit ?? 0), 0)
+      return {
+        label: `${betType}${highChanceValue ? ' / chance >=60%, EV >0' : ' / all'}`,
+        n: selected.length,
+        races: new Set(selected.map((bet) => bet.race_id)).size,
+        winRate: selected.length ? selected.filter((bet) => bet.status === 'WON').length / selected.length : null,
+        expectedHitRate: selected.length ? selected.reduce((sum, bet) => sum + bet.model_probability, 0) / selected.length : null,
+        expectedRoiPct: stake > 0 ? selected.reduce((sum, bet) => sum + bet.stake * (bet.model_probability * bet.tab_decimal_odds - 1), 0) / stake * 100 : null,
+        roiPct: stake > 0 ? profit / stake * 100 : null,
+        netProfit: profit,
+      }
+    })
+  })
+}
+
 export interface ValidationWindow {
   label: string
   n: number
@@ -17,6 +55,7 @@ export interface ValidationWindow {
 
 export interface ValidationReport {
   totalSettled: number
+  markets: ReturnType<typeof marketPerformance>
   windows: ValidationWindow[]
   calibration: {
     buckets: ReturnType<typeof bucketCalibration>
@@ -29,15 +68,21 @@ export interface ValidationReport {
 
 /** Shared MODEL VALIDATION computation used by /api/paper-betting/validation and the /paper-betting page. */
 export async function computeValidationReport(supabase: SupabaseClient, accountId: string): Promise<ValidationReport> {
-  const settled = await supabase
-    .from('paper_bets')
-    .select('stake, tab_decimal_odds, edge_points, model_probability, status, profit, placed_at')
-    .eq('account_id', accountId)
-    .in('status', ['WON', 'LOST'])
-    .order('placed_at', { ascending: true })
-  if (settled.error) throw settled.error
-
-  const bets = settled.data ?? []
+  const bets: ValidationBet[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const settled = await supabase
+      .from('paper_bets')
+      .select('stake, tab_decimal_odds, edge_points, model_probability, status, profit, placed_at, bet_type, race_id, source, mode, model_version')
+      .eq('account_id', accountId)
+      .in('status', ['WON', 'LOST'])
+      .order('placed_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + 999)
+    if (settled.error) throw settled.error
+    const page = (settled.data ?? []) as ValidationBet[]
+    bets.push(...page)
+    if (page.length < 1000) break
+  }
 
   const windows: ValidationWindow[] = [...WINDOW_SIZES, Number.POSITIVE_INFINITY].map((size) => {
     const slice = Number.isFinite(size) ? bets.slice(-size) : bets
@@ -73,6 +118,7 @@ export async function computeValidationReport(supabase: SupabaseClient, accountI
 
   return {
     totalSettled: bets.length,
+    markets: marketPerformance(bets),
     windows,
     calibration: {
       buckets,

@@ -96,7 +96,9 @@ export function generateRaceRecommendations(race: PeNextToGoRace, options: Gener
   const views = (race.runners ?? [])
     .filter((runner): runner is typeof runner & { number: number } => runner.number != null)
     .map((runner) => ({ runner, view: buildRunnerMarketView(runner) }))
-  const referencePrices = views.map(({ view }) => view.consensus?.medianPrice ?? view.tab?.winPrice ?? null)
+  const referencePrices = views.map(({ runner, view }) => scratchedNumbers.has(runner.number)
+    ? null
+    : view.consensus?.medianPrice ?? view.tab?.winPrice ?? null)
   const validIndices = referencePrices.map((p, i) => (p != null ? i : -1)).filter((i) => i >= 0)
   const marketField = noVigProbabilities(validIndices.map((i) => referencePrices[i] as number))
 
