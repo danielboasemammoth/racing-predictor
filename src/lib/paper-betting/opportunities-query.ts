@@ -27,29 +27,46 @@ export async function queryLatestOpportunities(
   supabase: SupabaseClient,
   options: { category?: string; raceIds?: string[]; limit?: number } = {},
 ): Promise<OpportunityRow[]> {
-  const recentCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString()
-
-  let query = supabase
-    .from('pe_recommendations')
-    .select(
-      'id, race_id, runner_id, model_probability, tab_win_price, tab_place_price, edge_points, expected_value, confidence_level, decision, place_model_probability, place_edge_points, place_expected_value, place_decision, generated_at, category, pe_runners(name, runner_number), pe_races!inner(venue, race_number, category, start_time, status)',
-    )
-    .gte('generated_at', recentCutoff)
-    .eq('pe_races.status', 'upcoming')
-    .gt('pe_races.start_time', new Date().toISOString())
-    .order('generated_at', { ascending: false })
-    .order('id', { ascending: false })
-
-  if (options.category) query = query.eq('category', options.category)
-  if (options.raceIds) query = query.in('race_id', options.raceIds)
+  if (options.raceIds?.length === 0 || options.limit === 0) return []
+  const now = new Date()
+  const recentCutoff = new Date(now.getTime() - 30 * 60 * 1000).toISOString()
+  let racesQuery = supabase.from('pe_races').select('id').eq('status', 'upcoming')
+    .gt('start_time', now.toISOString()).order('id')
+  if (options.category) racesQuery = racesQuery.eq('category', options.category)
+  const requestedIds = options.raceIds ? new Set(options.raceIds) : null
+  const raceIds: string[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const page = await racesQuery.range(offset, offset + 999)
+    if (page.error) throw page.error
+    const rows = (page.data ?? []) as Array<{ id: string }>
+    raceIds.push(...rows.filter((row) => !requestedIds || requestedIds.has(row.id)).map((row) => row.id))
+    if (rows.length < 1000) break
+  }
 
   const data: OpportunityRow[] = []
-  for (let offset = 0; ; offset += 1000) {
-    const page = await query.range(offset, offset + 999)
-    if (page.error) throw page.error
-    const rows = (page.data ?? []) as OpportunityRow[]
-    data.push(...rows)
-    if (rows.length < 1000) break
+  async function loadRaceBatch(ids: string[]) {
+    const batchRows: OpportunityRow[] = []
+    let query = supabase.from('pe_recommendations')
+      .select('id, race_id, runner_id, model_probability, tab_win_price, tab_place_price, edge_points, expected_value, confidence_level, decision, place_model_probability, place_edge_points, place_expected_value, place_decision, generated_at, category, pe_runners(name, runner_number), pe_races(venue, race_number, category, start_time, status)')
+      .in('race_id', ids)
+      .gte('generated_at', recentCutoff)
+      .order('generated_at', { ascending: false }).order('id', { ascending: false })
+    if (options.category) query = query.eq('category', options.category)
+    for (let offset = 0; ; offset += 1000) {
+      const page = await query.range(offset, offset + 999)
+      if (page.error) throw page.error
+      const rows = (page.data ?? []) as OpportunityRow[]
+      batchRows.push(...rows)
+      if (rows.length < 1000) break
+    }
+    return batchRows
+  }
+  for (let batch = 0; batch < raceIds.length; batch += 80) {
+    const pending: Array<Promise<OpportunityRow[]>> = []
+    for (let offset = batch; offset < Math.min(batch + 80, raceIds.length); offset += 20) {
+      pending.push(loadRaceBatch(raceIds.slice(offset, offset + 20)))
+    }
+    for (const rows of await Promise.all(pending)) data.push(...rows)
   }
 
   const seenRunnerIds = new Set<string>()

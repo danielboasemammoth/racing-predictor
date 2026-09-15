@@ -6,6 +6,7 @@ import { computeValidationReport, type ValidationReport } from '@/lib/paper-bett
 import { WhatIfLab } from './what-if-lab'
 import { BankrollSettings } from './bankroll-settings'
 import { loadPlaceShadowReport } from '@/lib/paper-betting/place-shadow'
+import { loadPaperPageSection } from '@/lib/paper-betting/page-section'
 
 interface PaperAccountRow {
   id: string
@@ -137,10 +138,25 @@ async function loadValidation(accountId: string | undefined): Promise<Validation
   return computeValidationReport(supabase, accountId)
 }
 
+function SectionUnavailable({ name }: { name: string }) {
+  return <p role="status" className="my-3 text-sm text-amber-800">{name} temporarily unavailable. Please refresh shortly.</p>
+}
+
 export default async function PaperBettingPage() {
-  const wallet = await loadWallet()
-  const supabase = await createClient()
-  const [opportunities, validation, shadow] = await Promise.all([loadBestOpportunities(), loadValidation(wallet?.account.id), loadPlaceShadowReport(supabase)])
+  const walletPromise = loadPaperPageSection('wallet', loadWallet)
+  const [walletResult, opportunityResult, validationResult, shadowResult] = await Promise.all([
+    walletPromise,
+    loadPaperPageSection('opportunities', loadBestOpportunities),
+    loadPaperPageSection('validation', async () => {
+      const result = await walletPromise
+      return loadValidation(result.data?.account.id)
+    }),
+    loadPaperPageSection('place-shadow', async () => loadPlaceShadowReport(await createClient())),
+  ])
+  const wallet = walletResult.data
+  const opportunities = opportunityResult.data ?? []
+  const validation = validationResult.data
+  const shadow = shadowResult.data
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -159,7 +175,7 @@ export default async function PaperBettingPage() {
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Best Opportunities Now</h2>
-          {opportunities.length === 0 ? (
+          {!opportunityResult.ok ? <SectionUnavailable name="Opportunities" /> : opportunities.length === 0 ? (
             <p className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
               No qualifying bets right now.
             </p>
@@ -193,6 +209,7 @@ export default async function PaperBettingPage() {
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Prospective PLACE Check</h2>
+          {!shadow ? <SectionUnavailable name="Prospective PLACE data" /> : <>
           <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-700">
             <span>Captured: {shadow.captured}</span>
             <span>Pending: {shadow.pending}</span>
@@ -224,8 +241,10 @@ export default async function PaperBettingPage() {
           )}
           <p className="mt-3 text-xs text-slate-600">Probability review: {shadow.raw.races}/100 races. Value review: {shadow.corrected.valueSelections.races}/30 qualifying races. Shadow returns use recorded prices and flat stakes, not actual bets. Reaching a sample threshold does not prove profitability.</p>
           {Object.keys(shadow.exclusions).length > 0 && <p className="mt-2 text-xs text-slate-500">Exclusions: {Object.entries(shadow.exclusions).map(([reason, count]) => `${reason}: ${count}`).join(', ')}</p>}
+          </>}
         </section>
 
+        {!validationResult.ok && <SectionUnavailable name="Model validation" />}
         {validation && validation.totalSettled > 0 && (
           <section>
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Model Validation</h2>
@@ -350,7 +369,7 @@ export default async function PaperBettingPage() {
           <WhatIfLab />
         </section>
 
-        {!wallet ? (
+        {!walletResult.ok ? <SectionUnavailable name="Wallet and bet history" /> : !wallet ? (
           <section>
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Set Up Paper Betting</h2>
             <p className="mb-3 text-sm text-slate-600">

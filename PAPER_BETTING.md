@@ -14,6 +14,20 @@ PuntersEdge continues to evaluate its own WIN and PLACE recommendations separate
 
 ## Performance
 
+### Page Availability
+
+Wallet, opportunities, validation, and shadow queries have independent error states. A PostgreSQL statement timeout (`57014`) in one section no longer aborts the entire page. Failed loads display "temporarily unavailable", not zero balances, missing accounts, or an empty opportunity set. Server logs identify the section and error code without dumping upstream payloads.
+
+The opportunity reader first selects upcoming race IDs, then loads recent snapshots in batches of at most 20 races with at most four concurrent queries. It uses the existing recommendation race-ID index and retains latest-snapshot-before-decision filtering, including PLACE-only candidates. No new migration or increased database timeout is required.
+
+For read-only query timings with the same public access as the page:
+
+```powershell
+npx tsx --env-file=.env.local scripts/diagnose-paper-page.ts
+```
+
+This probes the wallet account/bets queries and the opportunity, validation, and shadow loaders. It does not include wallet race-label lookups or reproduce production load; successful timings do not prove a previously reported timeout cannot recur.
+
 ### Policy Tracking
 
 Apply `supabase/migrate-paper-betting-policy.sql` in the Supabase SQL editor to enable prospective policy tags. It adds a nullable column and index without changing old records. Internal automatic bets then record `internal-value-v1`; model version and stable duplicate-prevention keys remain unchanged. Before migration, betting continues untagged and the scheduled-job response explicitly reports that tracking is unavailable. Never infer the policy of an untagged bet from its timestamp.
