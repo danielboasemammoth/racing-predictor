@@ -55,3 +55,24 @@ Reproduce the read-only model audit:
 ```powershell
 npx tsx --env-file=.env.local scripts/audit-live-models.ts
 ```
+
+## Chronological PLACE Study: 2026-09-15
+
+Read-only command:
+
+```powershell
+npx tsx --env-file=.env.local scripts/evaluate-place-calibration.ts
+```
+
+The initial 30-day query found 1,382 completed races and retained 231 races over 12 Melbourne dates. Exclusions: 698 without a pre-race current-model forecast, 296 not paying three places, 133 with changed/mismatched fields, and 24 with incomplete/ambiguous results. The sample is selective; it does not cover all races or two-place markets.
+
+The candidate is `corrected = (1-strength)*raw + strength*(3/fieldSize)`. Its single parameter minimizes race-weighted training Brier, constrained to [0,1]. No betting thresholds are tuned. A coherent full-field distribution still sums to three; therefore aggregate predicted-vs-actual hit rate across all runners is mechanically equal and is NOT evidence of calibration. Brier/log loss and probability-specific selection results are the relevant diagnostics.
+
+- Training: 102 races, September 3-9; fitted strength `0.3345894804013903`.
+- Validation: 33 races, September 10-11; Brier 0.19858 -> 0.19579, log loss 0.58604 -> 0.57838.
+- Test: 96 races, September 12-14; Brier 0.20209 -> 0.19869, log loss 0.59540 -> 0.58552.
+- Test value selections: raw 26 bets/25 races, corrected only 4 bets/3 races. Corrected hit rate was 75%, but this is far too small to infer reliable ROI. Recorded-price flat-stake returns are exploratory, not actual paper settlements or guaranteed executable prices.
+
+The test partition was held out from fitting and opened only after the validation gate passed. These historical races had also appeared in earlier general model audits, so this is not a substitute for genuinely future validation. The rolling command is research, not an automatic retraining/promotion job; do not repeatedly tune against the same test outcomes.
+
+Decision: freeze this candidate for prospective shadow observation, not production betting. No threshold, probability, or staking changes were applied. Its improvement in overall probability accuracy does not justify reducing live paper-bet volume based on three selected test races. PuntersEdge's 26 selected PLACE bets over 18 races come from a different hybrid and do not support transferring this correction or fitting their own credible train/validation/test split.
