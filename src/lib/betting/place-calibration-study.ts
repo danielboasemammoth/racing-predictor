@@ -1,8 +1,9 @@
 import { brierScore, logLoss } from './calibration'
-import { DEFAULT_THRESHOLDS } from './recommendation-engine'
 import { expectedValue, probabilityEdgePoints } from './odds-math'
 import { melbourneDateKey } from '@/lib/daily-picks'
 import type { PredictionPayload } from '@/lib/types'
+
+export const PLACE_STUDY_VALUE_RULES = Object.freeze({ minProbability: 0.6, minEdgePoints: 5, maxOdds: 15 })
 
 export interface PlaceStudyPrediction { predicted_at: string; predictions: PredictionPayload }
 export interface PlaceStudyEntry { horse_id: string; status: string; finishing_position: number | null }
@@ -92,8 +93,8 @@ export function scorePlaceStudy(races: PlaceStudyRace[], strength: number) {
       const probability = shrinkPlaceProbability(runner.probability, race.runners.length, strength)
       if (runner.odds != null && Number.isFinite(runner.odds) && runner.odds > 1) {
         pricedRunners += 1
-        if (probability >= 0.6 && runner.odds <= DEFAULT_THRESHOLDS.maxOdds
-          && probabilityEdgePoints(probability, runner.odds) >= DEFAULT_THRESHOLDS.minEdgePoints
+        if (probability >= PLACE_STUDY_VALUE_RULES.minProbability && runner.odds <= PLACE_STUDY_VALUE_RULES.maxOdds
+          && probabilityEdgePoints(probability, runner.odds) >= PLACE_STUDY_VALUE_RULES.minEdgePoints
           && expectedValue(probability, runner.odds) > 0) selections.push({ raceId: race.raceId, probability, placed: runner.placed, odds: runner.odds })
       }
       expectedHits += probability

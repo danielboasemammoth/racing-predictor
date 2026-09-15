@@ -5,6 +5,7 @@ import { opportunityMarkets, queryLatestOpportunities, type OpportunityRow } fro
 import { computeValidationReport, type ValidationReport } from '@/lib/paper-betting/validation-query'
 import { WhatIfLab } from './what-if-lab'
 import { BankrollSettings } from './bankroll-settings'
+import { loadPlaceShadowReport } from '@/lib/paper-betting/place-shadow'
 
 interface PaperAccountRow {
   id: string
@@ -138,7 +139,8 @@ async function loadValidation(accountId: string | undefined): Promise<Validation
 
 export default async function PaperBettingPage() {
   const wallet = await loadWallet()
-  const [opportunities, validation] = await Promise.all([loadBestOpportunities(), loadValidation(wallet?.account.id)])
+  const supabase = await createClient()
+  const [opportunities, validation, shadow] = await Promise.all([loadBestOpportunities(), loadValidation(wallet?.account.id), loadPlaceShadowReport(supabase)])
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -187,6 +189,41 @@ export default async function PaperBettingPage() {
               }))}
             </ul>
           )}
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-slate-900">Prospective PLACE Check</h2>
+          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-700">
+            <span>Captured: {shadow.captured}</span>
+            <span>Pending: {shadow.pending}</span>
+            <span>Scored: {shadow.raw.races}</span>
+            <span>Excluded: {Object.values(shadow.exclusions).reduce((sum, count) => sum + count, 0)}</span>
+          </div>
+          {shadow.raw.races === 0 ? (
+            <p className="text-sm text-slate-500">Awaiting future race results. Shadow observation starts September 16, Melbourne time; betting probabilities are unchanged.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                  <th className="px-3 py-2">Forecast</th><th className="px-3 py-2">Brier</th><th className="px-3 py-2">Log Loss</th>
+                  <th className="px-3 py-2">Value Bets / Races</th><th className="px-3 py-2">Recorded-Price ROI</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {[{ name: 'Current', result: shadow.raw }, { name: 'Shadow correction', result: shadow.corrected }].map(({ name, result }) => (
+                    <tr key={name}>
+                      <td className="px-3 py-2 text-slate-700">{name}</td>
+                      <td className="px-3 py-2 text-slate-700">{result.brier?.toFixed(5) ?? 'n/a'}</td>
+                      <td className="px-3 py-2 text-slate-700">{result.logLoss?.toFixed(5) ?? 'n/a'}</td>
+                      <td className="px-3 py-2 text-slate-700">{result.valueSelections.bets} / {result.valueSelections.races}</td>
+                      <td className="px-3 py-2 text-slate-700">{result.valueSelections.flatStakeRoiPct == null ? 'n/a' : `${result.valueSelections.flatStakeRoiPct.toFixed(1)}%`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="mt-3 text-xs text-slate-600">Probability review: {shadow.raw.races}/100 races. Value review: {shadow.corrected.valueSelections.races}/30 qualifying races. Shadow returns use recorded prices and flat stakes, not actual bets. Reaching a sample threshold does not prove profitability.</p>
+          {Object.keys(shadow.exclusions).length > 0 && <p className="mt-2 text-xs text-slate-500">Exclusions: {Object.entries(shadow.exclusions).map(([reason, count]) => `${reason}: ${count}`).join(', ')}</p>}
         </section>
 
         {validation && validation.totalSettled > 0 && (

@@ -76,3 +76,19 @@ The candidate is `corrected = (1-strength)*raw + strength*(3/fieldSize)`. Its si
 The test partition was held out from fitting and opened only after the validation gate passed. These historical races had also appeared in earlier general model audits, so this is not a substitute for genuinely future validation. The rolling command is research, not an automatic retraining/promotion job; do not repeatedly tune against the same test outcomes.
 
 Decision: freeze this candidate for prospective shadow observation, not production betting. No threshold, probability, or staking changes were applied. Its improvement in overall probability accuracy does not justify reducing live paper-bet volume based on three selected test races. PuntersEdge's 26 selected PLACE bets over 18 races come from a different hybrid and do not support transferring this correction or fitting their own credible train/validation/test split.
+
+## Prospective Shadow Observation
+
+Starting September 16 Melbourne time, the internal auto-bet run records the first eligible full-field forecast for each race under `place-shrinkage-shadow-v1`. The strength is frozen at `0.3345894804013903`, source model at `v6-market-blend`. This observer uses the existing `analysis_snapshots` table; no new migration is required for shadow capture. It runs only when the existing internal automatic-betting job runs, so activate the hourly schedule to improve coverage.
+
+Capture requires an upcoming race 1-180 minutes away, at least eight active starters, a matching current forecast field, and a coherent distribution summing to three. It stores raw probabilities, corrected probabilities, source forecast time, capture time, and recorded prices without outcomes. Insert-on-conflict-do-nothing preserves the first capture. It never changes a prediction, recommendation, stake, or paper bet; capture errors are counted and do not block betting. Only the latest run-level diagnostics are replaced; race-level shadow snapshots remain immutable.
+
+The public paper-betting page shows capture/pending/scored/excluded counts and paired results as they accumulate. The read-only evaluator is:
+
+```powershell
+npx tsx --env-file=.env.local scripts/evaluate-place-shadow.ts
+```
+
+Scoring uses completed race results and the captured prices, rejecting changed fields, ambiguous place results, mismatched candidate provenance, and forecasts captured after the actual start. Cancelled/missing races are excluded, not losses. This is a selective complete-field sample; report exclusions alongside results. Shadow ROI is a flat-stake diagnostic, not an executable-price or actual-wallet claim.
+
+Review once at least 100 new races are scored for overall probability quality and 30 distinct races contain qualifying corrected value selections. These are minimum review checkpoints, not significance guarantees or an automatic promotion. Check paired Brier/log loss, stability across later race days, selection hit rates, correlated race exposure, and recorded-price limitations before changing production. Do not refit the candidate while this prospective check is running.

@@ -14,7 +14,7 @@ export async function POST() {
     const rejected = Object.entries(summary.rejectionCounts).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(', ')
     return NextResponse.json({
       success: true,
-      message: `${summary.policyVersion}: evaluated ${summary.marketsConsidered} runner/markets, placed ${summary.winBetsPlaced} WIN and ${summary.placeBetsPlaced} PLACE (${summary.skippedDuplicate} duplicates, ${summary.skippedZeroStake} zero stake). Rejections: ${rejected || 'none'}. Race skips: ${JSON.stringify(summary.raceSkips)}.${summary.policyTrackingAvailable ? '' : ' Policy migration missing: new bets remain untagged.'}`,
+      message: `${summary.policyVersion}: evaluated ${summary.marketsConsidered} runner/markets, placed ${summary.winBetsPlaced} WIN and ${summary.placeBetsPlaced} PLACE (${summary.skippedDuplicate} duplicates, ${summary.skippedZeroStake} zero stake). Rejections: ${rejected || 'none'}. Race skips: ${JSON.stringify(summary.raceSkips)}. Shadow: ${summary.shadowRacesRecorded} new races, ${summary.shadowCaptureErrors} capture errors.${summary.policyTrackingAvailable ? '' : ' Policy migration missing: new bets remain untagged.'}`,
       ...summary,
     })
   } catch (error) {

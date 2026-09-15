@@ -5,8 +5,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { placeBet } from './repository'
 import { supportsPolicyTracking } from './policy-tracking'
+import { recordPlaceShadow } from './place-shadow'
 
 vi.mock('./policy-tracking', () => ({ INTERNAL_VALUE_POLICY_VERSION: 'internal-value-v1', supportsPolicyTracking: vi.fn().mockResolvedValue(true) }))
+vi.mock('./place-shadow', () => ({ recordPlaceShadow: vi.fn().mockResolvedValue(false) }))
 
 vi.mock('@/lib/upcoming-races', () => ({ getUpcomingRaces: vi.fn() }))
 vi.mock('@/lib/reliability-context', () => ({ loadReliabilityContext: vi.fn().mockResolvedValue(null) }))
@@ -68,6 +70,12 @@ describe('internal value paper bets', () => {
     vi.mocked(placeBet).mockResolvedValueOnce({ placed: false, reason: 'duplicate' })
     expect(await autoPlaceReliabilityBets(admin, now)).toMatchObject({ policyTrackingAvailable: false })
     expect(vi.mocked(placeBet).mock.calls[2][1].policyVersion).toBeUndefined()
+    vi.mocked(recordPlaceShadow).mockRejectedValueOnce(new Error('shadow storage unavailable'))
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(placeBet).mockResolvedValueOnce({ placed: false, reason: 'duplicate' })
+    expect(await autoPlaceReliabilityBets(admin, now)).toMatchObject({ shadowCaptureErrors: 1, skippedDuplicate: 1 })
+    expect(warning).toHaveBeenCalled()
+    warning.mockRestore()
   })
 
   it('selects a high-chance value PLACE runner independently of the WIN shortlist', () => {

@@ -9,6 +9,7 @@ import { DEFAULT_THRESHOLDS } from '@/lib/betting/recommendation-engine'
 import { paidPlacesCount } from '@/lib/betting/place-rules'
 import type { PredictedHorse, RaceWithPrediction } from '@/lib/types'
 import { INTERNAL_VALUE_POLICY_VERSION, supportsPolicyTracking } from './policy-tracking'
+import { recordPlaceShadow } from './place-shadow'
 
 const DEFAULT_STARTING_BANKROLL = 500 // shared 'default' account - matches puntersedge/sync and paper-betting/bets routes
 
@@ -68,6 +69,8 @@ export function internalValueCandidates(race: RaceWithPrediction, activeHorseIds
 export interface ReliabilityAutoBetSummary {
   policyVersion: string
   policyTrackingAvailable: boolean
+  shadowRacesRecorded: number
+  shadowCaptureErrors: number
   marketsConsidered: number
   rejectionCounts: Record<string, number>
   raceSkips: { outsideWindow: number; invalidPrediction: number }
@@ -84,6 +87,8 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
   const summary: ReliabilityAutoBetSummary = {
     policyVersion: INTERNAL_VALUE_POLICY_VERSION,
     policyTrackingAvailable: await supportsPolicyTracking(admin),
+    shadowRacesRecorded: 0,
+    shadowCaptureErrors: 0,
     marketsConsidered: 0,
     rejectionCounts: {},
     raceSkips: { outsideWindow: 0, invalidPrediction: 0 },
@@ -115,6 +120,12 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
     const entries = await admin.from('race_entries').select('horse_id, status').eq('race_id', race.id)
     if (entries.error) throw entries.error
     const activeHorseIds = new Set<string>((entries.data ?? []).filter((entry) => entry.status !== 'scratched').map((entry) => entry.horse_id))
+    try {
+      if (await recordPlaceShadow(admin, race, activeHorseIds, now)) summary.shadowRacesRecorded += 1
+    } catch (error) {
+      summary.shadowCaptureErrors += 1
+      console.warn('PLACE shadow capture failed', error)
+    }
     const { candidates, rejected, marketsConsidered } = evaluateInternalValueCandidates(race, activeHorseIds, qualifiedWinners.get(race.id))
     summary.marketsConsidered += marketsConsidered
     for (const [reason, count] of Object.entries(rejected)) summary.rejectionCounts[reason] = (summary.rejectionCounts[reason] ?? 0) + count
