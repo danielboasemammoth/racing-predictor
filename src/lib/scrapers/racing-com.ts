@@ -228,7 +228,27 @@ export async function fetchMeetings(userDate: string, daysBack = 1, daysForward 
 
 export async function fetchRaces(meetCode: string) {
   const data = await graphql<{ getRacesForMeet: RacingRace[] }>(RACES_QUERY, { meetCode })
-  return data.getRacesForMeet
+  return data.getRacesForMeet.map(race => ({ ...race, formRaceEntries: deduplicateRaceEntries(race) }))
+}
+
+export function deduplicateRaceEntries(race: Pick<RacingRace, 'id' | 'formRaceEntries'>): RacingEntry[] {
+  const entries = new Map<string, RacingEntry>()
+  for (const entry of race.formRaceEntries) {
+    if (!entry.horseCode || !entry.horseName) continue
+    const previous = entries.get(entry.horseCode)
+    if (previous) {
+      const syntheticId = `999${race.id}-${entry.horseCode}`
+      const previousSynthetic = previous.id === syntheticId
+      const currentSynthetic = entry.id === syntheticId
+      if (parsePosition(previous.position) !== parsePosition(entry.position) || previous.scratched !== entry.scratched
+        || (previousSynthetic === currentSynthetic && JSON.stringify(previous) !== JSON.stringify(entry))) {
+        throw new Error(`Conflicting Racing.com entries for race ${race.id}, horse ${entry.horseCode}`)
+      }
+      if (!previousSynthetic && currentSynthetic) continue
+    }
+    entries.set(entry.horseCode, entry)
+  }
+  return [...entries.values()]
 }
 
 export function parsePosition(value: number | null): number | null {

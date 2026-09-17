@@ -26,7 +26,7 @@ $scriptPath = Join-Path $PSScriptRoot "run-puntersedge-poll.ps1"
 $vbsPath = Join-Path $PSScriptRoot "run-puntersedge-poll-hidden.vbs"
 $innerCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -ProjectRoot `"$ProjectRoot`""
 $escapedCommand = $innerCommand -replace '"', '""'
-$vbsContent = "Set objShell = CreateObject(""WScript.Shell"")`r`nobjShell.Run ""$escapedCommand"", 0, True`r`n"
+$vbsContent = "Set objShell = CreateObject(""WScript.Shell"")`r`nWScript.Quit objShell.Run(""$escapedCommand"", 0, True)`r`n"
 Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII
 
 $action = New-ScheduledTaskAction `

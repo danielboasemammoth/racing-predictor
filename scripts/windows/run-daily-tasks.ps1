@@ -63,12 +63,14 @@ function Invoke-Step {
         [string]$Path,
         [string]$Label,
         [string]$Mode,
+        [int]$BatchLimit,
         $WebSession,
         [switch]$ContinueOnError
     )
 
     $bodyObj = @{}
     if ($Mode) { $bodyObj.mode = $Mode }
+    if ($BatchLimit -gt 0) { $bodyObj.batchLimit = $BatchLimit }
     $body = $bodyObj | ConvertTo-Json
     $url = "$BaseUrl$Path"
 
@@ -100,12 +102,9 @@ try {
     Write-Log "Using app URL: $baseUrl"
     $webSession = New-AdminWebSession -SessionCookieValue (Get-AdminSessionCookie -ProjectRoot $ProjectRoot)
 
-    # These four steps are genuine hard dependencies of each other (predictions need synced races/
-    # results) - still abort the whole run on failure, as before.
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape" -Label "Sync Upcoming Races" -WebSession $webSession
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape-results" -Label "Sync Results" -WebSession $webSession
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "retrospective" -Label "Backfill Predictions" -WebSession $webSession
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "all" -Label "Generate Predictions" -WebSession $webSession
 
@@ -115,6 +114,7 @@ try {
     # confirmed via the daily-tasks logs) and let pe_recommendations/pe_odds_snapshots bloat to
     # ~450k stale rows with zero pruning, eventually causing live Postgres statement timeouts.
     $anyFailures = $false
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "retrospective" -BatchLimit 50 -Label "Backfill Predictions" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
@@ -147,3 +147,5 @@ try {
         taskkill /T /F /PID $app.StartedProcessId 2>&1 | Out-Null
     }
 }
+
+if ($anyFailures) { exit 1 }

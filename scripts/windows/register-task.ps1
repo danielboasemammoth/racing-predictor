@@ -19,7 +19,7 @@ $scriptPath = Join-Path $PSScriptRoot "run-daily-tasks.ps1"
 $vbsPath = Join-Path $PSScriptRoot "run-daily-tasks-hidden.vbs"
 $innerCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -ProjectRoot `"$ProjectRoot`""
 $escapedCommand = $innerCommand -replace '"', '""'
-$vbsContent = "Set objShell = CreateObject(""WScript.Shell"")`r`nobjShell.Run ""$escapedCommand"", 0, True`r`n"
+$vbsContent = "Set objShell = CreateObject(""WScript.Shell"")`r`nWScript.Quit objShell.Run(""$escapedCommand"", 0, True)`r`n"
 Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII
 
 $action = New-ScheduledTaskAction `
@@ -42,6 +42,6 @@ Register-ScheduledTask `
     -Settings $settings `
     -Description "Hourly 6am through midnight: scrapes races/results, backfills + generates predictions, backtests, settles paper bets, and syncs PuntersEdge odds" `
     -RunLevel Highest `
-    -Force
+    -Force -ErrorAction Stop
 
 Write-Host "Scheduled task '$TaskName' registered. Run 'Start-ScheduledTask -TaskName $TaskName' to test it now." -ForegroundColor Green

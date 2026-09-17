@@ -6,6 +6,7 @@ import {
   filterDailyPicksByThreshold,
   getDailyPicks,
   getTomorrowPicks,
+  melbourneDateKey,
   PICKS_SORT_KEYS,
   sortDailyPicks,
   type DailyPick,
@@ -18,6 +19,7 @@ import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { SiteNav } from '@/components/site-nav'
 import { PaperBetButton } from '@/components/paper-bet-button'
 import { PicksSortFilter } from '@/components/picks-sort-filter'
+import { getPlaceWatchlist } from '@/lib/place-watchlist'
 
 export const dynamic = 'force-dynamic'
 
@@ -113,6 +115,9 @@ function PickCard({ pick, index, dayLabel, accent }: { pick: DailyPick; index: n
 
 export default async function Home({ searchParams }: { searchParams: Promise<{ minReliability?: string; maidenOnly?: string; sort?: string; minPct?: string }> }) {
   const params = await searchParams
+  const now = new Date()
+  const todayKey = melbourneDateKey(now)
+  const tomorrowKey = new Date(Date.parse(`${todayKey}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
   const baseFilters: DailyPicksFilterOptions = {
     minReliability: params.minReliability ? Number(params.minReliability) : undefined,
     maidenOnly: params.maidenOnly === '1',
@@ -131,14 +136,34 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   const conservativeFilters: DailyPicksFilterOptions = { ...baseFilters }
 
   const applyPicksSortFilter = (picks: DailyPick[]) => sortDailyPicks(filterDailyPicksByThreshold(picks, picksSort, picksMinPct), picksSort)
-  const conservativePicks = applyPicksSortFilter(getDailyPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
-  const tomorrowConservativePicks = applyPicksSortFilter(getTomorrowPicks(races, new Date(), Number.MAX_SAFE_INTEGER, conservativeFilters))
+  const todayQualified = getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, conservativeFilters)
+  const tomorrowQualified = getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, conservativeFilters)
+  const conservativePicks = applyPicksSortFilter(todayQualified)
+  const tomorrowConservativePicks = applyPicksSortFilter(tomorrowQualified)
+  const watchDays = [{ label: 'Today', dateKey: todayKey }, { label: 'Tomorrow', dateKey: tomorrowKey }].map(day => ({
+    ...day,
+    races: races.filter(race => melbourneDateKey(race.race_datetime) === day.dateKey),
+    picks: getPlaceWatchlist(races, day.dateKey, now),
+  }))
+
+  function shortlistStatus(dateKey: string, qualifiedCount: number) {
+    const dayRaces = races.filter(race => melbourneDateKey(race.race_datetime) === dateKey)
+    if (!dayRaces.length) return 'No remaining races scheduled.'
+    const predictedCount = dayRaces.filter(race => race.prediction).length
+    if (!predictedCount) return `Predictions pending for all ${dayRaces.length} races.`
+    const coverage = `${predictedCount} of ${dayRaces.length} races have predictions.`
+    if (!reliabilityContext) return `Reliability data unavailable. ${coverage}`
+    if (!qualifiedCount) return `No forecasts meet the current conservative eligibility filters. ${coverage}`
+    return `${qualifiedCount} eligible forecasts excluded by the current ${PICKS_SORT_DESCRIPTIONS[picksSort]} threshold. ${coverage}`
+  }
 
   function filterLink(overrides: Partial<{ minReliability?: string; maidenOnly?: string }>) {
     const next = new URLSearchParams()
     const merged = { ...params, ...overrides }
     if (merged.minReliability) next.set('minReliability', merged.minReliability)
     if (merged.maidenOnly) next.set('maidenOnly', merged.maidenOnly)
+    if (merged.sort) next.set('sort', merged.sort)
+    if (merged.minPct) next.set('minPct', merged.minPct)
     const query = next.toString()
     return query ? `/?${query}` : '/'
   }
@@ -160,11 +185,40 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
       <main className="max-w-7xl mx-auto px-4 py-8">
         {races.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-            <p className="text-slate-600 mb-2">No upcoming races with predictions yet.</p>
+            <p className="text-slate-600 mb-2">No upcoming races scheduled through tomorrow.</p>
             <Link href="/admin" className="text-teal-700 font-medium hover:underline">Go to Admin to run prediction model</Link>
           </div>
         ) : (
           <div className="space-y-6">
+            <section aria-labelledby="place-watchlist-title" className="border-y border-sky-200 bg-sky-50 px-4 py-5 sm:px-6">
+              <h2 id="place-watchlist-title" className="text-lg font-bold text-slate-900">PLACE watchlist</h2>
+              <p className="mt-1 text-sm text-slate-600">Top-three probability 50% or higher. Model estimates, not value-qualified bets. Paid places depend on the market and field size.</p>
+              <div className="mt-4 grid gap-6 lg:grid-cols-2">
+                {watchDays.map(day => (
+                  <div key={day.dateKey} className="min-w-0">
+                    <h3 className="font-semibold text-slate-900">{day.label} <span className="text-sm font-normal text-slate-600">{day.dateKey}</span></h3>
+                    <p className="mt-1 text-xs text-slate-600">{day.races.filter(race => race.prediction).length}/{day.races.length} races with predictions</p>
+                    {day.picks.length ? (
+                      <ul tabIndex={0} aria-label={`${day.label} PLACE forecasts`} className="mt-2 max-h-96 overflow-y-auto overscroll-contain divide-y divide-sky-200 pr-2 focus-visible:outline-2 focus-visible:outline-sky-700">
+                        {day.picks.map(pick => (
+                          <li key={`${pick.race.id}-${pick.horse.horse_id}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-3">
+                            <div className="min-w-0 break-words">
+                              <Link href={`/races/${pick.race.id}`} className="font-semibold text-sky-900 hover:underline">{pick.horse.horse_name}</Link>
+                              <p className="text-xs text-slate-600">{pick.race.racecourses?.name} · R{pick.race.race_number} · {formatDateTime(pick.race.race_datetime)}</p>
+                              <p className="mt-1 text-xs text-slate-500">Forecast: {formatDateTime(pick.race.prediction!.predicted_at)}</p>
+                            </div>
+                            <div className="text-right tabular-nums">
+                              <p className="font-bold text-sky-900">{(pick.top3Probability * 100).toFixed(1)}%</p>
+                              <p className="text-xs text-slate-600">top 3</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : <p className="mt-3 text-sm text-slate-600">{!day.races.length ? 'No remaining races scheduled.' : !day.races.some(race => race.prediction) ? 'Predictions pending.' : 'No recorded forecasts at or above 50%.'}</p>}
+                  </div>
+                ))}
+              </div>
+            </section>
             {reliabilityContext && (
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-semibold text-slate-600">Filters:</span>
@@ -207,35 +261,30 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
                   ))}
                 </div>
               </section>
-            ) : reliabilityContext ? (
+            ) : (
               <section aria-labelledby="conservative-picks-title" className="border-y border-slate-200 bg-slate-50 px-4 py-6 sm:px-6">
                 <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
-                <h2 id="conservative-picks-title" className="mt-1 text-lg font-bold text-slate-900">No conservative selections currently qualify</h2>
+                <h2 id="conservative-picks-title" className="mt-1 text-lg font-bold text-slate-900">Today&apos;s conservative picks</h2>
                 <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                  No upcoming race today has a prediction with sufficient evidence and a comparable historical cohort above baseline. This is a normal outcome, not an error - the shortlist is never filled just to have content.
+                  {shortlistStatus(todayKey, todayQualified.length)}
                 </p>
               </section>
-            ) : null}
+            )}
 
-            {tomorrowConservativePicks.length > 0 && (
-              <details className="border border-slate-200 bg-white px-4 py-4 sm:px-6">
-                <summary className="cursor-pointer list-none">
+              <section aria-labelledby="tomorrow-picks-title" className="border-y border-slate-200 px-4 py-4 sm:px-6">
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <p className="text-xs font-bold uppercase text-slate-500">Daily conservative shortlist</p>
-                      <h2 className="mt-1 text-lg font-bold text-slate-900">Tomorrow&apos;s conservative picks</h2>
+                      <h2 id="tomorrow-picks-title" className="mt-1 text-lg font-bold text-slate-900">Tomorrow&apos;s conservative picks</h2>
                     </div>
-                    <span className="text-sm font-medium text-teal-700">Show ▾</span>
                   </div>
-                </summary>
 
-                <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                {tomorrowConservativePicks.length ? <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
                   {tomorrowConservativePicks.map((pick, index) => (
                     <PickCard key={pick.race.id} pick={pick} index={index} dayLabel="Tomorrow" accent="slate" />
                   ))}
-                </div>
-              </details>
-            )}
+                </div> : <p className="mt-2 text-sm text-slate-600">{shortlistStatus(tomorrowKey, tomorrowQualified.length)}</p>}
+              </section>
 
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-slate-900">Upcoming Races</h2>

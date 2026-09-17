@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { deduplicateRaceEntries, fetchRaces } from '@/lib/scrapers/racing-com'
 import { parseDistance, parseFinishingTime, parsePrice, parsePosition, parseWeight, parseMetres, parseRating, buildSpeedRatings, buildRunningPositions, selectMeetings, totalPrizeMoney, groupValidHorseIdsByRace, fetchMeetings, findMatchingRace, type RacingRace, type RacingEntry, type RacingEntryTimes } from '@/lib/scrapers/racing-com'
 
 describe('Racing.com normalization', () => {
@@ -139,6 +140,34 @@ describe('findMatchingRace', () => {
   it('returns undefined when no race in the meeting matches (e.g. race removed from the feed)', () => {
     const meetingRaces = [fakeRace('111'), fakeRace('222')]
     expect(findMatchingRace(meetingRaces, 'racing-com:race:999')).toBeUndefined()
+  })
+})
+
+describe('duplicate Racing.com runners', () => {
+  const canonical = { id: '15799805', horseCode: '5328231', horseName: 'Fortians', position: 7, scratched: false, weight: '55kg', barrierNumber: 10 } as RacingEntry
+  const synthetic = { ...canonical, id: '9995468449-5328231', weight: null, barrierNumber: 7 }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it.each([[synthetic, canonical], [canonical, synthetic]])('prefers the canonical entry regardless of feed order (%j, %j)', (first, second) => {
+    expect(deduplicateRaceEntries({ id: '5468449', formRaceEntries: [first, second] })).toEqual([canonical])
+  })
+
+  it('retains distinct runners and collapses identical repeats', () => {
+    const other = { ...canonical, id: 'other', horseCode: 'other' }
+    expect(deduplicateRaceEntries({ id: '5468449', formRaceEntries: [canonical, canonical, other] })).toEqual([canonical, other])
+  })
+
+  it('refuses conflicting results, scratchings, and ambiguous canonical records', () => {
+    for (const duplicate of [{ ...synthetic, position: 1 }, { ...synthetic, scratched: true }, { ...canonical, weight: '60kg' }]) {
+      expect(() => deduplicateRaceEntries({ id: '5468449', formRaceEntries: [canonical, duplicate] })).toThrow('Conflicting Racing.com entries')
+    }
+  })
+
+  it('normalizes the shared fetch used by bulk ingestion and single-race refresh', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: { getRacesForMeet: [{ id: '5468449', formRaceEntries: [synthetic, canonical] }] } }))))
+    const races = await fetchRaces('5194207')
+    expect(races[0].formRaceEntries).toEqual([canonical])
   })
 })
 

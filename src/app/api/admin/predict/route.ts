@@ -8,22 +8,9 @@ import type { RaceEntryWithHorse } from '@/lib/types'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { getTabPricesForInternalRaces, type InternalRaceRef, type TabPrice } from '@/lib/paper-betting/internal-tab-odds'
 import { normalizeHorseName } from '@/lib/paper-betting/fundamentals-bridge'
+import { withSupabaseReadRetry as withRetry } from '@/lib/supabase/read-retry'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-/** Retries a Supabase call a couple of times so a single transient network blip doesn't fail a long-running batch. */
-async function withRetry<T>(fn: () => PromiseLike<T>, attempts = 3, delayMs = 1000): Promise<T> {
-  let lastError: unknown
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await fn()
-    } catch (error) {
-      lastError = error
-      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs * attempt))
-    }
-  }
-  throw lastError
-}
 
 interface PredictionOptions {
   raceId?: string
@@ -332,20 +319,20 @@ export async function POST(request: Request) {
       // A completed race's history never changes day-to-day, so retrospective reruns replace
       // the prior rows instead of growing unbounded duplicate history.
       for (let offset = 0; offset < predictedRaceIds.length; offset += 40) {
-        const { error: deleteError } = await withRetry(() => supabase
+        const { error: deleteError } = await supabase
           .from('predictions')
           .delete()
           .in('race_id', predictedRaceIds.slice(offset, offset + 40))
-          .in('model_version', modelVersionsWritten))
+          .in('model_version', modelVersionsWritten)
         if (deleteError) throw deleteError
       }
     }
     // Live/upcoming predictions are inserted as a new immutable snapshot every run, so
     // prediction and market movement can be analysed over time (never overwritten).
     for (let offset = 0; offset < allRows.length; offset += 500) {
-      const { error: predictionError } = await withRetry(() => supabase
+      const { error: predictionError } = await supabase
         .from('predictions')
-        .insert(allRows.slice(offset, offset + 500)))
+        .insert(allRows.slice(offset, offset + 500))
       if (predictionError) throw predictionError
     }
 
