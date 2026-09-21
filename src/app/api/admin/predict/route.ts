@@ -9,6 +9,7 @@ import { hasAdminSession } from '@/lib/admin-auth'
 import { getTabPricesForInternalRaces, type InternalRaceRef, type TabPrice } from '@/lib/paper-betting/internal-tab-odds'
 import { normalizeHorseName } from '@/lib/paper-betting/fundamentals-bridge'
 import { withSupabaseReadRetry as withRetry } from '@/lib/supabase/read-retry'
+import { insertPredictionSnapshots, type PredictionSnapshotRow } from '@/lib/prediction-storage'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -83,6 +84,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
   }
 
+  let stage = 'options'
   try {
     const options = await readOptions(request)
     if (!options || (options.raceId !== undefined && !UUID_PATTERN.test(options.raceId))) {
@@ -93,6 +95,7 @@ export async function POST(request: Request) {
     const runFullSuite = options.mode === 'all' || options.mode === 'retrospective'
 
     const supabase = createAdminClient()
+    stage = 'races'
     const raceSelect = 'id, racecourse_id, race_number, race_datetime, distance_m, track_condition, race_class, racecourses(name)'
     let races: Array<{ id: string; racecourse_id: string; race_number: number; race_datetime: string; distance_m: number | null; track_condition: string | null; race_class: string | null; racecourses: { name: string } | { name: string }[] | null }>
     if (options.raceId) {
@@ -171,6 +174,7 @@ export async function POST(request: Request) {
     }
 
     const targetEntryRows: RaceEntryWithHorse[] = []
+    stage = 'target-entries'
     const raceChunkSize = 40
     const entryPageSize = 1_000
     for (let offset = 0; offset < races.length; offset += raceChunkSize) {
@@ -199,6 +203,7 @@ export async function POST(request: Request) {
     const targetHorseIds = [...new Set(targetEntryRows.map((entry) => entry.horse_id))]
 
     const historicalRows: HistoricalEntryRow[] = []
+    stage = 'horse-history'
     const pageSize = 1_000
     const horseChunkSize = 40
     for (let horseOffset = 0; horseOffset < targetHorseIds.length; horseOffset += horseChunkSize) {
@@ -245,7 +250,7 @@ export async function POST(request: Request) {
 
     let created = 0
     let skipped = 0
-    const allRows: Array<{ race_id: string; model_version: string; predictions: unknown; confidence_scores: unknown; predicted_times: unknown; predicted_at: string }> = []
+    const allRows: PredictionSnapshotRow[] = []
     const predictedRaceIds: string[] = []
     const suffix = options.mode === 'retrospective' ? '-retrospective' : ''
 
@@ -253,6 +258,7 @@ export async function POST(request: Request) {
     // 'upcoming' predict runs, never retrospective/completed backfills.
     let tabPricesByRace = new Map<string, Map<string, TabPrice>>()
     if (status === 'upcoming') {
+      stage = 'tab-prices'
       const raceRefs: InternalRaceRef[] = races.map((race) => {
         const racecourse = Array.isArray(race.racecourses) ? race.racecourses[0] : race.racecourses
         return { id: race.id, racecourseName: racecourse?.name ?? '', raceNumber: race.race_number, raceDatetime: race.race_datetime }
@@ -260,6 +266,7 @@ export async function POST(request: Request) {
       tabPricesByRace = await getTabPricesForInternalRaces(supabase, raceRefs)
     }
 
+    stage = 'models'
     for (const race of races) {
       const typedEntries = (entriesByRace.get(race.id) ?? [])
         .filter((entry) => entry.status !== 'scratched')
@@ -316,6 +323,7 @@ export async function POST(request: Request) {
     // to a single transient network blip killing the whole run partway through.
     const modelVersionsWritten = [...new Set(allRows.map((row) => row.model_version))]
     if (options.mode === 'retrospective') {
+      stage = 'replace-retrospective'
       // A completed race's history never changes day-to-day, so retrospective reruns replace
       // the prior rows instead of growing unbounded duplicate history.
       for (let offset = 0; offset < predictedRaceIds.length; offset += 40) {
@@ -329,12 +337,8 @@ export async function POST(request: Request) {
     }
     // Live/upcoming predictions are inserted as a new immutable snapshot every run, so
     // prediction and market movement can be analysed over time (never overwritten).
-    for (let offset = 0; offset < allRows.length; offset += 500) {
-      const { error: predictionError } = await supabase
-        .from('predictions')
-        .insert(allRows.slice(offset, offset + 500))
-      if (predictionError) throw predictionError
-    }
+    stage = 'save-predictions'
+    await insertPredictionSnapshots(supabase, allRows)
 
     return NextResponse.json({
       success: true,
@@ -344,7 +348,8 @@ export async function POST(request: Request) {
       message: `Generated ${runFullSuite ? 'all model variants' : 'ensemble predictions'} for ${created} races`,
     })
   } catch (error) {
-    console.error('Prediction run failed', error)
-    return NextResponse.json({ success: false, message: 'Prediction run failed' }, { status: 500 })
+    const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : 'unknown'
+    console.error('Prediction run failed', { stage, code })
+    return NextResponse.json({ success: false, message: `Prediction run failed at ${stage}`, stage, code }, { status: 500 })
   }
 }
