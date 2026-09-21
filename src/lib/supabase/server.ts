@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-export async function createClient() {
+export async function createClient(options?: { signal: AbortSignal }) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) {
@@ -14,6 +14,17 @@ export async function createClient() {
     supabaseUrl,
     supabaseKey,
     {
+      ...(options ? { global: { fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        try {
+          return await fetch(input, {
+            ...init,
+            signal: init?.signal ? AbortSignal.any([init.signal, options.signal]) : options.signal,
+          })
+        } catch (error) {
+          if (options.signal.aborted) throw new DOMException('Read deadline exceeded', 'AbortError')
+          throw error
+        }
+      } } } : {}),
       cookies: {
         getAll() {
           return cookieStore.getAll()

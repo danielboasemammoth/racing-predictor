@@ -140,6 +140,9 @@ try {
     Write-Log "PIPELINE ABORTED: $($_.Exception.Message)"
     exit 1
 } finally {
+    if ($baseUrl -and $webSession) {
+        if (-not (& (Join-Path $PSScriptRoot "refresh-page-cache.ps1") -BaseUrl $baseUrl -WebSession $webSession)) { $anyFailures = $true }
+    }
     # This is a one-shot daily batch job, not a long-lived server - if we started our own instance
     # of the app to run it, stop the whole process tree so it doesn't linger until the next run.
     if ($app -and $app.StartedProcessId) {

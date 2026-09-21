@@ -2,11 +2,15 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Home from './page'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { loadHomeSnapshot } from '@/lib/page-snapshot-loaders'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { loadReliabilityContext } from '@/lib/reliability-context'
 import type { RaceWithPrediction } from '@/lib/types'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
+vi.mock('@/lib/page-cache-reader', () => ({ readPageSnapshot: vi.fn() }))
 vi.mock('@/lib/upcoming-races', () => ({ getUpcomingRaces: vi.fn() }))
 vi.mock('@/lib/reliability-context', () => ({ loadReliabilityContext: vi.fn() }))
 vi.mock('@/components/site-nav', () => ({ SiteNav: () => null }))
@@ -33,6 +37,7 @@ beforeEach(() => {
   vi.mocked(loadReliabilityContext).mockResolvedValue({
     calibration: { overallBaseline: 0.18, probability: [], gap: [], agreement: [], rawRateRange: { min: 0.1, max: 0.3 } }, history: [],
   })
+  vi.mocked(readPageSnapshot).mockImplementation(async () => ({ generatedAt: '2026-09-17T00:00:00Z', data: await loadHomeSnapshot({} as SupabaseClient) }))
 })
 
 afterEach(() => {
@@ -41,6 +46,12 @@ afterEach(() => {
 })
 
 describe('homepage pick availability', () => {
+  it('renders a clear cold-cache state without a live database fallback', async () => {
+    vi.mocked(readPageSnapshot).mockResolvedValue(null)
+    const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('Page data temporarily unavailable')
+    expect(getUpcomingRaces).not.toHaveBeenCalled()
+  })
   it('shows tomorrow and its PLACE watchlist even when no conservative pick qualifies', async () => {
     const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('PLACE watchlist')

@@ -3,11 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PaperBettingPage from './page'
 import { createClient } from '@/lib/supabase/server'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
 import { queryLatestOpportunities } from '@/lib/paper-betting/opportunities-query'
 import { computeValidationReport } from '@/lib/paper-betting/validation-query'
 import { loadPlaceShadowReport, summarizePlaceShadow } from '@/lib/paper-betting/place-shadow'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
+vi.mock('@/lib/page-cache-reader', () => ({ readPageSnapshot: vi.fn() }))
 vi.mock('@/components/site-nav', () => ({ SiteNav: () => null }))
 vi.mock('./what-if-lab', () => ({ WhatIfLab: () => null }))
 vi.mock('./bankroll-settings', () => ({ BankrollSettings: () => null }))
@@ -35,6 +37,12 @@ beforeEach(() => {
   vi.mocked(queryLatestOpportunities).mockResolvedValue([])
   vi.mocked(computeValidationReport).mockResolvedValue({ totalSettled: 0 } as Awaited<ReturnType<typeof computeValidationReport>>)
   vi.mocked(loadPlaceShadowReport).mockResolvedValue({ captured: 0, pending: 0, exclusions: {}, ...summarizePlaceShadow([]) })
+  vi.mocked(readPageSnapshot).mockImplementation(async key => {
+    const data = key === 'opportunities' ? await queryLatestOpportunities({} as never)
+      : key === 'validation' ? { accountId: 'account', report: await computeValidationReport({} as never, 'account') }
+      : await loadPlaceShadowReport({} as never)
+    return { generatedAt: new Date().toISOString(), data }
+  })
 })
 
 afterEach(() => {

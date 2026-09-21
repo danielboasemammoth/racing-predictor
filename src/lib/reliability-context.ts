@@ -15,11 +15,12 @@ export interface ReliabilityContext {
 }
 
 /** Loads the latest published calibration table + historical feature rows (see scripts/reliability-analysis.ts). */
-export async function loadReliabilityContext(supabase: SupabaseClient): Promise<ReliabilityContext | null> {
+export async function loadReliabilityContext(supabase: SupabaseClient, strict = false): Promise<ReliabilityContext | null> {
   const { data, error } = await supabase
     .from('analysis_snapshots')
     .select('kind, payload')
     .in('kind', ['reliability-calibration', 'race-feature-history'])
+  if (error && strict) throw error
   if (error || !data?.length) return null
 
   const calibration = data.find((row) => row.kind === 'reliability-calibration')?.payload as CalibrationTable | undefined

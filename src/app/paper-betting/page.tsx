@@ -1,8 +1,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { computeWalletStats, type WalletBetForStats } from '@/lib/betting/paper-wallet'
 import { SiteNav } from '@/components/site-nav'
-import { opportunityMarkets, queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
-import { computeValidationReport, type ValidationReport } from '@/lib/paper-betting/validation-query'
+import { opportunityMarkets, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { currentSnapshotOpportunities, type loadValidationSnapshot } from '@/lib/page-snapshot-loaders'
+import { SnapshotStatus } from '@/components/snapshot-status'
 import { WhatIfLab } from './what-if-lab'
 import { BankrollSettings } from './bankroll-settings'
 import { loadPlaceShadowReport } from '@/lib/paper-betting/place-shadow'
@@ -58,7 +60,7 @@ const STATUS_STYLES: Record<string, string> = {
 }
 
 async function loadWallet() {
-  const supabase = await createClient()
+  const supabase = await createClient({ signal: AbortSignal.timeout(5000) })
   const account = await supabase.from('paper_accounts').select('*').eq('name', 'default').maybeSingle()
   if (account.error) throw account.error
   if (!account.data) return null
@@ -128,14 +130,16 @@ function runnerOf(row: OpportunityRow) {
 }
 
 async function loadBestOpportunities() {
-  const supabase = await createClient()
-  return queryLatestOpportunities(supabase, { limit: 10 })
+  const snapshot = await readPageSnapshot<OpportunityRow[]>('opportunities')
+  if (!snapshot) throw new Error('Opportunity snapshot unavailable')
+  return { ...snapshot, data: currentSnapshotOpportunities(snapshot.data).slice(0, 10) }
 }
 
-async function loadValidation(accountId: string | undefined): Promise<ValidationReport | null> {
+async function loadValidation(accountId: string | undefined) {
   if (!accountId) return null
-  const supabase = await createClient()
-  return computeValidationReport(supabase, accountId)
+  const snapshot = await readPageSnapshot<Awaited<ReturnType<typeof loadValidationSnapshot>>>('validation')
+  if (!snapshot || snapshot.data.accountId !== accountId) throw new Error('Validation snapshot unavailable')
+  return snapshot
 }
 
 function SectionUnavailable({ name }: { name: string }) {
@@ -151,12 +155,16 @@ export default async function PaperBettingPage() {
       const result = await walletPromise
       return loadValidation(result.data?.account.id)
     }),
-    loadPaperPageSection('place-shadow', async () => loadPlaceShadowReport(await createClient())),
+    loadPaperPageSection('place-shadow', async () => {
+      const snapshot = await readPageSnapshot<Awaited<ReturnType<typeof loadPlaceShadowReport>>>('place-shadow')
+      if (!snapshot) throw new Error('Shadow snapshot unavailable')
+      return snapshot
+    }),
   ])
   const wallet = walletResult.data
-  const opportunities = opportunityResult.data ?? []
-  const validation = validationResult.data
-  const shadow = shadowResult.data
+  const opportunities = opportunityResult.data?.data ?? []
+  const validation = validationResult.data?.data.report
+  const shadow = shadowResult.data?.data
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -175,6 +183,7 @@ export default async function PaperBettingPage() {
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Best Opportunities Now</h2>
+          {opportunityResult.ok && <SnapshotStatus generatedAt={opportunityResult.data.generatedAt} />}
           {!opportunityResult.ok ? <SectionUnavailable name="Opportunities" /> : opportunities.length === 0 ? (
             <p className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
               No qualifying bets right now.
@@ -209,6 +218,7 @@ export default async function PaperBettingPage() {
 
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Prospective PLACE Check</h2>
+          {shadowResult.ok && <SnapshotStatus generatedAt={shadowResult.data.generatedAt} />}
           {!shadow ? <SectionUnavailable name="Prospective PLACE data" /> : <>
           <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-700">
             <span>Captured: {shadow.captured}</span>
@@ -248,6 +258,7 @@ export default async function PaperBettingPage() {
         {validation && validation.totalSettled > 0 && (
           <section>
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Model Validation</h2>
+            <SnapshotStatus generatedAt={validationResult.data?.generatedAt} />
             <div className="mb-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
               <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">

@@ -1,118 +1,11 @@
-import { createClient } from '@/lib/supabase/server'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { SnapshotStatus } from '@/components/snapshot-status'
+import type { AccuracySnapshot } from '@/lib/accuracy-snapshot'
 import { SiteNav } from '@/components/site-nav'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
-
-async function getAccuracyLogs() {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('accuracy_log')
-    .select('*')
-    .order('period_end', { ascending: false })
-    .limit(30)
-
-  if (error) throw error
-  return data || []
-}
-
-interface ScoredPredictionRow {
-  id: string
-  model_version: string
-  predicted_winner_id: string | null
-  predicted_win_probability: string | null
-  predicted_confidence: string | null
-  actual_winner_id: string | null
-  winner_top3: string | null
-  podium_overlap: string | null
-  ordered_trifecta: string | null
-  winner_brier_score: string | null
-  winner_log_loss: string | null
-}
-
-async function getModelMetrics() {
-  const supabase = await createClient()
-  const data: ScoredPredictionRow[] = []
-  // Larger than a typical page size on purpose - each row is now just a handful of small scalar
-  // fields (not the full jsonb payload), so a bigger page trades a little per-request payload for
-  // far fewer sequential round trips (tens of thousands of rows would otherwise mean dozens of
-  // requests at 1,000/page).
-  const pageSize = 5_000
-  // Keyset (id > lastId) pagination, not offset/.range() - the predictions table has grown to
-  // tens of thousands of rows, and offset pagination re-scans+discards every prior row on each
-  // page, degrading toward a Postgres statement timeout on later pages. Also selects only the
-  // handful of scalar fields actually needed (via JSON path operators) instead of the full
-  // multi-KB jsonb `predictions`/`actual_results` payload per row - this alone cut one page's
-  // query time from ~3s to ~0.4s in a live timing check (see the /accuracy and /picks-history
-  // 500 error fixed 2026-09-09).
-  let lastId: string | null = null
-  for (;;) {
-    // Must be a single string literal (not built via array().join()) - Supabase's generated
-    // client types the .select() overload from the literal string itself, and a computed
-    // `string` falls back to an untyped/error result shape at compile time.
-    let query = supabase
-      .from('predictions')
-      .select(`
-        id,
-        model_version,
-        predicted_winner_id:predictions->podium->0->>horse_id,
-        predicted_win_probability:predictions->podium->0->>win_probability,
-        predicted_confidence:predictions->podium->0->>confidence,
-        actual_winner_id:actual_results->podium->>0,
-        winner_top3:actual_results->>winner_top3,
-        podium_overlap:actual_results->>podium_overlap,
-        ordered_trifecta:actual_results->>ordered_trifecta,
-        winner_brier_score:actual_results->>winner_brier_score,
-        winner_log_loss:actual_results->>winner_log_loss
-      `)
-      .not('actual_results', 'is', null)
-      .order('id', { ascending: true })
-      .limit(pageSize)
-    if (lastId) query = query.gt('id', lastId)
-    const { data: page, error } = await query
-    if (error) throw error
-    if (!page?.length) break
-    data.push(...(page as unknown as ScoredPredictionRow[]))
-    lastId = page[page.length - 1].id
-    if (page.length < pageSize) break
-  }
-
-  const groups = Map.groupBy(data, (prediction) => prediction.model_version)
-  return [...groups].map(([modelVersion, predictions]) => {
-    const valid = predictions.filter((prediction) => prediction.actual_winner_id !== null)
-    const winnerHits = valid.filter((prediction) => prediction.predicted_winner_id === prediction.actual_winner_id).length
-    const predictedProbability = (prediction: ScoredPredictionRow) =>
-      Number(prediction.predicted_win_probability ?? prediction.predicted_confidence ?? 0)
-    const calibrationGroups = Map.groupBy(valid, (prediction) => Math.min(90, Math.floor(predictedProbability(prediction) * 10) * 10))
-    return {
-      modelVersion,
-      races: valid.length,
-      winnerAccuracy: valid.length ? winnerHits / valid.length : 0,
-      winnerTop3Accuracy: valid.length
-        ? valid.filter((prediction) => prediction.winner_top3 === 'true').length / valid.length
-        : 0,
-      podiumOverlap: valid.length
-        ? valid.reduce((sum, prediction) => sum + Number(prediction.podium_overlap ?? 0), 0) / valid.length
-        : 0,
-      trifectaAccuracy: valid.length
-        ? valid.filter((prediction) => prediction.ordered_trifecta === 'true').length / valid.length
-        : 0,
-      brierScore: valid.length
-        ? valid.reduce((sum, prediction) => sum + Number(prediction.winner_brier_score ?? 0), 0) / valid.length
-        : 0,
-      logLoss: valid.length
-        ? valid.reduce((sum, prediction) => sum + Number(prediction.winner_log_loss ?? 0), 0) / valid.length
-        : 0,
-      calibration: [...calibrationGroups].sort(([left], [right]) => left - right).map(([band, bucket]) => ({
-        band,
-        races: bucket.length,
-        predicted: bucket.reduce((sum, prediction) => sum + predictedProbability(prediction), 0) / bucket.length,
-        observed: bucket.filter((prediction) => prediction.predicted_winner_id === prediction.actual_winner_id).length / bucket.length,
-      })),
-    }
-  }).filter((metric) => metric.races > 0).sort((left, right) => right.races - left.races)
-}
 
 function getAccuracyColor(score: number) {
   if (score >= 0.6) return 'text-green-700 bg-green-50'
@@ -121,7 +14,8 @@ function getAccuracyColor(score: number) {
 }
 
 export default async function AccuracyPage() {
-  const [logs, modelMetrics] = await Promise.all([getAccuracyLogs(), getModelMetrics()])
+  const snapshot = await readPageSnapshot<AccuracySnapshot>('accuracy')
+  const { logs = [], modelMetrics = [] } = snapshot?.data ?? {}
 
   const latest = logs[0]
   const totalRaces = logs.reduce((sum, log) => sum + log.total_races, 0)
@@ -147,7 +41,8 @@ export default async function AccuracyPage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {logs.length === 0 ? (
+        <SnapshotStatus generatedAt={snapshot?.generatedAt} />
+        {!snapshot ? null : logs.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
             <p className="text-slate-600 mb-2">No accuracy data yet.</p>
             <p className="text-sm text-slate-500">Run predictions and backtest to populate this dashboard.</p>

@@ -1,4 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { currentSnapshotRaces, type HomeSnapshot } from '@/lib/page-snapshot-loaders'
+import { SnapshotStatus } from '@/components/snapshot-status'
 import Link from 'next/link'
 import {
   DEFAULT_PICKS_MIN_PCT,
@@ -14,8 +16,6 @@ import {
   type PicksSortKey,
 } from '@/lib/daily-picks'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
-import { loadReliabilityContext } from '@/lib/reliability-context'
-import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { SiteNav } from '@/components/site-nav'
 import { PaperBetButton } from '@/components/paper-bet-button'
 import { PicksSortFilter } from '@/components/picks-sort-filter'
@@ -125,10 +125,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   const picksSort: PicksSortKey = PICKS_SORT_KEYS.includes(params.sort as PicksSortKey) ? (params.sort as PicksSortKey) : DEFAULT_PICKS_SORT
   const picksMinPct = params.minPct && !Number.isNaN(Number(params.minPct)) ? Number(params.minPct) : DEFAULT_PICKS_MIN_PCT
 
-  const supabase = await createClient()
-  const [races, reliabilityContext] = await Promise.all([getUpcomingRaces(supabase), loadReliabilityContext(supabase)])
-  baseFilters.calibration = reliabilityContext?.calibration ?? null
-  baseFilters.history = reliabilityContext?.history ?? null
+  const snapshot = await readPageSnapshot<HomeSnapshot>('home')
+  const races = currentSnapshotRaces(snapshot?.data.races ?? [], now)
+  const reliabilityContext = snapshot?.data.reliabilityAvailable ?? false
+  baseFilters.reliabilityByRace = snapshot?.data.reliabilityByRace ?? {}
 
   // Uncapped (no top-N limit) Reliability-gated conservative shortlist (Average+
   // classification, no active veto). Sort/filter (start time, win/top3 probability,
@@ -183,7 +183,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {races.length === 0 ? (
+        <SnapshotStatus generatedAt={snapshot?.generatedAt} />
+        {!snapshot ? null : races.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
             <p className="text-slate-600 mb-2">No upcoming races scheduled through tomorrow.</p>
             <Link href="/admin" className="text-teal-700 font-medium hover:underline">Go to Admin to run prediction model</Link>

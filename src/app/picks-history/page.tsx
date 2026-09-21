@@ -1,7 +1,7 @@
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/server'
-import { loadReliabilityContext } from '@/lib/reliability-context'
-import { loadDailyPicksHistory, type HistoricalDailyPick } from '@/lib/daily-picks-history'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { SnapshotStatus } from '@/components/snapshot-status'
+import { type loadDailyPicksHistory, type HistoricalDailyPick } from '@/lib/daily-picks-history'
 import { SiteNav } from '@/components/site-nav'
 
 export const dynamic = 'force-dynamic'
@@ -83,15 +83,8 @@ function PickCard({ pick, rank }: { pick: HistoricalDailyPick; rank: number }) {
 export const maxDuration = 60
 
 export default async function PicksHistoryPage() {
-  const supabase = await createClient()
-  const reliabilityContext = await loadReliabilityContext(supabase)
-  // 7 days, not 10/14/21 - the user's actual Vercel function logs confirmed a genuine Postgres
-  // `57014 statement timeout`, not just marginal slowness - raising read concurrency to "fix" the
-  // earlier slowness (2026-09-10) very likely made this WORSE via query contention against
-  // Supabase's connection limits (reverted in daily-picks-history.ts). A materially smaller window
-  // is the safest lever left short of a larger architectural change (e.g. a precomputed daily
-  // snapshot) - revisit if this history window ever needs to be longer.
-  const history = await loadDailyPicksHistory(supabase, { calibration: reliabilityContext?.calibration ?? null, history: reliabilityContext?.history ?? null, days: 7 })
+  const snapshot = await readPageSnapshot<Awaited<ReturnType<typeof loadDailyPicksHistory>>>('picks-history')
+  const history = snapshot?.data ?? []
 
   const scoredPicks = history.flatMap((day) => day.picks).filter((pick) => !pick.scratched && pick.actualPosition !== null)
   const wins = scoredPicks.filter((pick) => pick.won).length
@@ -112,6 +105,7 @@ export default async function PicksHistoryPage() {
           </div>
         </div>
       </header>
+      <div className="max-w-7xl mx-auto px-4"><SnapshotStatus generatedAt={snapshot?.generatedAt} /></div>
 
       <main className="max-w-7xl mx-auto px-4 py-8 space-y-8">
         {scoredPicks.length > 0 && (
@@ -133,9 +127,9 @@ export default async function PicksHistoryPage() {
           </div>
         )}
 
-        {history.length === 0 ? (
+        {!snapshot ? null : history.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-600">
-            No completed races with predictions in the last 21 days yet.
+            No completed races with predictions in the last 7 days yet.
           </div>
         ) : (
           history.map((day) => (

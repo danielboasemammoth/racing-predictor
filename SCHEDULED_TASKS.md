@@ -22,6 +22,10 @@ The regression check mocks service calls and task-trigger creation; it does not 
 
 ## Homepage Picks
 
+The main public pages use persisted page snapshots; see [PAGE_CACHING.md](PAGE_CACHING.md) for refresh scopes, freshness limits, and recovery commands. Both task scripts attempt relevant snapshot refreshes in `finally`, before stopping a self-started app, including after a failed upstream step. Existing registered triggers need no changes for these script updates. Rebuild the production app so task-started instances include the refresh endpoint.
+
+App detection uses the database-independent `/api/health` endpoint, so a slow or unavailable Supabase connection does not make the scheduler misidentify a running app.
+
 The PLACE watchlist lists recorded top-three probabilities of at least 50% for all forecast runners, independently of WIN reliability. Forecast timestamps and race coverage are displayed for today and tomorrow. These are model estimates, not value-qualified betting recommendations; top-three probability does not imply a three-place paid market.
 
 Conservative picks retain their existing reliability gate and probability controls (default WIN >=50%). Their empty states distinguish unavailable reliability, missing forecasts, and filtered candidates. Neither the watchlist nor these display changes alters auto-betting policy or promotes a model.

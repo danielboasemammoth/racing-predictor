@@ -22,12 +22,8 @@ param(
 function Test-AppUrl {
     param([string]$Url)
     try {
-        # A GET on a POST-only route handler returns a plain 404 in this Next.js version (not 405),
-        # which is indistinguishable from an unrelated service. Instead, load the homepage and
-        # check for this app's own title text - a much stronger positive-match signal that avoids
-        # false-positives from unrelated local services listening on a port in the scanned range.
-        $resp = Invoke-WebRequest -Uri "$Url/" -Method Get -TimeoutSec 3 -UseBasicParsing
-        return $resp.StatusCode -eq 200 -and $resp.Content -match "Racing Predictor"
+        $resp = Invoke-RestMethod -Uri "$Url/api/health" -Method Get -TimeoutSec 3
+        return $resp.app -eq 'racing-predictor' -and $resp.status -eq 'ok'
     } catch {
         return $false
     }

@@ -1,68 +1,11 @@
-import { createClient } from '@/lib/supabase/server'
-import { loadReliabilityContext, type ReliabilityContext } from '@/lib/reliability-context'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import type { AnalyticsSnapshot } from '@/lib/analytics-snapshot'
+import { SnapshotStatus } from '@/components/snapshot-status'
 import { SiteNav } from '@/components/site-nav'
-import { reliabilityCalibrationBands } from '@/lib/reliability-score'
 import type { BucketStats } from '@/lib/reliability-analysis'
-import { compareBaselines, type BaselineRace } from '@/lib/baseline-comparison'
-import { extractBestWinOdds, type FlatStakeReport } from '@/lib/roi-analysis'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { FlatStakeReport } from '@/lib/roi-analysis'
 
 export const dynamic = 'force-dynamic'
-
-interface PricedEntry {
-  race_id: string
-  finishing_position: number | null
-  status: string
-  starting_price: number | null
-  sectional_times: unknown
-}
-
-/**
- * Reuses the model's own correctWinner/bestRecordedOdds already computed in context.history
- * (spec section 24's data) rather than re-querying predictions - only needs one new query, for
- * the rest of each race's field, to work out who the favourite was.
- */
-async function getBaselineComparison(supabase: SupabaseClient, context: ReliabilityContext) {
-  const raceIds = context.history.map((row) => row.raceId)
-  const entriesByRace = new Map<string, PricedEntry[]>()
-  const CHUNK = 100
-  for (let offset = 0; offset < raceIds.length; offset += CHUNK) {
-    const chunk = raceIds.slice(offset, offset + CHUNK)
-    const { data, error } = await supabase
-      .from('race_entries')
-      .select('race_id, finishing_position, status, starting_price, sectional_times')
-      .in('race_id', chunk)
-    if (error) throw error
-    for (const entry of (data ?? []) as PricedEntry[]) {
-      const list = entriesByRace.get(entry.race_id) ?? []
-      list.push(entry)
-      entriesByRace.set(entry.race_id, list)
-    }
-  }
-
-  const races: BaselineRace[] = context.history.map((row) => {
-    const runners = (entriesByRace.get(row.raceId) ?? []).filter((entry) => entry.status !== 'scratched')
-    const priced = runners
-      .map((entry) => ({ ...entry, price: entry.starting_price ?? extractBestWinOdds(entry.sectional_times) }))
-      .filter((entry): entry is PricedEntry & { price: number } => entry.price !== null)
-    const favourite = priced.length ? priced.reduce((min, entry) => (entry.price < min.price ? entry : min)) : null
-    return {
-      favouritePrice: favourite?.price ?? null,
-      favouriteWon: favourite?.finishing_position === 1,
-      modelPickPrice: row.bestRecordedOdds ?? null,
-      modelPickWon: row.correctWinner,
-    }
-  })
-
-  return compareBaselines(races)
-}
-
-/** Reads the ranking published by scripts/feature-ablation.ts - not recomputed live, that backtest takes several minutes. */
-async function getFeatureImportance(supabase: SupabaseClient) {
-  const { data, error } = await supabase.from('analysis_snapshots').select('payload').eq('kind', 'feature-ablation').maybeSingle()
-  if (error) throw error
-  return data?.payload as { generatedAt: string; racesEvaluated: number; featureImportance: Array<{ label: string; deltaVsFull: number }> } | undefined
-}
 
 function BaselineRow({ label, report }: { label: string; report: FlatStakeReport }) {
   return (
@@ -116,10 +59,10 @@ function BandTable({ title, description, buckets }: { title: string; description
 }
 
 export default async function AnalyticsPage() {
-  const supabase = await createClient()
-  const context = await loadReliabilityContext(supabase)
-  const baselines = context ? await getBaselineComparison(supabase, context) : null
-  const featureImportance = await getFeatureImportance(supabase)
+  const snapshot = await readPageSnapshot<AnalyticsSnapshot>('analytics')
+  const context = snapshot?.data
+  const baselines = context?.baselines
+  const featureImportance = context?.featureImportance
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -134,16 +77,13 @@ export default async function AnalyticsPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-8 space-y-6">
-        {!context ? (
-          <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-600">
-            No analytics data published yet. Run <code className="rounded bg-slate-100 px-1.5 py-0.5">npx tsx --env-file=.env.local scripts/reliability-analysis.ts</code> to generate it.
-          </div>
-        ) : (
+        <SnapshotStatus generatedAt={snapshot?.generatedAt} />
+        {!context ? null : (
           <>
             <div className="bg-white rounded-xl border border-slate-200 p-6">
               <h2 className="text-lg font-semibold text-slate-900">Overall</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Baseline winner strike rate across {context.history.length} completed races with a valid prediction: <span className="font-semibold text-slate-900">{(context.calibration.overallBaseline * 100).toFixed(1)}%</span>
+                Baseline winner strike rate across {context.historyCount} completed races with a valid prediction: <span className="font-semibold text-slate-900">{(context.calibration.overallBaseline * 100).toFixed(1)}%</span>
               </p>
             </div>
 
@@ -201,23 +141,7 @@ export default async function AnalyticsPage() {
             <BandTable
               title="Reliability Score calibration"
               description="Higher Reliability Score bands should show genuinely higher strike rates - this is the check that keeps the score honest (spec section 28)."
-              buckets={reliabilityCalibrationBands(
-                context.history.filter((row): row is typeof row & { probability: number; gap: number; agreeing: number; totalBaseModels: number } =>
-                  typeof row.probability === 'number' && typeof row.gap === 'number' && typeof row.agreeing === 'number' && typeof row.totalBaseModels === 'number'),
-                context.calibration,
-                context.history,
-              ).map((band) => ({
-                label: band.label,
-                n: band.n,
-                wins: band.wins,
-                strikeRate: band.strikeRate,
-                ciLow: band.ciLow,
-                ciHigh: band.ciHigh,
-                shrunkStrikeRate: band.strikeRate,
-                baseline: context.calibration.overallBaseline,
-                lift: band.strikeRate - context.calibration.overallBaseline,
-                significant: band.n >= 30 && (band.ciLow > context.calibration.overallBaseline || band.ciHigh < context.calibration.overallBaseline),
-              }))}
+              buckets={context.bands}
             />
 
             <BandTable
@@ -240,7 +164,7 @@ export default async function AnalyticsPage() {
 
             <div className="bg-white rounded-xl border border-slate-200 p-6 text-xs text-slate-500">
               Only probability, prediction gap, and model agreement are validated (they held up on a chronological
-              holdout split of {context.history.length} historical races) and feed the production Reliability
+              holdout split of {context.historyCount} historical races) and feed the production Reliability
               Score. Other dimensions analysed (distance, race type, field size, barrier, track, venue) did not
               reliably replicate out-of-sample yet - see scripts/reliability-analysis.ts for the full discovery report.
             </div>

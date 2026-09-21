@@ -101,8 +101,13 @@ try {
     Write-Log "POLL ABORTED: $($_.Exception.Message)"
     exit 1
 } finally {
+    if ($baseUrl -and $webSession) {
+        if (-not (& (Join-Path $PSScriptRoot "refresh-page-cache.ps1") -BaseUrl $baseUrl -WebSession $webSession -PollOnly)) { $cacheFailed = $true }
+    }
     if ($app -and $app.StartedProcessId) {
         Write-Log "Stopping app instance started for this run (PID $($app.StartedProcessId))"
         taskkill /T /F /PID $app.StartedProcessId 2>&1 | Out-Null
     }
 }
+
+if ($cacheFailed) { exit 1 }

@@ -1,6 +1,8 @@
-import { createClient } from '@/lib/supabase/server'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { currentSnapshotOpportunities } from '@/lib/page-snapshot-loaders'
+import { SnapshotStatus } from '@/components/snapshot-status'
 import { SiteNav } from '@/components/site-nav'
-import { queryLatestOpportunities, type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
+import { type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
 import { PaperBetButton } from '@/components/paper-bet-button'
 
 const DECISION_STYLES: Record<string, string> = {
@@ -17,8 +19,8 @@ function raceOf(row: OpportunityRow) {
 }
 
 async function loadUpcomingGreyhoundOpportunities() {
-  const supabase = await createClient()
-  const opportunities = await queryLatestOpportunities(supabase, { category: 'greyhound' })
+  const snapshot = await readPageSnapshot<OpportunityRow[]>('opportunities')
+  const opportunities = currentSnapshotOpportunities(snapshot?.data ?? []).filter(row => row.category === 'greyhound')
 
   const byRace = new Map<string, { venue: string; raceNumber: number; startTime: string; rows: OpportunityRow[] }>()
   for (const row of opportunities) {
@@ -29,13 +31,16 @@ async function loadUpcomingGreyhoundOpportunities() {
     else byRace.set(row.race_id, { venue: race.venue, raceNumber: race.race_number, startTime: race.start_time, rows: [row] })
   }
 
-  return [...byRace.entries()]
+  const groups = [...byRace.entries()]
     .map(([raceId, group]) => ({ raceId, ...group, rows: group.rows.sort((a, b) => (b.edge_points ?? 0) - (a.edge_points ?? 0)) }))
     .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+  return { groups, generatedAt: snapshot?.generatedAt }
 }
 
+export const dynamic = 'force-dynamic'
+
 export default async function GreyhoundsPage() {
-  const raceGroups = await loadUpcomingGreyhoundOpportunities()
+  const { groups: raceGroups, generatedAt } = await loadUpcomingGreyhoundOpportunities()
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -47,13 +52,14 @@ export default async function GreyhoundsPage() {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-8 space-y-6">
+        <SnapshotStatus generatedAt={generatedAt} />
         <p className="rounded-lg bg-slate-100 px-4 py-3 text-sm text-slate-700">
           Greyhound recommendations currently use a cross-bookmaker market-consensus baseline model
           (comparing TAB against the wider market), not a dedicated greyhound fundamentals model -
           see the project report for details and next steps.
         </p>
 
-        {raceGroups.length === 0 && (
+        {generatedAt && raceGroups.length === 0 && (
           <p className="text-sm text-slate-600">
             No upcoming greyhound races with recommendations yet - run &ldquo;Sync PuntersEdge Odds &amp;
             Recommendations&rdquo; from the Admin page.

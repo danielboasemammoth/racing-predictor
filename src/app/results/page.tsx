@@ -1,30 +1,8 @@
 import { Suspense } from 'react'
-import { createClient } from '@/lib/supabase/server'
-import type { PredictionPayload } from '@/lib/types'
+import { readPageSnapshot } from '@/lib/page-cache-reader'
+import { SnapshotStatus } from '@/components/snapshot-status'
+import type { ResultEntry, ResultPrediction, ResultsSnapshot } from '@/lib/results-snapshot'
 import { SiteNav } from '@/components/site-nav'
-
-const PAGE_SIZE = 50
-
-interface ResultEntry {
-  race_id: string
-  horse_id: string
-  finishing_position: number | null
-  finishing_time: number | null
-  margin: number | null
-  barrier_number: number | null
-  weight_carried: number | null
-  jockey: string | null
-  trainer: string | null
-  status: string
-  horses: unknown
-}
-
-interface ResultPrediction {
-  race_id: string
-  predictions: PredictionPayload
-  confidence_scores: { winner?: number }
-  predicted_at: string
-}
 
 interface ResultRace {
   id: string
@@ -46,42 +24,8 @@ function relatedName(value: unknown) {
 }
 
 async function loadRecentRaces() {
-  const supabase = await createClient()
-  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
-
-  const { data: racecourses, error: racecoursesError } = await supabase
-    .from('racecourses')
-    .select('id, name')
-
-  if (racecoursesError) throw racecoursesError
-
-  const courseNames = new Map((racecourses ?? []).map((rc) => [rc.id, rc.name]))
-
-  const { data: races, error } = await supabase
-    .from('races')
-    .select('id, racecourse_id, race_datetime, distance_m, track_condition, race_class, status')
-    .eq('status', 'completed')
-    .gte('race_datetime', cutoff)
-    .order('race_datetime', { ascending: false })
-    .limit(PAGE_SIZE)
-
-  if (error) throw error
-
-  const raceIds = (races ?? []).map((race) => race.id)
-
-  const { data: entries, error: entriesError } = await supabase
-    .from('race_entries')
-    .select('race_id, horse_id, finishing_position, finishing_time, margin, barrier_number, weight_carried, jockey, trainer, status, horses(name)')
-    .in('race_id', raceIds)
-
-  const { data: predictions, error: predictionsError } = await supabase
-    .from('predictions')
-    .select('race_id, predictions, confidence_scores, predicted_at')
-    .in('race_id', raceIds)
-    .order('predicted_at', { ascending: false })
-
-  if (entriesError) throw entriesError
-  if (predictionsError) throw predictionsError
+  const snapshot = await readPageSnapshot<ResultsSnapshot>('results')
+  const { races = [], entries = [], predictions = [] } = snapshot?.data ?? {}
 
   const entriesByRace = new Map<string, ResultEntry[]>()
   for (const entry of (entries ?? []) as ResultEntry[]) {
@@ -96,10 +40,8 @@ async function loadRecentRaces() {
   }
 
   return {
-    races: (races ?? []).map((race) => ({
-      ...race,
-      racecourseName: courseNames.get(race.racecourse_id) ?? race.racecourse_id,
-    })),
+    generatedAt: snapshot?.generatedAt,
+    races,
     entriesByRace,
     predictionsByRace,
   }
@@ -295,7 +237,8 @@ export default function RecentResultsPage() {
 }
 
 async function RaceResults() {
-  const { races, entriesByRace, predictionsByRace } = await loadRecentRaces()
+  const { races, entriesByRace, predictionsByRace, generatedAt } = await loadRecentRaces()
+  if (!generatedAt) return <SnapshotStatus generatedAt={undefined} />
 
   const mapped: ResultRace[] = races.map((race) => ({
     ...race,
@@ -308,6 +251,7 @@ async function RaceResults() {
 
   return (
     <div className="space-y-6">
+      <SnapshotStatus generatedAt={generatedAt} />
       <section>
         <h2 className="mb-3 text-lg font-bold text-slate-900">Victoria</h2>
         <div className="space-y-3">

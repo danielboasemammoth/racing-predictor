@@ -38,6 +38,17 @@ function race(
 }
 
 describe('daily conservative picks', () => {
+  it('preserves rankings, qualification, and reliability after snapshot serialization', () => {
+    const calibration: CalibrationTable = { overallBaseline: 0.18, probability: [], gap: [], agreement: [], rawRateRange: { min: 0.1, max: 0.3 } }
+    const races = [race('strong', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2), race('weak', '2026-08-16T04:00:00Z', 0.18, 0.48, 0.16, 50)]
+    const now = new Date('2026-08-16T01:00:00Z')
+    const computed = getDailyPicks(races, now, 3, { calibration, skipQualificationGate: true })
+    const reliabilityByRace = JSON.parse(JSON.stringify(Object.fromEntries(computed.map(pick => [pick.race.id, pick.reliability]))))
+    for (const skipQualificationGate of [true, false]) {
+      expect(getDailyPicks(races, now, 3, { reliabilityByRace, skipQualificationGate }))
+        .toEqual(getDailyPicks(races, now, 3, { calibration, skipQualificationGate }))
+    }
+  })
   it('ranks only Melbourne-today races by certainty', () => {
     const picks = getDailyPicks([
       race('strong', '2026-08-16T03:00:00Z', 0.35, 0.75, 0.15, 2),

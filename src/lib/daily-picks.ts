@@ -16,6 +16,7 @@ export interface DailyPick {
 }
 
 export interface DailyPicksFilterOptions {
+  reliabilityByRace?: Record<string, ReliabilityResult | null>
   /** When provided (with history), picks are ranked by Reliability Score and qualification-gated instead of the simpler certaintyScore. */
   calibration?: CalibrationTable | null
   history?: HistoricalRaceFeatures[] | null
@@ -68,7 +69,7 @@ export function candidatesForDate(races: RaceWithPrediction[], dateKey: string, 
 
     const otherModels = (race.model_predictions ?? []).filter((model) => model.model_version !== race.prediction?.model_version)
     const agreeing = otherModels.filter((model) => model.predictions.podium[0]?.horse_id === horse.horse_id).length
-    const reliability = options.calibration
+    const reliability = options.reliabilityByRace ? options.reliabilityByRace[race.id] ?? null : options.calibration
       ? computeReliabilityScore({ probability: winProbability, gap: leadOverSecond, agreeing, totalBaseModels: otherModels.length }, options.calibration, options.history ?? [])
       : null
 
