@@ -3,6 +3,7 @@ import { hasAdminSession } from '@/lib/admin-auth'
 import { evaluatePrediction, type ActualRaceEntry } from '@/lib/backtest'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Prediction, PredictionPayload } from '@/lib/types'
+import { readPages } from '@/lib/supabase/read-pages'
 
 interface CompletedRace {
   id: string
@@ -108,23 +109,22 @@ export async function POST() {
     const unscoredData: (UnscoredPredictionRow & { race_id: string })[] = []
     const scoredData: (ScoredPredictionRow & { race_id: string })[] = []
     const unscoredNeedsFullFetch: Array<PredictionMeta & { race_id: string; podium: PredictionPayload['podium'] | null }> = []
-    const raceChunkSize = 100
+    const raceChunkSize = 10
     const chunks: string[][] = []
     for (let offset = 0; offset < raceIds.length; offset += raceChunkSize) {
       chunks.push(raceIds.slice(offset, offset + raceChunkSize))
     }
-    // Chunks are fetched in small concurrent BATCHES, not one at a time - fully sequential chunk
-    // fetching (the original pattern) was another contributor to this route's slow runtime once
-    // the historical dataset grew large (fixed 2026-09-10, same pattern already applied to
-    // daily-picks-history.ts on 2026-09-09).
-    const CONCURRENT_CHUNK_BATCH = 4
+    const CONCURRENT_CHUNK_BATCH = 1
     for (let i = 0; i < chunks.length; i += CONCURRENT_CHUNK_BATCH) {
       const batch = chunks.slice(i, i + CONCURRENT_CHUNK_BATCH)
       const batchResults = await Promise.all(batch.map((chunk) => Promise.all([
-        supabase
-          .from('race_entries')
-          .select('race_id, horse_id, finishing_position, finishing_time')
-          .in('race_id', chunk),
+        readPages((after, limit) => {
+          let query = supabase.from('race_entries')
+            .select('id, race_id, horse_id, finishing_position, finishing_time')
+            .in('race_id', chunk).order('id').limit(limit)
+          if (after) query = query.gt('id', after)
+          return query
+        }),
         // Deliberately NOT filtered by actual_results IS [NOT] NULL here - splitting this into two
         // separately-filtered queries (tried first) made ONE of them hit a genuine Postgres
         // statement timeout on later chunks (older races, more accumulated predictions per race)
@@ -133,17 +133,23 @@ export async function POST() {
         // unfiltered fetch (still narrowed to exclude all_horses/predicted_times - see below) lets
         // Postgres use the existing (race_id, model_version, predicted_at) index cleanly; the
         // scored-vs-unscored split now happens in JS instead - found + fixed 2026-09-10.
-        supabase
-          .from('predictions')
-          .select('id, race_id, model_version, predicted_at, confidence_scores, podium:predictions->podium, actual_results')
-          .in('race_id', chunk)
-          .order('predicted_at', { ascending: false }),
+        readPages((after, limit) => {
+          let query = supabase.from('predictions')
+            .select('id, race_id, model_version, predicted_at, confidence_scores, podium:predictions->podium, actual_results')
+            .in('race_id', chunk).order('id').limit(limit)
+          if (after) query = query.gt('id', after)
+          return query
+        }),
       ])))
       for (const [entriesResult, predictionsResult] of batchResults) {
-        if (entriesResult.error) throw entriesResult.error
-        if (predictionsResult.error) throw predictionsResult.error
-        entriesData.push(...(entriesResult.data as typeof entriesData))
-        for (const row of (predictionsResult.data as unknown as Array<PredictionMeta & { race_id: string; podium: PredictionPayload['podium'] | null; actual_results: ScoredPredictionRow['actual_results'] | null }>)) {
+        entriesData.push(...(entriesResult as typeof entriesData))
+        const latest = new Map<string, typeof predictionsResult[number]>()
+        for (const row of predictionsResult) {
+          const key = `${row.race_id}:${row.model_version}`
+          const previous = latest.get(key)
+          if (!previous || row.predicted_at > previous.predicted_at || (row.predicted_at === previous.predicted_at && row.id > previous.id)) latest.set(key, row)
+        }
+        for (const row of ([...latest.values()] as unknown as Array<PredictionMeta & { race_id: string; podium: PredictionPayload['podium'] | null; actual_results: ScoredPredictionRow['actual_results'] | null }>)) {
           if (row.actual_results) scoredData.push(row as typeof scoredData[number])
           else unscoredNeedsFullFetch.push(row)
         }
@@ -154,8 +160,8 @@ export async function POST() {
     // requires - the vast majority of rows never reach this path.
     if (unscoredNeedsFullFetch.length) {
       const unscoredIds = unscoredNeedsFullFetch.map((row) => row.id)
-      for (let offset = 0; offset < unscoredIds.length; offset += 100) {
-        const idBatch = unscoredIds.slice(offset, offset + 100)
+      for (let offset = 0; offset < unscoredIds.length; offset += 20) {
+        const idBatch = unscoredIds.slice(offset, offset + 20)
         const { data, error } = await supabase
           .from('predictions')
           .select('id, race_id, model_version, predicted_at, confidence_scores, predicted_times, podium:predictions->podium, all_horses:predictions->all_horses')
@@ -242,7 +248,7 @@ export async function POST() {
       outcomesByModel.set(entry.row.model_version, modelOutcomes)
     }
 
-    const updateChunkSize = 20
+    const updateChunkSize = 4
     for (let offset = 0; offset < scoredPredictions.length; offset += updateChunkSize) {
       // A plain per-row UPDATE, not an upsert - Postgres validates NOT NULL constraints against
       // the full proposed row for an upsert's INSERT branch even when the ON CONFLICT DO UPDATE

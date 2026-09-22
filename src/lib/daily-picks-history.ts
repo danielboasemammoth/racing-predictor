@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { readPages } from './supabase/read-pages'
 import type { Prediction, Race, RaceWithPrediction } from '@/lib/types'
 import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { candidatesForDate, melbourneDateKey, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
@@ -37,16 +38,12 @@ export async function loadDailyPicksHistory(
   const now = new Date()
   const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
 
-  const { data: races, error: racesError } = await supabase
-    .from('races')
-    .select('*, racecourses(*)')
-    .eq('status', 'completed')
-    .gte('race_datetime', since.toISOString())
-    .lte('race_datetime', now.toISOString())
-    .order('race_datetime', { ascending: false })
-    .limit(1000)
-
-  if (racesError) throw racesError
+  const races = await readPages((after, limit) => {
+    let query = supabase.from('races').select('*, racecourses(*)').eq('status', 'completed')
+      .gte('race_datetime', since.toISOString()).lte('race_datetime', now.toISOString()).order('id').limit(limit)
+    if (after) query = query.gt('id', after)
+    return query
+  })
   const typedRaces = (races ?? []) as Race[]
   if (typedRaces.length === 0) return []
 
@@ -58,7 +55,7 @@ export async function loadDailyPicksHistory(
   // (confirmed live via Vercel's function logs 2026-09-10: a real `57014 canceling statement due
   // to statement timeout` from Supabase, not just a slow page - a smaller chunk directly reduces
   // the cost of each individual statement, not just the total wall-clock time across all of them).
-  const CHUNK_SIZE = 50
+  const CHUNK_SIZE = 10
   const chunks: string[][] = []
   for (let offset = 0; offset < raceIds.length; offset += CHUNK_SIZE) {
     chunks.push(raceIds.slice(offset, offset + CHUNK_SIZE))
@@ -66,16 +63,7 @@ export async function loadDailyPicksHistory(
 
   const predictionRows: Array<{ id: string; race_id: string; model_version: string; predicted_at: string; podium: Prediction['predictions']['podium'] | null }> = []
   const entryRows: Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }> = []
-  // Chunks are fetched in small concurrent BATCHES, not one at a time and not all at once - fully
-  // sequential chunk fetching was the dominant cost behind this page taking ~17s+ even after
-  // narrowing the columns selected; fetching every chunk at once instead tripped a genuine
-  // Postgres statement timeout (too much concurrent load against the same table). Kept at 3, not
-  // pushed higher - a higher concurrency (6) measured marginally faster locally but is the likely
-  // cause of a genuine `57014` statement timeout seen live on Vercel (concurrent queries against
-  // the same table/index appear to contend under Supabase's connection limits in a way this
-  // local machine's testing didn't surface) - reverted 2026-09-10, prioritize reliability over a
-  // couple of seconds of wall-clock time here.
-  const CONCURRENT_CHUNK_BATCH = 3
+  const CONCURRENT_CHUNK_BATCH = 1
   for (let i = 0; i < chunks.length; i += CONCURRENT_CHUNK_BATCH) {
     const batch = chunks.slice(i, i + CONCURRENT_CHUNK_BATCH)
     const batchResults = await Promise.all(batch.map((chunk) => Promise.all([
@@ -83,14 +71,22 @@ export async function loadDailyPicksHistory(
       // historyStarts) - selecting the full jsonb `predictions` payload (which can include a large
       // all_horses array and per-horse feature_snapshots) was slow enough at this table's current
       // size to trip a Postgres statement timeout and break this whole page (fixed 2026-09-09).
-      supabase.from('predictions').select('id, race_id, model_version, predicted_at, podium:predictions->podium').in('race_id', chunk).order('predicted_at', { ascending: false }),
-      supabase.from('race_entries').select('race_id, horse_id, finishing_position, status').in('race_id', chunk),
+      readPages((after, limit) => {
+        let query = supabase.from('predictions').select('id, race_id, model_version, predicted_at, podium:predictions->podium')
+          .in('race_id', chunk).in('model_version', CURRENT_MODEL_VERSIONS.map(version => `${version}-retrospective`)).order('id').limit(limit)
+        if (after) query = query.gt('id', after)
+        return query
+      }),
+      readPages((after, limit) => {
+        let query = supabase.from('race_entries').select('id, race_id, horse_id, finishing_position, status')
+          .in('race_id', chunk).order('id').limit(limit)
+        if (after) query = query.gt('id', after)
+        return query
+      }),
     ])))
     for (const [predictionResult, entryResult] of batchResults) {
-      if (predictionResult.error) throw predictionResult.error
-      if (entryResult.error) throw entryResult.error
-      predictionRows.push(...(predictionResult.data as typeof predictionRows))
-      entryRows.push(...(entryResult.data as Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }>))
+      predictionRows.push(...(predictionResult as typeof predictionRows))
+      entryRows.push(...entryResult)
     }
   }
 
@@ -98,6 +94,7 @@ export async function loadDailyPicksHistory(
   // the live predictions for the same race can be stale (e.g. still including a horse that was
   // scratched afterwards). Mirrors the same preference used on the race detail page.
   const modelsByRace = new Map<string, Prediction[]>()
+  predictionRows.sort((left, right) => right.predicted_at.localeCompare(left.predicted_at) || right.id.localeCompare(left.id))
   for (const row of predictionRows) {
     if (!row.model_version.includes('retrospective') || !row.podium?.length) continue
     const baseVersion = row.model_version.replace('-retrospective', '')

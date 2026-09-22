@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccuracyLog } from './types'
+import { withSupabaseReadRetry } from './supabase/read-retry'
 
 interface ScoredPredictionRow {
   id: string
@@ -32,13 +33,13 @@ export async function loadAccuracySnapshot(db: SupabaseClient) {
       ordered_trifecta:actual_results->>ordered_trifecta,
       winner_brier_score:actual_results->>winner_brier_score,
       winner_log_loss:actual_results->>winner_log_loss
-    `).not('actual_results', 'is', null).order('id').limit(1000)
+    `).not('actual_results', 'is', null).order('id').limit(250)
     if (lastId) query = query.gt('id', lastId)
-    const response = await query
+    const response = await withSupabaseReadRetry(() => query)
     if (response.error) throw response.error
     const rows = (response.data ?? []) as unknown as ScoredPredictionRow[]
     data.push(...rows)
-    if (rows.length < 1000) break
+    if (rows.length < 250) break
     lastId = rows[rows.length - 1].id
   }
   const modelMetrics = [...Map.groupBy(data, prediction => prediction.model_version)].map(([modelVersion, predictions]) => {

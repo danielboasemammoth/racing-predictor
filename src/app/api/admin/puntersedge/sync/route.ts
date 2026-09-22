@@ -24,6 +24,7 @@ import {
 } from '@/lib/paper-betting/repository'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PeNextToGoRace, RacingCategory } from '@/lib/puntersedge/types'
+import { partitionRecommendations } from '@/lib/paper-betting/valid-recommendations'
 
 const DEFAULT_STARTING_BANKROLL = 500
 // Below this, stop spending credits on next-to-go (2/call) - reserve what's left for settling
@@ -75,9 +76,11 @@ async function processRace(
     fundamentalsProbabilityByRunnerNumber = await findGreyhoundFundamentalsMatch(admin, client, race, greyhoundFetchBudget)
     if (fundamentalsProbabilityByRunnerNumber) modelVersion = GREYHOUND_FUNDAMENTALS_HYBRID_MODEL_VERSION
   }
-  const recommendations = generateRaceRecommendations(race, { now, fundamentalsProbabilityByRunnerNumber: fundamentalsProbabilityByRunnerNumber ?? undefined })
-
-  await insertOddsSnapshots(admin, race.race_id, recommendations, runnerIdByNumber, minutesToJump)
+  const generated = generateRaceRecommendations(race, { now, fundamentalsProbabilityByRunnerNumber: fundamentalsProbabilityByRunnerNumber ?? undefined })
+  const { valid: recommendations, rejected } = partitionRecommendations(generated)
+  if (rejected.length) console.warn('Unscorable recommendations excluded', { raceId: race.race_id, rejected })
+  noBetCount += rejected.length
+  await insertOddsSnapshots(admin, race.race_id, generated, runnerIdByNumber, minutesToJump)
   await insertRecommendations(admin, race.race_id, race.category, modelVersion, DEFAULT_THRESHOLDS, recommendations, runnerIdByNumber, minutesToJump)
 
   for (const rec of recommendations) {
@@ -144,7 +147,7 @@ async function processRace(
     }
   }
 
-  return { betsCreated, watchCount, noBetCount }
+  return { betsCreated, watchCount, noBetCount, rejectedCount: rejected.length }
 }
 
 /**
@@ -196,6 +199,8 @@ export async function POST(request: Request) {
     let betsCreated = 0
     let watchCount = 0
     let noBetCount = 0
+    let rejectedCount = 0
+    const failedRaces: string[] = []
 
     // Each race's DB writes are independent, but were previously awaited fully sequentially -
     // wall-clock time scaled linearly with race count (4+ round trips/race) and started exceeding
@@ -205,9 +210,16 @@ export async function POST(request: Request) {
     const RACE_CONCURRENCY = 10
     for (let i = 0; i < races.length; i += RACE_CONCURRENCY) {
       const batch = races.slice(i, i + RACE_CONCURRENCY)
-      const results = await Promise.all(batch.map((race) => processRace(admin, client, account, race, now, greyhoundFetchBudget)))
-      for (const result of results) {
+      const results = await Promise.allSettled(batch.map((race) => processRace(admin, client, account, race, now, greyhoundFetchBudget)))
+      for (const [index, outcome] of results.entries()) {
+        if (outcome.status === 'rejected') {
+          failedRaces.push(batch[index].race_id)
+          console.error('PuntersEdge race sync failed', { raceId: batch[index].race_id, error: outcome.reason })
+          continue
+        }
+        const result = outcome.value
         racesProcessed += 1
+        rejectedCount += result.rejectedCount
         betsCreated += result.betsCreated
         watchCount += result.watchCount
         noBetCount += result.noBetCount
@@ -222,15 +234,17 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({
-      success: true,
+      success: failedRaces.length === 0,
       racesProcessed,
+      failedRaces,
+      rejectedCount,
       betsCreated,
       watchCount,
       noBetCount,
       demoMode: client.isDemoMode,
       updatedAt: now.toISOString(),
-      message: `Processed ${racesProcessed} race${racesProcessed === 1 ? '' : 's'}${client.isDemoMode ? ' (sandbox demo data - no PUNTERSEDGE_API_KEY configured)' : ''}: ${betsCreated} auto paper bet${betsCreated === 1 ? '' : 's'} placed, ${watchCount} watch, ${noBetCount} no-bet`,
-    })
+      message: `Processed ${racesProcessed} race${racesProcessed === 1 ? '' : 's'}${client.isDemoMode ? ' (sandbox demo data - no PUNTERSEDGE_API_KEY configured)' : ''}: ${betsCreated} auto paper bet${betsCreated === 1 ? '' : 's'} placed, ${watchCount} watch, ${noBetCount} no-bet; ${rejectedCount} unscorable runners excluded; ${failedRaces.length} races failed`,
+    }, { status: failedRaces.length ? 503 : 200 })
   } catch (error) {
     if (error instanceof PuntersEdgeCreditsExhaustedError) {
       return NextResponse.json({ success: false, message: 'PuntersEdge monthly credit allowance is exhausted - try again after the reset.' }, { status: 402 })
