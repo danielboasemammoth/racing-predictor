@@ -3,6 +3,7 @@ import { readPageSnapshot } from '@/lib/page-cache-reader'
 import { SnapshotStatus } from '@/components/snapshot-status'
 import type { ResultEntry, ResultPrediction, ResultsSnapshot } from '@/lib/results-snapshot'
 import { SiteNav } from '@/components/site-nav'
+import { PredictionOutcomeBadges } from '@/components/prediction-outcome-badges'
 
 interface ResultRace {
   id: string
@@ -208,6 +209,10 @@ function RaceCard({ race }: { race: ResultRace }) {
         <PredictionBadge prediction={prediction} />
         <ActualResult entries={entries} />
       </div>
+      <PredictionOutcomeBadges
+        predictions={prediction?.predictions.podium ?? prediction?.predictions.all_horses?.slice(0, 3) ?? []}
+        entries={entries}
+      />
     </article>
   )
 }

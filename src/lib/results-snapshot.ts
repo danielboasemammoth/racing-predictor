@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PredictionPayload } from './types'
+import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from './prediction-suite'
 
 export interface ResultEntry {
   race_id: string
@@ -16,10 +17,37 @@ export interface ResultEntry {
 }
 
 export interface ResultPrediction {
+  id: string
   race_id: string
+  model_version: string
   predictions: PredictionPayload
   confidence_scores: { winner?: number }
   predicted_at: string
+}
+
+export function selectCompletedResultPrediction(rows: ResultPrediction[]) {
+  const candidates = rows.filter(row =>
+    CURRENT_MODEL_VERSIONS.some(version => row.model_version === `${version}-retrospective`)
+    && (row.predictions.podium ?? row.predictions.all_horses)?.length,
+  ).sort((left, right) => right.predicted_at.localeCompare(left.predicted_at) || right.id.localeCompare(left.id))
+  return candidates.find(row => row.model_version === `${PRODUCTION_MODEL_VERSION}-retrospective`) ?? candidates[0]
+}
+
+export async function loadResultPredictions(db: SupabaseClient, raceIds: string[]) {
+  if (!raceIds.length) return []
+  const rows: ResultPrediction[] = []
+  for (let start = 0; ; start += 1000) {
+    const response = await db.from('predictions').select('id, race_id, model_version, predictions, confidence_scores, predicted_at')
+      .in('race_id', raceIds).in('model_version', CURRENT_MODEL_VERSIONS.map(version => `${version}-retrospective`))
+      .order('predicted_at', { ascending: false }).order('id', { ascending: false }).range(start, start + 999)
+    if (response.error) throw response.error
+    rows.push(...response.data as ResultPrediction[])
+    if (response.data.length < 1000) break
+  }
+  return raceIds.flatMap(raceId => {
+    const prediction = selectCompletedResultPrediction(rows.filter(row => row.race_id === raceId))
+    return prediction ? [{ ...prediction, predictions: { podium: prediction.predictions.podium ?? prediction.predictions.all_horses?.slice(0, 3) ?? [], all_horses: [] } }] : []
+  })
 }
 
 export async function loadResultsSnapshot(db: SupabaseClient) {
@@ -43,21 +71,7 @@ export async function loadResultsSnapshot(db: SupabaseClient) {
       entries.push(...response.data as ResultEntry[])
       if (response.data.length < 1000) break
     }
-    const latest = new Map<string, ResultPrediction>()
-    for (let start = 0; ; start += 1000) {
-      const response = await db.from('predictions').select('race_id, predictions, confidence_scores, predicted_at')
-        .in('race_id', ids)
-        .order('predicted_at', { ascending: false }).order('id').range(start, start + 999)
-      if (response.error) throw response.error
-      for (const prediction of response.data as ResultPrediction[]) {
-        const race = batch.find(race => race.id === prediction.race_id)!
-        if (!latest.has(race.id)) {
-          latest.set(race.id, { ...prediction, predictions: { podium: prediction.predictions.podium ?? prediction.predictions.all_horses?.slice(0, 3) ?? [], all_horses: [] } })
-        }
-      }
-      if (response.data.length < 1000 || latest.size === ids.length) break
-    }
-    predictions.push(...latest.values())
+    predictions.push(...await loadResultPredictions(db, ids))
   }
   return { races, entries, predictions }
 }

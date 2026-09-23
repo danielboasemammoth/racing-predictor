@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
-import type { PredictedHorse } from '@/lib/types'
 import { SiteNav } from '@/components/site-nav'
+import { loadResultPredictions } from '@/lib/results-snapshot'
+import { PredictionOutcomeBadges } from '@/components/prediction-outcome-badges'
 
 const PAGE_SIZE = 20
 
@@ -12,11 +13,6 @@ interface VerifyRace {
   race_class: string | null
   status: string
   racecourse: string
-}
-
-interface VerifyEntry {
-  position: number | null
-  horse: string
 }
 
 function relatedName(value: unknown) {
@@ -61,12 +57,14 @@ async function loadEntries(raceId: string) {
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('race_entries')
-    .select('finishing_position, horse_id, horses(id, name)')
+    .select('finishing_position, horse_id, status, horses(id, name)')
     .eq('race_id', raceId)
+    .neq('status', 'scratched')
     .order('finishing_position', { ascending: true })
 
   if (error) throw error
   return data.map((entry) => ({
+    horse_id: entry.horse_id,
     position: entry.finishing_position,
     horse: relatedName(entry.horses),
   }))
@@ -74,17 +72,10 @@ async function loadEntries(raceId: string) {
 
 async function loadPredictions(raceId: string) {
   const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('predictions')
-    .select('predictions, predicted_at')
-    .eq('race_id', raceId)
-    .order('predicted_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (error) throw error
-  const podium = (data?.predictions?.podium ?? []) as PredictedHorse[]
+  const [prediction] = await loadResultPredictions(supabase, [raceId])
+  const podium = prediction?.predictions.podium ?? []
   return podium.map((horse) => ({
+    horse_id: horse.horse_id,
     position: horse.predicted_position,
     horse: horse.horse_name,
   }))
@@ -215,7 +206,7 @@ async function RaceCard({ race }: { race: VerifyRace }) {
                 .filter((e) => e.position)
                 .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
                 .map((entry) => (
-                  <li key={entry.position} className="flex items-center gap-2 text-sm">
+                  <li key={entry.horse_id} className="flex items-center gap-2 text-sm">
                     <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-700 text-xs font-bold text-white">
                       {entry.position}
                     </span>
@@ -233,39 +224,11 @@ async function RaceCard({ race }: { race: VerifyRace }) {
       </div>
 
       {hasPredictions && hasResults && (
-        <AccuracyBadge predictions={predictions} entries={entries.filter((e) => e.position)} />
+        <PredictionOutcomeBadges
+          predictions={predictions.map(horse => ({ horse_id: horse.horse_id, predicted_position: horse.position }))}
+          entries={entries.map(entry => ({ horse_id: entry.horse_id, finishing_position: entry.position }))}
+        />
       )}
     </article>
-  )
-}
-
-function AccuracyBadge({ predictions, entries }: { predictions: VerifyEntry[]; entries: VerifyEntry[] }) {
-  const hasPosition = (entry: VerifyEntry): entry is VerifyEntry & { position: number } => entry.position !== null
-  const predictedTop3 = predictions.filter(hasPosition).filter((p) => p.position <= 3).map((p) => p.horse)
-  const actualTop3 = entries
-    .filter(hasPosition)
-    .filter((e) => e.position <= 3)
-    .sort((a, b) => a.position - b.position)
-    .map((e) => e.horse)
-
-  const hits = predictedTop3.filter((horse) => actualTop3.includes(horse)).length
-  const winnerHit = actualTop3[0] && predictedTop3[0] === actualTop3[0]
-
-  return (
-    <div className="mt-4 flex flex-wrap gap-2">
-      {winnerHit && (
-        <span className="rounded-lg border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">
-          ✓ Winner predicted correctly
-        </span>
-      )}
-      {!winnerHit && (
-        <span className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800">
-          ✗ Winner missed
-        </span>
-      )}
-      <span className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700">
-        Podium hits: {hits}/3
-      </span>
-    </div>
   )
 }
