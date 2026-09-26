@@ -19,7 +19,6 @@ import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { SiteNav } from '@/components/site-nav'
 import { PaperBetButton } from '@/components/paper-bet-button'
 import { PicksSortFilter } from '@/components/picks-sort-filter'
-import { getPlaceWatchlist } from '@/lib/place-watchlist'
 
 export const dynamic = 'force-dynamic'
 
@@ -126,7 +125,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   const picksMinPct = params.minPct && !Number.isNaN(Number(params.minPct)) ? Number(params.minPct) : DEFAULT_PICKS_MIN_PCT
 
   const snapshot = await readPageSnapshot<HomeSnapshot>('home')
-  const races = currentSnapshotRaces(snapshot?.data.races ?? [], now)
+  const races = currentSnapshotRaces(snapshot?.data.races ?? [], now, snapshot?.data.tabRaceIds)
   const reliabilityContext = snapshot?.data.reliabilityAvailable ?? false
   baseFilters.reliabilityByRace = snapshot?.data.reliabilityByRace ?? {}
 
@@ -140,11 +139,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
   const tomorrowQualified = getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, conservativeFilters)
   const conservativePicks = applyPicksSortFilter(todayQualified)
   const tomorrowConservativePicks = applyPicksSortFilter(tomorrowQualified)
-  const watchDays = [{ label: 'Today', dateKey: todayKey }, { label: 'Tomorrow', dateKey: tomorrowKey }].map(day => ({
-    ...day,
-    races: races.filter(race => melbourneDateKey(race.race_datetime) === day.dateKey),
-    picks: getPlaceWatchlist(races, day.dateKey, now),
-  }))
 
   function shortlistStatus(dateKey: string, qualifiedCount: number) {
     const dayRaces = races.filter(race => melbourneDateKey(race.race_datetime) === dateKey)
@@ -186,40 +180,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
         <SnapshotStatus generatedAt={snapshot?.generatedAt} />
         {!snapshot ? null : races.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-            <p className="text-slate-600 mb-2">No upcoming races scheduled through tomorrow.</p>
+            <p className="text-slate-600 mb-2">{!snapshot.data.tabRaceIds ? 'TAB race availability is awaiting a page-cache refresh.' : 'No upcoming TAB races scheduled through tomorrow.'}</p>
             <Link href="/admin" className="text-teal-700 font-medium hover:underline">Go to Admin to run prediction model</Link>
           </div>
         ) : (
           <div className="space-y-6">
-            <section aria-labelledby="place-watchlist-title" className="border-y border-sky-200 bg-sky-50 px-4 py-5 sm:px-6">
-              <h2 id="place-watchlist-title" className="text-lg font-bold text-slate-900">PLACE watchlist</h2>
-              <p className="mt-1 text-sm text-slate-600">Top-three probability 50% or higher. Model estimates, not value-qualified bets. Paid places depend on the market and field size.</p>
-              <div className="mt-4 grid gap-6 lg:grid-cols-2">
-                {watchDays.map(day => (
-                  <div key={day.dateKey} className="min-w-0">
-                    <h3 className="font-semibold text-slate-900">{day.label} <span className="text-sm font-normal text-slate-600">{day.dateKey}</span></h3>
-                    <p className="mt-1 text-xs text-slate-600">{day.races.filter(race => race.prediction).length}/{day.races.length} races with predictions</p>
-                    {day.picks.length ? (
-                      <ul tabIndex={0} aria-label={`${day.label} PLACE forecasts`} className="mt-2 max-h-96 overflow-y-auto overscroll-contain divide-y divide-sky-200 pr-2 focus-visible:outline-2 focus-visible:outline-sky-700">
-                        {day.picks.map(pick => (
-                          <li key={`${pick.race.id}-${pick.horse.horse_id}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-3">
-                            <div className="min-w-0 break-words">
-                              <Link href={`/races/${pick.race.id}`} className="font-semibold text-sky-900 hover:underline">{pick.horse.horse_name}</Link>
-                              <p className="text-xs text-slate-600">{pick.race.racecourses?.name} · R{pick.race.race_number} · {formatDateTime(pick.race.race_datetime)}</p>
-                              <p className="mt-1 text-xs text-slate-500">Forecast: {formatDateTime(pick.race.prediction!.predicted_at)}</p>
-                            </div>
-                            <div className="text-right tabular-nums">
-                              <p className="font-bold text-sky-900">{(pick.top3Probability * 100).toFixed(1)}%</p>
-                              <p className="text-xs text-slate-600">top 3</p>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : <p className="mt-3 text-sm text-slate-600">{!day.races.length ? 'No remaining races scheduled.' : !day.races.some(race => race.prediction) ? 'Predictions pending.' : 'No recorded forecasts at or above 50%.'}</p>}
-                  </div>
-                ))}
-              </div>
-            </section>
             {reliabilityContext && (
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-semibold text-slate-600">Filters:</span>

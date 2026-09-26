@@ -11,6 +11,7 @@ import type { Prediction, RaceWithPrediction } from './types'
 import { loadResultsSnapshot } from './results-snapshot'
 import { loadAccuracySnapshot } from './accuracy-snapshot'
 import { loadAnalyticsSnapshot } from './analytics-snapshot'
+import { getTabRaceIds } from './tab-races'
 
 function compactPrediction(prediction: Prediction, primary: boolean): Prediction {
   const payload = prediction.predictions
@@ -28,7 +29,10 @@ function compactPrediction(prediction: Prediction, primary: boolean): Prediction
 }
 
 export async function loadHomeSnapshot(db: SupabaseClient) {
-  const races = await getUpcomingRaces(db)
+  const upcomingRaces = await getUpcomingRaces(db)
+  const tabRaceIds = await getTabRaceIds(upcomingRaces)
+  const tabRaces = new Set(tabRaceIds)
+  const races = upcomingRaces.filter(race => tabRaces.has(race.id))
   const context = await loadReliabilityContext(db, true)
   const reliabilityByRace: Record<string, ReliabilityResult | null> = {}
   for (const day of new Set(races.map(race => melbourneDateKey(race.race_datetime)))) {
@@ -42,13 +46,15 @@ export async function loadHomeSnapshot(db: SupabaseClient) {
     })),
     reliabilityByRace,
     reliabilityAvailable: context !== null,
+    tabRaceIds,
   }
 }
 
-export function currentSnapshotRaces(races: RaceWithPrediction[], now = new Date()) {
+export function currentSnapshotRaces(races: RaceWithPrediction[], now = new Date(), tabRaceIds: readonly string[] = []) {
   const today = melbourneDateKey(now)
   const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
-  return races.filter(race => race.status === 'upcoming' && Date.parse(race.race_datetime) > now.getTime()
+  const tabRaces = new Set(tabRaceIds)
+  return races.filter(race => tabRaces.has(race.id) && race.status === 'upcoming' && Date.parse(race.race_datetime) > now.getTime()
     && melbourneDateKey(race.race_datetime) <= tomorrow)
 }
 

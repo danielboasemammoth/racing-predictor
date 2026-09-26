@@ -20,6 +20,8 @@ Generation time is captured before source loading. Conditional publication preve
 
 Home snapshots include precomputed reliability and compact forecast data; user-selected sorting and filters still run at request time. Past Picks retains its seven-day window. Accuracy and Analytics calculate historical metrics during refresh, not rendering. Metrics queries paginate at Supabase's 1,000-row response cap.
 
+Home also stores `tabRaceIds`, confirmed against TAB's public VIC-jurisdiction schedule for each Melbourne race date. Matching uses venue, race number, and the existing 20-minute start-time tolerance. Only thoroughbred races with tote, fixed odds, or announced future fixed odds qualify; abandoned races do not. All home-page shortlists and race cards use this allowlist, independently of prediction odds. A failed TAB lookup fails the refresh and retains the previous snapshot. Legacy snapshots without the allowlist display a refresh-required state until `home` is refreshed. No TAB request runs during page rendering.
+
 ## Bootstrap and Recovery
 
 After building the updated app, bootstrap all snapshots from the project root:

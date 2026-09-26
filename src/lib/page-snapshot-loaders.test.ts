@@ -12,7 +12,18 @@ it('expires started races and limits old homepage snapshots to today and tomorro
     { id: 'later', status: 'upcoming', race_datetime: '2026-09-24T01:00:00Z' },
     { id: 'completed', status: 'completed', race_datetime: '2026-09-22T01:00:00Z' },
   ] as RaceWithPrediction[]
-  expect(currentSnapshotRaces(races, now).map(race => race.id)).toEqual(['today', 'tomorrow'])
+  expect(currentSnapshotRaces(races, now, races.map(race => race.id)).map(race => race.id)).toEqual(['today', 'tomorrow'])
+})
+
+it('excludes non-TAB races and unverified legacy snapshots from the home page', () => {
+  const now = new Date('2026-09-26T00:00:00Z')
+  const races = [
+    { id: 'tab', status: 'upcoming', race_datetime: '2026-09-26T05:00:00Z' },
+    { id: 'non-tab', status: 'upcoming', race_datetime: '2026-09-26T05:00:00Z' },
+  ] as RaceWithPrediction[]
+  expect(currentSnapshotRaces(races, now, ['tab']).map(race => race.id)).toEqual(['tab'])
+  expect(currentSnapshotRaces(races, now)).toEqual([])
+  expect(currentSnapshotRaces(races, now, [])).toEqual([])
 })
 
 it('expires cached quotes after 30 minutes or race start and rejects future timestamps', () => {

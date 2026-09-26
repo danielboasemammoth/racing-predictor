@@ -7,12 +7,14 @@ import { loadHomeSnapshot } from '@/lib/page-snapshot-loaders'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { loadReliabilityContext } from '@/lib/reliability-context'
+import { getTabRaceIds } from '@/lib/tab-races'
 import type { RaceWithPrediction } from '@/lib/types'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
 vi.mock('@/lib/page-cache-reader', () => ({ readPageSnapshot: vi.fn() }))
 vi.mock('@/lib/upcoming-races', () => ({ getUpcomingRaces: vi.fn() }))
 vi.mock('@/lib/reliability-context', () => ({ loadReliabilityContext: vi.fn() }))
+vi.mock('@/lib/tab-races', () => ({ getTabRaceIds: vi.fn() }))
 vi.mock('@/components/site-nav', () => ({ SiteNav: () => null }))
 vi.mock('@/components/paper-bet-button', () => ({ PaperBetButton: () => null }))
 vi.mock('@/components/picks-sort-filter', () => ({ PicksSortFilter: () => null }))
@@ -34,6 +36,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-09-17T00:00:00Z'))
   vi.stubGlobal('React', React)
   vi.mocked(getUpcomingRaces).mockResolvedValue([fixture()])
+  vi.mocked(getTabRaceIds).mockResolvedValue(['race'])
   vi.mocked(loadReliabilityContext).mockResolvedValue({
     calibration: { overallBaseline: 0.18, probability: [], gap: [], agreement: [], rawRateRange: { min: 0.1, max: 0.3 } }, history: [],
   })
@@ -52,11 +55,10 @@ describe('homepage pick availability', () => {
     expect(html).toContain('Page data temporarily unavailable')
     expect(getUpcomingRaces).not.toHaveBeenCalled()
   })
-  it('shows tomorrow and its PLACE watchlist even when no conservative pick qualifies', async () => {
+  it('shows tomorrow without the PLACE watchlist even when no conservative pick qualifies', async () => {
     const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))
-    expect(html).toContain('PLACE watchlist')
-    expect(html).toContain('62.0%')
-    expect(html).toContain('Forecast:')
+    expect(html).not.toContain('PLACE watchlist')
+    expect(html).not.toContain('place-watchlist-title')
     expect(html).toContain('Tomorrow&#x27;s conservative picks')
     expect(html).toContain('No forecasts meet the current conservative eligibility filters.')
     expect(html).toContain('1 of 1 races have predictions.')
@@ -69,11 +71,23 @@ describe('homepage pick availability', () => {
     expect(html).not.toContain('No forecasts meet')
   })
 
-  it('reports missing reliability data while retaining the independent watchlist', async () => {
+  it('reports missing reliability data without the removed watchlist', async () => {
     vi.mocked(loadReliabilityContext).mockResolvedValue(null)
     const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))
     expect(html).toContain('Reliability data unavailable.')
-    expect(html).toContain('62.0%')
+    expect(html).not.toContain('PLACE watchlist')
+  })
+
+  it('hides non-TAB races from the race list and coverage counts', async () => {
+    vi.mocked(getUpcomingRaces).mockResolvedValue([fixture(), { ...fixture(), id: 'non-tab', race_name: 'Non-TAB Race' }])
+    const snapshot = await loadHomeSnapshot({} as SupabaseClient)
+    expect(snapshot.races.map(race => race.id)).toEqual(['race'])
+    expect(snapshot.tabRaceIds).toEqual(['race'])
+    const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('/races/race')
+    expect(html).not.toContain('/races/non-tab')
+    expect(html).not.toContain('Non-TAB Race')
+    expect(html).toContain('1 of 1 races have predictions.')
   })
 
   it('preserves the probability controls when toggling other filters', async () => {
