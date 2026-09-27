@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import type { SimulationRace } from '../src/lib/betting/historical-simulator'
+import { SIMULATION_PREFERENCES_KEY } from '../src/lib/betting/simulation-preferences'
 
 const baseUrl = process.argv[2] ?? 'http://localhost:3021'
 assert.ok(['localhost', '127.0.0.1'].includes(new URL(baseUrl).hostname), 'Use a local preview only')
@@ -85,6 +86,29 @@ async function main() {
     await waitForCount(120)
     await page.getByLabel('Completed races', { exact: true }).selectOption('100')
     assert.equal(reportRequests, 2, 'Filters, staking, pagination and export must stay local')
+    await page.getByLabel('WIN edge', { exact: true }).selectOption('10')
+    await page.getByLabel('PLACE top-three probability', { exact: true }).selectOption('60')
+    await page.getByLabel('PLACE venue', { exact: true }).selectOption('TEST DATA Flemington')
+    await page.getByLabel('PLACE model', { exact: true }).selectOption('test-alpha')
+    await page.getByLabel('Sort results', { exact: true }).selectOption('edge')
+    await waitForCount(60)
+    await page.waitForFunction(key => JSON.parse(window.localStorage.getItem(key) ?? '{}').sort === 'edge', SIMULATION_PREFERENCES_KEY)
+    const saved = await page.evaluate(key => window.localStorage.getItem(key), SIMULATION_PREFERENCES_KEY)
+    const filteredResults = await results()
+    await page.reload()
+    await waitForCount(60)
+    assert.equal(await results(), filteredResults)
+    assert.equal(await page.evaluate(key => window.localStorage.getItem(key), SIMULATION_PREFERENCES_KEY), saved)
+    for (const [label, expected] of [['Completed races', '100'], ['Starting bankroll per model', '100'], ['Flat stake', '5'], ['Staking method', 'percent'], ['WIN edge', '10'], ['PLACE top-three probability', '60'], ['PLACE model', 'test-alpha'], ['PLACE venue', 'TEST DATA Flemington'], ['Sort results', 'edge']]) {
+      assert.equal(await page.getByLabel(label, { exact: true }).inputValue(), expected)
+    }
+    assert.equal(await page.getByRole('checkbox', { name: 'WIN', exact: true }).isChecked(), false)
+    await page.getByRole('button', { name: 'Reset PLACE filters', exact: true }).click()
+    await waitForCount(120)
+    await page.reload()
+    await waitForCount(120)
+    assert.equal(await page.getByLabel('PLACE top-three probability', { exact: true }).inputValue(), '50')
+    assert.equal(await page.getByLabel('WIN edge', { exact: true }).inputValue(), '10')
     await mkdir('scripts/output', { recursive: true })
     for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
       await page.setViewportSize(viewport)
@@ -99,9 +123,34 @@ async function main() {
     reportStatus = 404
     await page.reload()
     await page.getByRole('alert').filter({ hasText: 'No simulator report published yet' }).waitFor()
+    reportStatus = 200
+    await page.evaluate(key => window.localStorage.setItem(key, '{broken'), SIMULATION_PREFERENCES_KEY)
+    await page.reload()
+    await waitForCount(240)
+    assert.equal(await page.getByLabel('Completed races', { exact: true }).inputValue(), '500')
+    await page.evaluate(key => {
+      const saved = JSON.parse(window.localStorage.getItem(key)!)
+      saved.filters.PLACE.model = 'retired-test-model'
+      saved.filters.PLACE.venue = 'Absent test venue'
+      window.localStorage.setItem(key, JSON.stringify(saved))
+    }, SIMULATION_PREFERENCES_KEY)
+    await page.reload()
+    await waitForCount(120)
+    assert.equal(await page.getByLabel('PLACE model', { exact: true }).inputValue(), 'retired-test-model')
+    assert.equal(await page.getByLabel('PLACE venue', { exact: true }).inputValue(), 'Absent test venue')
+    const blockedPage = await context.newPage()
+    blockedPage.on('pageerror', error => errors.push(error.message))
+    await blockedPage.addInitScript(() => {
+      Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Storage blocked', 'SecurityError') } })
+    })
+    await blockedPage.goto(`${baseUrl}/paper-betting`)
+    await blockedPage.getByText('Filtered bets (240)', { exact: true }).waitFor()
+    await blockedPage.getByRole('checkbox', { name: 'WIN', exact: true }).uncheck()
+    await blockedPage.getByText('Filtered bets (120)', { exact: true }).waitFor()
+    await blockedPage.close()
     assert.deepEqual(blockedRequests, [], 'No source-table or betting API calls are expected')
     assert.deepEqual(errors, [])
-    console.log('PASS: strict defaults, bankroll math, local filtering, full CSV export, pagination ROI, desktop/mobile layout and retained/unavailable report states. No live Supabase requests were made.')
+    console.log('PASS: defaults, bankroll math, local filtering, CSV, pagination ROI, desktop/mobile layout, report failures, saved preferences, persistent resets and corrupt/blocked storage. No live Supabase requests were made.')
   } finally {
     await browser.close()
   }

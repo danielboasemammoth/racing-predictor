@@ -5,12 +5,12 @@ import Link from 'next/link'
 import { ChevronLeft, ChevronRight, Download, RefreshCw, RotateCcw } from 'lucide-react'
 import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationCandidates, type SimulationBet, type SimulationDataset, type SimulationFilters, type SimulationMarket, type SimulationSettings } from '@/lib/betting/historical-simulator'
 import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '@/lib/betting/simulation-report'
+import { DEFAULT_SIMULATION_SETTINGS, readSimulationPreferences, SIMULATION_PREFERENCES_KEY } from '@/lib/betting/simulation-preferences'
 
 const amounts = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 const money = (amount: number) => new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(amount)
 const percent = (amount: number | null) => amount === null ? '-' : `${amount.toFixed(1)}%`
 const date = (value: string) => new Date(value).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-const initialSettings: SimulationSettings = { startingBankroll: 500, method: 'flat', flatStake: 10, stakePercent: 1 }
 
 function Select({ label, value, onChange, children }: { label: string; value: string | number; onChange: (value: string) => void; children: ReactNode }) {
   return <label className="min-w-0 text-xs font-medium text-slate-600">{label}<select aria-label={label} value={value} onChange={event => onChange(event.target.value)} className="mt-1 block h-9 w-full min-w-0 rounded border border-slate-300 bg-white px-2 text-sm text-slate-900">{children}</select></label>
@@ -23,7 +23,7 @@ function Filters({ market, value, setValue, models, venues }: { market: Simulati
     <div className="mb-3 flex items-center justify-between"><label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={value.enabled} onChange={event => update('enabled', event.target.checked)} className="accent-teal-700" />{market}</label>
       <button type="button" title={`Reset ${market} filters`} aria-label={`Reset ${market} filters`} onClick={() => setValue({ ...DEFAULT_SIMULATION_FILTERS })} className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 hover:bg-white"><RotateCcw size={15} /></button></div>
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      <Select label={`${market} model`} value={value.model} onChange={next => update('model', next)}><option value="">All models</option>{models.map(model => <option key={model}>{model}</option>)}</Select>
+      <Select label={`${market} model`} value={value.model} onChange={next => update('model', next)}><option value="">All models</option>{value.model && !models.includes(value.model) && <option value={value.model}>{value.model} (unavailable)</option>}{models.map(model => <option key={model}>{model}</option>)}</Select>
       <Select label={`${market} reliability`} value={value.minReliability} onChange={next => update('minReliability', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `${amount}+ (pre-race)` : 'Any / unavailable'}</option>)}</Select>
       <Select label={`${market} edge`} value={value.minEdge} onChange={next => update('minEdge', Number(next))}><option value={-100}>Any / unavailable</option>{[0, 2, 5, 10, 15, 20].map(amount => <option key={amount} value={amount}>{`> ${amount} pts`}</option>)}</Select>
       <Select label={`${market} win probability`} value={value.minWin} onChange={next => update('minWin', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `> ${amount}%` : 'Any'}</option>)}</Select>
@@ -35,7 +35,7 @@ function Filters({ market, value, setValue, models, venues }: { market: Simulati
       <Select label={`${market} minimum odds`} value={value.minOdds} onChange={next => update('minOdds', Number(next))}>{[0, 1.5, 2, 3, 5, 10].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
       <Select label={`${market} maximum odds`} value={value.maxOdds} onChange={next => update('maxOdds', Number(next))}>{[0, 2, 3, 5, 10, 20, 50].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
       <Select label={`${market} field size`} value={value.minField} onChange={next => update('minField', Number(next))}>{[0, 5, 8, 10, 12, 16].map(amount => <option key={amount} value={amount}>{amount ? `${amount}+ starters` : 'Any'}</option>)}</Select>
-      <div className="col-span-2 sm:col-span-3"><Select label={`${market} venue`} value={value.venue} onChange={next => update('venue', next)}><option value="">All venues</option>{venues.map(venue => <option key={venue}>{venue}</option>)}</Select></div>
+      <div className="col-span-2 sm:col-span-3"><Select label={`${market} venue`} value={value.venue} onChange={next => update('venue', next)}><option value="">All venues</option>{value.venue && !venues.includes(value.venue) && <option value={value.venue}>{value.venue} (unavailable)</option>}{venues.map(venue => <option key={venue}>{venue}</option>)}</Select></div>
     </div>
   </fieldset>
 }
@@ -61,10 +61,29 @@ export function HistoricalSimulator() {
   const [refresh, setRefresh] = useState(0)
   const generation = useRef('')
   const [filters, setFilters] = useState({ WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SIMULATION_FILTERS } })
-  const [settings, setSettings] = useState<SimulationSettings>(initialSettings)
+  const [settings, setSettings] = useState<SimulationSettings>(DEFAULT_SIMULATION_SETTINGS)
   const [count, setCount] = useState(500)
   const [sort, setSort] = useState('start')
   const [pageNumber, setPageNumber] = useState(0)
+  const [preferencesReady, setPreferencesReady] = useState(false)
+  useEffect(() => {
+    let saved: string | null = null
+    try { saved = window.localStorage.getItem(SIMULATION_PREFERENCES_KEY) } catch {}
+    const preferences = readSimulationPreferences(saved)
+    startTransition(() => {
+      setFilters(preferences.filters)
+      setSettings(preferences.settings)
+      setCount(preferences.count)
+      setSort(preferences.sort)
+      setPreferencesReady(true)
+    })
+  }, [])
+  useEffect(() => {
+    if (!preferencesReady) return
+    try {
+      window.localStorage.setItem(SIMULATION_PREFERENCES_KEY, JSON.stringify({ schema: 1, filters, settings, count, sort }))
+    } catch {}
+  }, [preferencesReady, filters, settings, count, sort])
   useEffect(() => {
     let active = true
     let running = false
