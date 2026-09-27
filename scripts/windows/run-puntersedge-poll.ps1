@@ -18,6 +18,8 @@ param(
 $logDir = Join-Path $ProjectRoot "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logFile = Join-Path $logDir "puntersedge-poll-$(Get-Date -Format 'yyyy-MM-dd').log"
+$jobLock = $null
+$script:databaseUnavailable = $false
 
 function Write-Log {
     param([string]$Text)
@@ -74,12 +76,19 @@ function Invoke-Step {
         }
         Write-Log "OK    $Label -> $($response.message)"
     } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -in @(502, 503, 504, 520, 522, 524)) { $script:databaseUnavailable = $true }
         Write-Log "FAIL  $Label -> $($_.Exception.Message)"
         throw
     }
 }
 
 try {
+    try {
+        $jobLock = [System.IO.File]::Open((Join-Path $logDir 'database-pipeline.lock'), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    } catch [System.IO.IOException] {
+        Write-Log 'Another database pipeline is running; skipping this invocation'
+        exit 0
+    }
     $aestNow = Get-Date
     if (-not $ForceRun -and -not ($RacingHoursEndAest -eq 24 -and $aestNow.Hour -eq 0) -and ($aestNow.Hour -lt $RacingHoursStartAest -or $aestNow.Hour -ge $RacingHoursEndAest)) {
         Write-Log "Outside scheduled hours ($($aestNow.ToString('HH:mm')) local time) - skipping poll to conserve API credits"
@@ -101,13 +110,14 @@ try {
     Write-Log "POLL ABORTED: $($_.Exception.Message)"
     exit 1
 } finally {
-    if ($baseUrl -and $webSession) {
+    if ($baseUrl -and $webSession -and -not $script:databaseUnavailable) {
         if (-not (& (Join-Path $PSScriptRoot "refresh-page-cache.ps1") -BaseUrl $baseUrl -WebSession $webSession -PollOnly)) { $cacheFailed = $true }
     }
     if ($app -and $app.StartedProcessId) {
         Write-Log "Stopping app instance started for this run (PID $($app.StartedProcessId))"
         taskkill /T /F /PID $app.StartedProcessId 2>&1 | Out-Null
     }
+    if ($jobLock) { $jobLock.Dispose() }
 }
 
 if ($cacheFailed) { exit 1 }

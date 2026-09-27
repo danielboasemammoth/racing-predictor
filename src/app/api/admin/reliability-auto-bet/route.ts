@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { autoPlaceReliabilityBets } from '@/lib/paper-betting/reliability-auto-bet'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 export async function POST() {
   if (!await hasAdminSession()) {
@@ -14,7 +15,9 @@ export async function POST() {
     const rejected = Object.entries(summary.rejectionCounts).filter(([, count]) => count > 0).map(([reason, count]) => `${reason}=${count}`).join(', ')
     return NextResponse.json({
       success: true,
-      message: `${summary.policyVersion}: evaluated ${summary.marketsConsidered} runner/markets, placed ${summary.winBetsPlaced} WIN and ${summary.placeBetsPlaced} PLACE (${summary.skippedDuplicate} duplicates, ${summary.skippedZeroStake} zero stake). Rejections: ${rejected || 'none'}. Race skips: ${JSON.stringify(summary.raceSkips)}. Shadow: ${summary.shadowRacesRecorded} new races, ${summary.shadowCaptureErrors} capture errors.${summary.policyTrackingAvailable ? '' : ' Policy migration missing: new bets remain untagged.'}`,
+      message: !legacyPaperBettingEnabled()
+        ? `Legacy betting retired. PLACE shadow: ${summary.shadowRacesRecorded} new races, ${summary.shadowCaptureErrors} capture errors. No bets placed.`
+        : `${summary.policyVersion}: evaluated ${summary.marketsConsidered} runner/markets, placed ${summary.winBetsPlaced} WIN and ${summary.placeBetsPlaced} PLACE (${summary.skippedDuplicate} duplicates, ${summary.skippedZeroStake} zero stake). Rejections: ${rejected || 'none'}. Race skips: ${JSON.stringify(summary.raceSkips)}. Shadow: ${summary.shadowRacesRecorded} new races, ${summary.shadowCaptureErrors} capture errors.${summary.policyTrackingAvailable ? '' : ' Policy migration missing: new bets remain untagged.'}`,
       ...summary,
     })
   } catch (error) {

@@ -9,7 +9,11 @@ Run these from the project root in Administrator PowerShell to activate the inte
 
 Both tasks run at midnight and hourly from 06:00 through 23:00, using local Windows time. The poll registration disables the obsolete morning and late catch-up tasks. Editing scripts alone does not change registered triggers. Hourly odds polling can miss prices available only 15-25 minutes before jump.
 
-The main pipeline requires successful race and result syncs before generating upcoming predictions. Retrospective backfill runs afterward, at most 50 races per invocation; its failure does not block later maintenance. Backfill, backtest, calibration, auto-betting, settlement, odds sync, and pruning failures are recorded while subsequent steps continue. A failed step produces a nonzero process exit code, forwarded by the hidden launcher. Some backfill work may remain for the next hourly run.
+The main pipeline requires successful race and result syncs before generating upcoming predictions. Live ingestion, prediction generation, incremental simulator publication, research-shadow capture, existing-bet settlement and odds sync remain hourly. Automatic paper-bet placement is retired. Odds-sync concurrency is bounded to three races.
+
+Retrospective backfill (at most 50 races), backtesting and reliability recalibration now run only at 06:00 local time or when `run-daily-tasks.ps1 -Maintenance` is invoked. If the machine misses 06:00, use the explicit switch or wait for the next day's maintenance. Historical page snapshots follow that same split; hourly pages retain their normal refresh cadence.
+
+Both scripts share an exclusive `logs/database-pipeline.lock` file handle, preventing daily/poll overlap on this machine. A competing run skips rather than queues; the main pipeline already includes polling work. This does not coordinate other machines or manual API calls. The simulator publisher separately uses a database lease. Recognized upstream availability errors (including 522/503) stop later database work and cleanup refreshes; other noncritical failures are recorded while subsequent steps continue. Failed work produces a nonzero process exit code, forwarded by the hidden launcher.
 
 Tasks use `IgnoreNew` while a prior instance is running. The main pipeline has a three-hour execution limit, so long runs can skip hourly triggers. Inspect the timestamped `logs/daily-tasks-YYYY-MM-DD.log` and `logs/puntersedge-poll-YYYY-MM-DD.log` as well as Task Scheduler's last result. Logs are UTF-16 on Windows PowerShell 5.1.
 
@@ -22,13 +26,13 @@ The regression check mocks service calls and task-trigger creation; it does not 
 
 ## Homepage Picks
 
-The main public pages use persisted page snapshots; see [PAGE_CACHING.md](PAGE_CACHING.md) for refresh scopes, freshness limits, and recovery commands. Both task scripts attempt relevant snapshot refreshes in `finally`, before stopping a self-started app, including after a failed upstream step. Existing registered triggers need no changes for these script updates. Rebuild the production app so task-started instances include the refresh endpoint.
+The main public pages use persisted page snapshots; see [PAGE_CACHING.md](PAGE_CACHING.md) for refresh scopes, freshness limits, and recovery commands. Both task scripts attempt relevant snapshot refreshes in `finally`, unless an upstream availability failure has stopped database work. Existing registered triggers need no changes for these script updates. Rebuild the production app so task-started instances include the new endpoint. Apply the simulator migration and bootstrap as described in [PAPER_BETTING.md](PAPER_BETTING.md) only after database recovery.
 
 App detection uses the database-independent `/api/health` endpoint, so a slow or unavailable Supabase connection does not make the scheduler misidentify a running app.
 
-The PLACE watchlist lists recorded top-three probabilities of at least 50% for all forecast runners, independently of WIN reliability. Forecast timestamps and race coverage are displayed for today and tomorrow. These are model estimates, not value-qualified betting recommendations; top-three probability does not imply a three-place paid market.
+The homepage PLACE watchlist has been removed. Homepage shortlists and race cards include only races matched to TAB's public schedule. Top-three probability does not imply a three-place paid market.
 
-Conservative picks retain their existing reliability gate and probability controls (default WIN >=50%). Their empty states distinguish unavailable reliability, missing forecasts, and filtered candidates. Neither the watchlist nor these display changes alters auto-betting policy or promotes a model.
+Conservative picks retain their existing reliability gate and probability controls (default WIN >=50%). Their empty states distinguish unavailable reliability, missing forecasts, and filtered candidates. These display changes do not promote a model.
 
 The shared homepage loader reads current-model forecasts in 20-race batches and paginates each batch, avoiding Supabase's 1,000-row response cap. It keeps the newest snapshot per model and stops once all current models are present for every race in the batch.
 

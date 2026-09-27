@@ -10,6 +10,7 @@ import { paidPlacesCount } from '@/lib/betting/place-rules'
 import type { PredictedHorse, RaceWithPrediction } from '@/lib/types'
 import { INTERNAL_VALUE_POLICY_VERSION, supportsPolicyTracking } from './policy-tracking'
 import { recordPlaceShadow } from './place-shadow'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 const DEFAULT_STARTING_BANKROLL = 500 // shared 'default' account - matches puntersedge/sync and paper-betting/bets routes
 
@@ -84,9 +85,10 @@ export interface ReliabilityAutoBetSummary {
 }
 
 export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new Date()): Promise<ReliabilityAutoBetSummary> {
+  const bettingEnabled = legacyPaperBettingEnabled()
   const summary: ReliabilityAutoBetSummary = {
     policyVersion: INTERNAL_VALUE_POLICY_VERSION,
-    policyTrackingAvailable: await supportsPolicyTracking(admin),
+    policyTrackingAvailable: bettingEnabled ? await supportsPolicyTracking(admin) : false,
     shadowRacesRecorded: 0,
     shadowCaptureErrors: 0,
     marketsConsidered: 0,
@@ -101,14 +103,14 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
     skippedDuplicate: 0,
   }
 
-  const reliabilityContext = await loadReliabilityContext(admin)
+  const reliabilityContext = bettingEnabled ? await loadReliabilityContext(admin) : null
   const races = await getUpcomingRaces(admin)
   const reliabilityFilters = { calibration: reliabilityContext?.calibration, history: reliabilityContext?.history, minReliability: MIN_RELIABILITY_FOR_AUTO_BET }
 
-  const qualified = [
+  const qualified = bettingEnabled ? [
     ...getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, reliabilityFilters),
     ...getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, reliabilityFilters),
-  ]
+  ] : []
   const qualifiedWinners = new Map(qualified.map((pick) => [pick.race.id, pick.horse.horse_id]))
 
   for (const race of races) {
@@ -126,6 +128,7 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
       summary.shadowCaptureErrors += 1
       console.warn('PLACE shadow capture failed', error)
     }
+    if (!bettingEnabled) continue
     const { candidates, rejected, marketsConsidered } = evaluateInternalValueCandidates(race, activeHorseIds, qualifiedWinners.get(race.id))
     summary.marketsConsidered += marketsConsidered
     for (const [reason, count] of Object.entries(rejected)) summary.rejectionCounts[reason] = (summary.rejectionCounts[reason] ?? 0) + count

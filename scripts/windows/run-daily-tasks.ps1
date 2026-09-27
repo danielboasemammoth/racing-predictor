@@ -13,12 +13,16 @@ timely BET/WATCH recommendations across the racing day matter.
 #>
 
 param(
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
+    [switch]$Maintenance
 )
 
 $logDir = Join-Path $ProjectRoot "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logFile = Join-Path $logDir "daily-tasks-$(Get-Date -Format 'yyyy-MM-dd').log"
+$runMaintenance = $Maintenance -or (Get-Date).Hour -eq 6
+$jobLock = $null
+$script:databaseUnavailable = $false
 
 function Write-Log {
     param([string]$Text)
@@ -69,6 +73,10 @@ function Invoke-Step {
     )
 
     $bodyObj = @{}
+    if ($script:databaseUnavailable) {
+        Write-Log "SKIP  $Label - provider unavailable; no further database work this run"
+        return @{ Ok = $false }
+    }
     if ($Mode) { $bodyObj.mode = $Mode }
     if ($BatchLimit -gt 0) { $bodyObj.batchLimit = $BatchLimit }
     $body = $bodyObj | ConvertTo-Json
@@ -89,6 +97,7 @@ function Invoke-Step {
         Write-Log "OK    $Label -> $($response.message)"
         return @{ Ok = $true; Response = $response }
     } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -in @(502, 503, 504, 520, 522, 524)) { $script:databaseUnavailable = $true }
         Write-Log "FAIL  $Label -> $($_.Exception.Message)"
         if ($ContinueOnError) { return @{ Ok = $false; Response = $null } }
         throw
@@ -96,6 +105,12 @@ function Invoke-Step {
 }
 
 try {
+    try {
+        $jobLock = [System.IO.File]::Open((Join-Path $logDir 'database-pipeline.lock'), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    } catch [System.IO.IOException] {
+        Write-Log 'Another database pipeline is running; skipping this invocation'
+        exit 0
+    }
     Write-Log "Resolving app URL..."
     $app = & (Join-Path $PSScriptRoot "find-or-start-app.ps1") -ProjectRoot $ProjectRoot
     $baseUrl = $app.Url
@@ -114,9 +129,12 @@ try {
     # confirmed via the daily-tasks logs) and let pe_recommendations/pe_odds_snapshots bloat to
     # ~450k stale rows with zero pruning, eventually causing live Postgres statement timeouts.
     $anyFailures = $false
-    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "retrospective" -BatchLimit 50 -Label "Backfill Predictions" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
-    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
-    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    if ($runMaintenance) {
+        if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "retrospective" -BatchLimit 50 -Label "Backfill Predictions" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+        if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+        if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    }
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/simulation-report" -Label "Refresh Historical Simulator" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
 
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
@@ -140,8 +158,8 @@ try {
     Write-Log "PIPELINE ABORTED: $($_.Exception.Message)"
     exit 1
 } finally {
-    if ($baseUrl -and $webSession) {
-        if (-not (& (Join-Path $PSScriptRoot "refresh-page-cache.ps1") -BaseUrl $baseUrl -WebSession $webSession)) { $anyFailures = $true }
+    if ($baseUrl -and $webSession -and -not $script:databaseUnavailable) {
+        if (-not (& (Join-Path $PSScriptRoot "refresh-page-cache.ps1") -BaseUrl $baseUrl -WebSession $webSession -IncludeHistorical:$runMaintenance)) { $anyFailures = $true }
     }
     # This is a one-shot daily batch job, not a long-lived server - if we started our own instance
     # of the app to run it, stop the whole process tree so it doesn't linger until the next run.
@@ -149,6 +167,7 @@ try {
         Write-Log "Stopping app instance started for this run (PID $($app.StartedProcessId))"
         taskkill /T /F /PID $app.StartedProcessId 2>&1 | Out-Null
     }
+    if ($jobLock) { $jobLock.Dispose() }
 }
 
 if ($anyFailures) { exit 1 }

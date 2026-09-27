@@ -1,6 +1,6 @@
 # Page Snapshots
 
-Home, Results, Past Picks, Accuracy, Analytics, Greyhounds, and the Paper Betting reports read precomputed snapshots instead of scanning source tables during rendering. Paper Betting's wallet and bet history remain live, with a shared five-second read deadline. Betting actions and bankroll/staking settings are unchanged. Race detail, admin, verification, and interactive simulations remain outside this cache.
+Home, Results, Past Picks, Accuracy, Analytics and Greyhounds read precomputed database snapshots instead of scanning source tables during rendering. The historical simulator at `/paper-betting` uses public Storage/CDN report chunks and performs filtering and staking locally; it does not read the wallet or source tables. Its read-only archive uses bounded live history queries. See [PAPER_BETTING.md](PAPER_BETTING.md) for the simulator migration, bootstrap and financial assumptions. Race detail, admin and verification remain outside this cache.
 
 ## Storage and Reads
 
@@ -12,9 +12,9 @@ Home, Results, Past Picks, Accuracy, Analytics, Greyhounds, and the Paper Bettin
 
 ## After-Run Refreshes
 
-The daily pipeline refreshes `home`, `opportunities`, `results`, `validation`, `place-shadow`, `picks-history`, `accuracy`, and `analytics`. The odds poll refreshes `opportunities`, `validation`, and `place-shadow`, the data affected by that poll.
+The hourly pipeline refreshes `home`, `opportunities` and `results`. At 06:00 local time, or with `-Maintenance`, it additionally refreshes `validation`, `place-shadow`, `picks-history`, `accuracy` and `analytics`. The odds poll refreshes only `opportunities`. The simulator has its own hourly incremental publication endpoint and does not use the database page-snapshot cache.
 
-Each task calls the authenticated `POST /api/admin/page-cache` endpoint once per key from its cleanup path, even after an earlier step fails (provided app discovery and authentication succeeded). Keys run sequentially, with a 300-second HTTP timeout per key. A failed refresh retains its previous snapshot, logs failure, continues to the next key, and makes the task exit nonzero. Cleanup still stops an instance started by the task. Task Scheduler termination or machine shutdown can prevent cleanup from running.
+Each task calls the authenticated `POST /api/admin/page-cache` endpoint once per selected key from its cleanup path. Keys run sequentially, with a 300-second HTTP timeout per key. A failed refresh retains its previous snapshot and logs failure. Recognized upstream availability errors stop remaining database work and suppress cleanup refreshes; other noncritical failures permit subsequent steps. Cleanup still stops an instance started by the task. Task Scheduler termination or machine shutdown can prevent cleanup from running.
 
 Generation time is captured before source loading. Conditional publication prevents an older overlapping job from overwriting a newer generation. A successful publication invalidates the local Next cache tag with stale-while-revalidate behavior; other deployments discover the shared database update through timed revalidation. Process caching can add 30 seconds to visibility of a refresh.
 

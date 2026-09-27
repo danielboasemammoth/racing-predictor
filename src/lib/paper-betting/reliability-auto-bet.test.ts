@@ -6,6 +6,9 @@ import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { placeBet } from './repository'
 import { supportsPolicyTracking } from './policy-tracking'
 import { recordPlaceShadow } from './place-shadow'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
+
+vi.mock('@/lib/betting/legacy-betting', () => ({ legacyPaperBettingEnabled: vi.fn(() => true) }))
 
 vi.mock('./policy-tracking', () => ({ INTERNAL_VALUE_POLICY_VERSION: 'internal-value-v1', supportsPolicyTracking: vi.fn().mockResolvedValue(true) }))
 vi.mock('./place-shadow', () => ({ recordPlaceShadow: vi.fn().mockResolvedValue(false) }))
@@ -31,7 +34,21 @@ function fixture(fieldSize = 8) {
 }
 
 describe('internal value paper bets', () => {
-  beforeEach(() => { vi.clearAllMocks() })
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(legacyPaperBettingEnabled).mockReturnValue(true) })
+
+  it('retains shadow capture without placing bets after retirement', async () => {
+    vi.mocked(legacyPaperBettingEnabled).mockReturnValue(false)
+    const { race, horses } = fixture()
+    Object.assign(race, { id: 'race', status: 'upcoming', race_datetime: '2026-09-15T03:00:00Z' })
+    Object.assign(race.prediction!, { predicted_at: '2026-09-15T01:00:00Z', model_version: 'test' })
+    vi.mocked(getUpcomingRaces).mockResolvedValue([race])
+    const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockResolvedValue({ data: horses.map(horse => ({ horse_id: horse.horse_id, status: 'active' })), error: null }), upsert: vi.fn().mockResolvedValue({ error: null }) }
+    const result = await autoPlaceReliabilityBets({ from: vi.fn(() => query) } as unknown as SupabaseClient, new Date('2026-09-15T02:00:00Z'))
+    expect(result.betsPlaced).toBe(0)
+    expect(placeBet).not.toHaveBeenCalled()
+    expect(recordPlaceShadow).toHaveBeenCalled()
+    expect(supportsPolicyTracking).not.toHaveBeenCalled()
+  })
 
   it('accounts for every runner/market exactly once with a first rejection reason', () => {
     const { race, active } = fixture()

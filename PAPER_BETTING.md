@@ -1,6 +1,52 @@
-# Paper Betting Selection and Evidence
+# Historical Simulator
 
-Internal automatic paper betting now checks WIN and PLACE independently:
+`/paper-betting` is now a read-only, client-side historical simulator. The old betting account and records are preserved at `/paper-betting/archive`; placement, account mutation, regeneration and the old server-side what-if endpoint return HTTP 410. Automatic placement is disabled at both producers and the shared repository. Odds ingestion, PLACE research-shadow capture and settlement of existing pending bets remain enabled.
+
+## Setup After Database Recovery
+
+1. Apply [supabase/migrate-historical-simulator.sql](supabase/migrate-historical-simulator.sql) using the Supabase SQL editor. It adds bounded service-role reporting functions, a job lease table, a completed-race index and the public `racing-reports` Storage bucket. It does not delete or rewrite race, prediction, result or betting history. Schedule index creation during low traffic because ordinary index creation can temporarily block writes.
+2. Build the app, then publish the initial report from the project root:
+
+```powershell
+npm run build
+npx tsx --env-file=.env.local scripts/refresh-simulation-report.ts
+```
+
+The command requires the existing Supabase URL and service-role environment variables. Keep credentials out of the browser. Offline SQL tests do not establish production query performance; measure healthy refreshes before increasing load. A missing migration is reported as a skipped scheduled refresh and does not block the live pipeline.
+
+Activation verified September 26, 2026: the user applied the migration, and the first report was published at 12:10 UTC with 1,000 races, seven current models and 20 chunks. Public Storage readback validated every chunk; 975 races had eligible pre-race forecasts. Earlier attempts correctly withheld publication on source changes, and one encountered PostgreSQL `57014`; this successful publication does not establish sustained database capacity. CLI errors now identify the failing stage and preserve the database error code. No racing or betting history was altered by report publication.
+
+## Simulation Rules
+
+- Select the latest 100, 250, 500 (default) or 1,000 completed races, then filter each market independently. The window is selected before filters; missing forecasts never cause older races to be substituted.
+- Use the latest eligible pre-race prediction for each current model, with its top three runners and recorded WIN/PLACE prices. Both the prediction timestamp and insertion timestamp must precede race time. Retrospective forecasts are excluded.
+- Both markets default to strictly greater than 50% top-three probability and positive model edge. Edge is model market probability minus raw implied probability (`1 / decimal odds`), in percentage points. WIN uses win probability; PLACE uses top-three probability only where three-place settlement is supported.
+- Filters include model, rank, reliability, win/top-three probability, implied probability range, edge, price range/source, venue and field size. Historical reliability is unavailable because it was not frozen before these races; selecting a minimum reliability excludes unknown values instead of reconstructing scores using future results.
+- Each model gets its own starting bankroll. Flat-dollar, bankroll-percentage and fractional Kelly staking are available. Same-start bets share available cash proportionally if necessary; stakes cannot exceed available funds. Returns become available at the recorded result-update timestamp, not an invented historical settlement time. Unknown settlement times cannot fund later bets.
+- Dead heats, incomplete or ambiguous outcomes, missing odds and changed fields with unverified deductions are excluded. Scratches are refunded where a recorded price exists. PLACE requires at least eight unchanged active starters and complete top-three results. These are recorded-price simulations, not guaranteed executable TAB returns or audited bookmaker settlements.
+- ROI is net profit divided by total stake over all filtered WON/LOST rows, never just the displayed page. Refunds, excluded rows and unfunded bets are reported separately. CSV export includes all filtered rows. Filtering historical results is exploratory and is not evidence of future profitability.
+
+## Reporting And Database Load
+
+The hourly job fingerprints at most 1,000 completed races. Only changed races reload prediction payloads, in sequential batches of ten, using narrow result and podium fields. The existing prediction lookup index is reused. Unchanged reports cause no payload reloads or storage writes. A database lease prevents overlapping report publishers; a source-window recheck prevents publication across source changes.
+
+Reports are published as content-addressed JSON chunks of at most 50 races, followed by a manifest switch only after every chunk succeeds. The previous manifest remains intact on failure. Chunks contain public racing data only, never accounts or private betting history. Browsers fetch Storage/CDN objects with at most three concurrent chunk reads, check for a new manifest every 15 minutes, and perform filtering, staking, sorting and pagination locally. A loaded report survives a refresh failure; a cold browser still needs Storage availability. This is not a guaranteed offline download or a separate-provider outage mirror.
+
+Old immutable chunks are currently retained, so monitor bucket growth. A future retention job must retain all chunks referenced by current manifests and allow a grace period for in-flight readers; do not delete original racing or prediction history to reclaim reporting space. The hourly scheduler and six-AM maintenance split are described in [SCHEDULED_TASKS.md](SCHEDULED_TASKS.md).
+
+## Verification
+
+Run `npm test`, `npm run lint`, `npm run build` and `./scripts/windows/test-daily-pipeline.ps1`. SQL regression tests use an isolated PGlite database; they do not connect to Supabase.
+
+With a local app running, `npx tsx scripts/verify-historical-simulator.ts http://localhost:3022` runs the Playwright UI check using installed Microsoft Edge. It intercepts clearly labelled report fixtures, blocks external/API requests and navigation prefetches, and verifies defaults, bankroll calculations, filtering without additional fetches, pagination-independent ROI, all-row CSV export, desktop/mobile overflow and report failure states. Screenshots are written to the ignored `scripts/output` directory. No fixture data is published to Storage or the database.
+
+## Archived Policy And Evidence
+
+The following sections describe the retired paper-betting system and historical reviews, not the simulator's current defaults or active placement policy.
+
+### Former Selection Rules
+
+Internal automatic paper betting previously checked WIN and PLACE independently:
 
 - WIN: existing reliability shortlist score >=80, plus positive estimated value and at least a five-percentage-point edge.
 - PLACE: every runner in the current prediction, not just the predicted winner; top-three probability >=60%, positive estimated value, and the same five-point edge floor.

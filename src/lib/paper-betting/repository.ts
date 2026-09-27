@@ -10,6 +10,7 @@ import type { PredictedHorse, PredictionPayload } from '@/lib/types'
 import { findMatchingInternalRace, buildFundamentalsProbabilityMap, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
 import { computeGreyhoundFundamentalsProbabilities, type GreyhoundDogInput } from '@/lib/paper-betting/greyhound-fundamentals'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 /** The current Champion model version (see prediction-suite.ts) - the fundamentals side of the horse blend. */
 const HORSE_FUNDAMENTALS_MODEL_VERSION = PRODUCTION_MODEL_VERSION
@@ -431,10 +432,11 @@ export interface PlaceBetInput {
   idempotencyKey: string
 }
 
-export type PlaceBetResult = { placed: true; betId: string } | { placed: false; reason: 'duplicate' }
+export type PlaceBetResult = { placed: true; betId: string } | { placed: false; reason: 'duplicate' | 'retired' }
 
 /** Insert-only; a unique idempotency_key means a duplicate click is a no-op, not a duplicate bet. */
 export async function placeBet(admin: SupabaseClient, input: PlaceBetInput): Promise<PlaceBetResult> {
+  if (!legacyPaperBettingEnabled()) return { placed: false, reason: 'retired' }
   const { data, error } = await admin
     .from('paper_bets')
     .insert({

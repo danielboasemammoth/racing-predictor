@@ -51,34 +51,35 @@ afterEach(() => {
 })
 
 describe('paper betting page under database timeouts', () => {
-  it('renders the wallet when opportunities, validation, and shadow queries time out', async () => {
+  it('renders the simulator without querying wallet or legacy reports during a database outage', async () => {
     vi.mocked(queryLatestOpportunities).mockRejectedValue(timeout)
     vi.mocked(computeValidationReport).mockRejectedValue(timeout)
     vi.mocked(loadPlaceShadowReport).mockRejectedValue(timeout)
     const html = renderToStaticMarkup(await PaperBettingPage())
-    expect(html).toContain('Opportunities temporarily unavailable')
-    expect(html).toContain('Model validation temporarily unavailable')
-    expect(html).toContain('Prospective PLACE data temporarily unavailable')
-    expect(html).toContain('Current Bankroll')
-    expect(html).toContain('$50.00')
-    expect(html).not.toContain('No qualifying bets right now')
-    expect(html).not.toContain('Awaiting future race results')
+    expect(html).toContain('Historical Simulator')
+    expect(html).toContain('Loading historical report')
+    expect(createClient).not.toHaveBeenCalled()
+    expect(readPageSnapshot).not.toHaveBeenCalled()
+    expect(html).not.toContain('Current Bankroll')
   })
 
-  it('does not show account setup or fabricated wallet values after a wallet timeout', async () => {
+  it('preserves a read-only archive link without exposing legacy setup controls', async () => {
     query.maybeSingle.mockResolvedValue({ data: null, error: timeout })
     const html = renderToStaticMarkup(await PaperBettingPage())
-    expect(html).toContain('Wallet and bet history temporarily unavailable')
+    expect(html).toContain('/paper-betting/archive')
     expect(html).not.toContain('Set Up Paper Betting')
     expect(html).not.toContain('Current Bankroll')
-    expect(html).toContain('No qualifying bets right now')
+    expect(html).toContain('No real or paper bets are placed')
     expect(vi.mocked(computeValidationReport)).not.toHaveBeenCalled()
   })
 
-  it('still shows setup when the database successfully confirms no account exists', async () => {
+  it('defaults to 500 races, positive edge and over-50-percent top-three probability', async () => {
     query.maybeSingle.mockResolvedValue({ data: null, error: null })
     const html = renderToStaticMarkup(await PaperBettingPage())
-    expect(html).toContain('Set Up Paper Betting')
-    expect(html).not.toContain('temporarily unavailable')
+    expect(html).toContain('<option selected="">500</option>')
+    expect(html).toContain('value="50" selected="">&gt; 50%')
+    expect(html).toContain('value="0" selected="">&gt; 0 pts')
+    expect(html).toContain('WIN filters')
+    expect(html).toContain('PLACE filters')
   })
 })

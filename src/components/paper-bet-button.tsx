@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 export interface PaperBetButtonProps {
   raceId: string
@@ -74,6 +75,8 @@ export function PaperBetButton(props: PaperBetButtonProps) {
       setMessage('Could not reach the server')
     }
   }
+
+  if (!legacyPaperBettingEnabled()) return null
 
   if (status === 'placed') {
     return <span className="text-xs font-medium text-emerald-700">{message}</span>

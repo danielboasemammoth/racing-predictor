@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { legacyPaperBettingEnabled, LEGACY_BETTING_RETIRED_MESSAGE } from '@/lib/betting/legacy-betting'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getOrCreateAccount, placeBet } from '@/lib/paper-betting/repository'
@@ -36,6 +37,7 @@ export async function GET(request: Request) {
 
 /** Manual "PAPER BET" action - gated the same as every other write on this site (admin session). */
 export async function POST(request: Request) {
+  if (!legacyPaperBettingEnabled()) return NextResponse.json({ success: false, message: LEGACY_BETTING_RETIRED_MESSAGE }, { status: 410 })
   if (!(await hasAdminSession())) {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
   }

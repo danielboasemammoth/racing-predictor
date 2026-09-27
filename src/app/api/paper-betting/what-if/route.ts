@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { legacyPaperBettingEnabled, LEGACY_BETTING_RETIRED_MESSAGE } from '@/lib/betting/legacy-betting'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { runWhatIf, type HistoricalBetRecord, type WhatIfRules } from '@/lib/betting/what-if'
 import type { ConfidenceLevel } from '@/lib/betting/confidence'
@@ -13,6 +14,7 @@ const VALID_STAKING: StakingMethod[] = ['flat-1pct', 'flat-2pct', 'kelly-0.10', 
  * touching the original bet records - see src/lib/betting/what-if.ts.
  */
 export async function GET(request: Request) {
+  if (!legacyPaperBettingEnabled()) return NextResponse.json({ success: false, message: LEGACY_BETTING_RETIRED_MESSAGE }, { status: 410 })
   const admin = createAdminClient()
   const { searchParams } = new URL(request.url)
 

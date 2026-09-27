@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getPuntersEdgeClient, PuntersEdgeCreditsExhaustedError, type PuntersEdgeClient } from '@/lib/puntersedge/client'
@@ -55,7 +56,7 @@ const GREYHOUND_FUNDAMENTALS_MAX_NEW_FETCHES_PER_SYNC = 10
 async function processRace(
   admin: SupabaseClient,
   client: PuntersEdgeClient,
-  account: PaperAccountRow,
+  account: PaperAccountRow | null,
   race: PeNextToGoRace,
   now: Date,
   greyhoundFetchBudget: { remaining: number },
@@ -86,6 +87,7 @@ async function processRace(
   for (const rec of recommendations) {
     if (rec.decision === 'WATCH') watchCount += 1
     if (rec.decision === 'NO_BET') noBetCount += 1
+    if (!account) continue
 
     const runnerId = runnerIdByNumber.get(rec.runnerNumber)
     if (!runnerId) continue
@@ -192,7 +194,7 @@ export async function POST(request: Request) {
     }
 
     const races = await client.nextToGo({ numRaces: 200, categories, country: ['AU'], includeUnresolved: true })
-    const account = await getOrCreateAccount(admin, 'default', DEFAULT_STARTING_BANKROLL)
+    const account = legacyPaperBettingEnabled() ? await getOrCreateAccount(admin, 'default', DEFAULT_STARTING_BANKROLL) : null
     const greyhoundFetchBudget = { remaining: GREYHOUND_FUNDAMENTALS_MAX_NEW_FETCHES_PER_SYNC }
 
     let racesProcessed = 0
@@ -207,7 +209,7 @@ export async function POST(request: Request) {
     // the poller's fixed timeout once ~100+ races were concurrently priced (mid-morning meeting
     // overlap). Process in bounded-concurrency batches instead so total time approaches one
     // batch's latency rather than the sum of every race's latency.
-    const RACE_CONCURRENCY = 10
+    const RACE_CONCURRENCY = 3
     for (let i = 0; i < races.length; i += RACE_CONCURRENCY) {
       const batch = races.slice(i, i + RACE_CONCURRENCY)
       const results = await Promise.allSettled(batch.map((race) => processRace(admin, client, account, race, now, greyhoundFetchBudget)))

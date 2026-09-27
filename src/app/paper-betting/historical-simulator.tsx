@@ -1,0 +1,137 @@
+'use client'
+
+import { startTransition, useDeferredValue, useEffect, useRef, useState, type ReactNode } from 'react'
+import Link from 'next/link'
+import { ChevronLeft, ChevronRight, Download, RefreshCw, RotateCcw } from 'lucide-react'
+import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationCandidates, type SimulationBet, type SimulationDataset, type SimulationFilters, type SimulationMarket, type SimulationSettings } from '@/lib/betting/historical-simulator'
+import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '@/lib/betting/simulation-report'
+
+const amounts = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
+const money = (amount: number) => new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(amount)
+const percent = (amount: number | null) => amount === null ? '-' : `${amount.toFixed(1)}%`
+const date = (value: string) => new Date(value).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+const initialSettings: SimulationSettings = { startingBankroll: 500, method: 'flat', flatStake: 10, stakePercent: 1 }
+
+function Select({ label, value, onChange, children }: { label: string; value: string | number; onChange: (value: string) => void; children: ReactNode }) {
+  return <label className="min-w-0 text-xs font-medium text-slate-600">{label}<select aria-label={label} value={value} onChange={event => onChange(event.target.value)} className="mt-1 block h-9 w-full min-w-0 rounded border border-slate-300 bg-white px-2 text-sm text-slate-900">{children}</select></label>
+}
+
+function Filters({ market, value, setValue, models, venues }: { market: SimulationMarket; value: SimulationFilters; setValue: (value: SimulationFilters) => void; models: string[]; venues: string[] }) {
+  const update = (key: keyof SimulationFilters, next: string | number | boolean) => setValue({ ...value, [key]: next })
+  return <fieldset className={`min-w-0 border-t-4 py-4 ${market === 'PLACE' ? 'border-teal-600' : 'border-amber-500'}`}>
+    <legend className="sr-only">{market} filters</legend>
+    <div className="mb-3 flex items-center justify-between"><label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={value.enabled} onChange={event => update('enabled', event.target.checked)} className="accent-teal-700" />{market}</label>
+      <button type="button" title={`Reset ${market} filters`} aria-label={`Reset ${market} filters`} onClick={() => setValue({ ...DEFAULT_SIMULATION_FILTERS })} className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 hover:bg-white"><RotateCcw size={15} /></button></div>
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <Select label={`${market} model`} value={value.model} onChange={next => update('model', next)}><option value="">All models</option>{models.map(model => <option key={model}>{model}</option>)}</Select>
+      <Select label={`${market} reliability`} value={value.minReliability} onChange={next => update('minReliability', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `${amount}+ (pre-race)` : 'Any / unavailable'}</option>)}</Select>
+      <Select label={`${market} edge`} value={value.minEdge} onChange={next => update('minEdge', Number(next))}><option value={-100}>Any / unavailable</option>{[0, 2, 5, 10, 15, 20].map(amount => <option key={amount} value={amount}>{`> ${amount} pts`}</option>)}</Select>
+      <Select label={`${market} win probability`} value={value.minWin} onChange={next => update('minWin', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `> ${amount}%` : 'Any'}</option>)}</Select>
+      <Select label={`${market} top-three probability`} value={value.minTop3} onChange={next => update('minTop3', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `> ${amount}%` : 'Any'}</option>)}</Select>
+      <Select label={`${market} predicted rank`} value={value.rank} onChange={next => update('rank', Number(next))}><option value={0}>All three</option>{[1, 2, 3].map(rank => <option key={rank} value={rank}>{rank}</option>)}</Select>
+      <Select label={`${market} implied minimum`} value={value.minImplied} onChange={next => update('minImplied', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount}%</option>)}</Select>
+      <Select label={`${market} implied maximum`} value={value.maxImplied} onChange={next => update('maxImplied', Number(next))}>{[...amounts.slice(1), 100].map(amount => <option key={amount} value={amount}>{amount}%</option>)}</Select>
+      <Select label={`${market} odds source`} value={value.source} onChange={next => update('source', next)}><option value="">All recorded prices</option><option value="tab">TAB recorded</option><option value="racing_com">Racing.com recorded</option></Select>
+      <Select label={`${market} minimum odds`} value={value.minOdds} onChange={next => update('minOdds', Number(next))}>{[0, 1.5, 2, 3, 5, 10].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
+      <Select label={`${market} maximum odds`} value={value.maxOdds} onChange={next => update('maxOdds', Number(next))}>{[0, 2, 3, 5, 10, 20, 50].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
+      <Select label={`${market} field size`} value={value.minField} onChange={next => update('minField', Number(next))}>{[0, 5, 8, 10, 12, 16].map(amount => <option key={amount} value={amount}>{amount ? `${amount}+ starters` : 'Any'}</option>)}</Select>
+      <div className="col-span-2 sm:col-span-3"><Select label={`${market} venue`} value={value.venue} onChange={next => update('venue', next)}><option value="">All venues</option>{venues.map(venue => <option key={venue}>{venue}</option>)}</Select></div>
+    </div>
+  </fieldset>
+}
+
+function exportBets(bets: SimulationBet[]) {
+  const rows = [['Race', 'Start', 'Model', 'Rank', 'Horse', 'Market', 'Prediction time', 'Win probability', 'Top3 probability', 'Reliability', 'Implied probability', 'Edge points', 'Odds source', 'Odds', 'Finish', 'Status', 'Exclusion', 'Stake', 'Return', 'Profit'], ...bets.map(bet => [
+    `${bet.race.venue} R${bet.race.number}`, bet.race.start, bet.selection.model, bet.selection.rank, bet.selection.horse, bet.market, bet.selection.predictedAt,
+    bet.selection.winProbability, bet.selection.top3Probability, bet.selection.reliability, bet.implied, bet.edge, bet.source, bet.odds, bet.selection.position, bet.status, bet.issue, bet.stake, bet.returned, bet.profit,
+  ])]
+  const csv = rows.map(row => row.map(value => { const text = String(value ?? ''); return `"${(/^[=+@-]/.test(text) && typeof value === 'string' ? `'${text}` : text).replaceAll('"', '""')}"` }).join(',')).join('\r\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = 'historical-simulation.csv'
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+export function HistoricalSimulator() {
+  const [dataset, setDataset] = useState<SimulationDataset | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [refresh, setRefresh] = useState(0)
+  const generation = useRef('')
+  const [filters, setFilters] = useState({ WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SIMULATION_FILTERS } })
+  const [settings, setSettings] = useState<SimulationSettings>(initialSettings)
+  const [count, setCount] = useState(500)
+  const [sort, setSort] = useState('start')
+  const [pageNumber, setPageNumber] = useState(0)
+  useEffect(() => {
+    let active = true
+    let running = false
+    async function load() {
+      if (running) return
+      running = true
+      setLoading(true)
+      try {
+        const baseUrl = simulationReportBaseUrl()
+        const manifest = await readSimulationManifest(baseUrl)
+        if (!manifest) throw new Error('No simulator report published yet. The database migration and first report refresh are required.')
+        if (manifest.generatedAt !== generation.current) {
+          const next = await readSimulationChunks(baseUrl, manifest)
+          if (active) { generation.current = manifest.generatedAt; startTransition(() => { setDataset(next); setPageNumber(0) }) }
+        }
+        if (active) setError('')
+      } catch (failure) {
+        if (active) setError(failure instanceof Error ? failure.message : 'Report unavailable; last successful data retained.')
+      } finally { running = false; if (active) setLoading(false) }
+    }
+    void load()
+    const timer = setInterval(() => void load(), 15 * 60_000)
+    return () => { active = false; clearInterval(timer) }
+  }, [refresh])
+
+  const deferred = useDeferredValue({ filters, settings, count })
+  const races = (dataset?.races ?? []).slice(0, deferred.count)
+  const candidates = simulationCandidates(races)
+  const result = simulateBets(candidates, deferred.filters, deferred.settings)
+  const displayed = [...result.bets].sort((left, right) => sort === 'profit' ? right.profit - left.profit || left.id.localeCompare(right.id) : sort === 'edge' ? (right.edge ?? -Infinity) - (left.edge ?? -Infinity) || left.id.localeCompare(right.id) : right.race.start.localeCompare(left.race.start) || left.id.localeCompare(right.id))
+  const totalPages = Math.max(1, Math.ceil(displayed.length / 50))
+  const currentPage = Math.min(pageNumber, totalPages - 1)
+  const visible = displayed.slice(currentPage * 50, (currentPage + 1) * 50)
+  const venues = [...new Set((dataset?.races ?? []).map(race => race.venue))].sort()
+  const stake = result.summaries.reduce((total, summary) => total + summary.staked, 0)
+  const profit = result.summaries.reduce((total, summary) => total + summary.profit, 0)
+  const settled = result.summaries.reduce((total, summary) => total + summary.bets, 0)
+  const updateFilter = (market: SimulationMarket, value: SimulationFilters) => { setFilters(previous => ({ ...previous, [market]: value })); setPageNumber(0) }
+  const updateSetting = (key: keyof SimulationSettings, value: number | string) => { setSettings(previous => ({ ...previous, [key]: value })); setPageNumber(0) }
+  return <>
+    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+      <p role="status">{dataset ? `Snapshot: ${date(dataset.generatedAt)} (Melbourne)${loading ? ' / checking for updates' : ''}` : loading ? 'Loading historical report...' : 'Report unavailable'}</p>
+      <button type="button" title="Refresh report" aria-label="Refresh report" disabled={loading} onClick={() => setRefresh(value => value + 1)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 bg-white disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
+    </div>
+    {error && <p role="alert" className="border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-950">{error}{dataset ? ' Showing the last successfully loaded report.' : ''}</p>}
+    <div className="border-y border-slate-200 py-4"><div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+      <Select label="Completed races" value={count} onChange={value => { setCount(Number(value)); setPageNumber(0) }}>{[100, 250, 500, 1000].map(value => <option key={value}>{value}</option>)}</Select>
+      <label className="text-xs font-medium text-slate-600">Starting bankroll per model<input aria-label="Starting bankroll per model" type="number" min="0" step="50" value={settings.startingBankroll} onChange={event => updateSetting('startingBankroll', Math.max(0, Number(event.target.value)))} className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-2 text-sm text-slate-900" /></label>
+      <Select label="Staking method" value={settings.method} onChange={value => updateSetting('method', value)}><option value="flat">Flat dollar stake</option><option value="percent">Percentage of available bankroll</option><option value="kelly-0.10">0.10 Kelly (5% cap)</option><option value="kelly-0.25">0.25 Kelly (5% cap)</option></Select>
+      <label className="text-xs font-medium text-slate-600">Flat stake ($)<input aria-label="Flat stake" type="number" min="0" step="1" disabled={settings.method !== 'flat'} value={settings.flatStake} onChange={event => updateSetting('flatStake', Math.max(0, Number(event.target.value)))} className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-2 text-sm text-slate-900 disabled:opacity-40" /></label>
+      <Select label="Stake percentage" value={settings.stakePercent} onChange={value => updateSetting('stakePercent', Number(value))}>{[0.5, 1, 2, 3, 5, 10].map(value => <option key={value} value={value}>{value}%</option>)}</Select>
+    </div></div>
+    <div className="grid gap-x-8 lg:grid-cols-2">{(['WIN', 'PLACE'] as const).map(market => <Filters key={market} market={market} value={filters[market]} setValue={value => updateFilter(market, value)} models={dataset?.models ?? []} venues={venues} />)}</div>
+    <p className="border-l-4 border-slate-300 pl-3 text-xs leading-relaxed text-slate-600">Recorded-price simulation, not actual TAB settlements or guaranteed executable returns. Historical reliability was not frozen and is unavailable. PLACE value is limited to unchanged fields paying three places. Returns are reserved until the recorded result-update time; unknown settlement times cannot fund later bets. Each model has its own bankroll. No real or paper bets are placed.</p>
+    <section aria-label="Simulation results" className="border-y border-slate-200 bg-white py-5">
+      <div className="grid grid-cols-2 gap-4 px-4 md:grid-cols-4">{[
+        ['Settled bets', String(settled)], ['Total stake', money(stake)], ['Net profit', money(profit)], ['Filtered ROI', percent(stake ? profit / stake * 100 : null)],
+      ].map(([label, value]) => <div key={label}><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-bold tabular-nums">{value}</p></div>)}</div>
+      <p className="mt-4 px-4 text-xs text-slate-600">{races.length} / {count} requested races loaded; {races.filter(race => race.selections.length).length} with eligible pre-race forecasts. {candidates.length} candidate bets; {result.bets.length} match filters. {result.summaries.reduce((total, summary) => total + summary.excluded, 0)} excluded; {result.summaries.reduce((total, summary) => total + summary.refunded, 0)} refunded; {result.summaries.reduce((total, summary) => total + summary.unfunded, 0)} unfunded. ROI covers all filtered settled rows across separate model portfolios, not just this page.</p>
+    </section>
+    <section aria-label="Model comparison" className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm"><caption className="mb-3 text-left font-semibold">Model portfolios</caption><thead className="border-b text-xs text-slate-500"><tr>{['Model', 'Bets', 'Races', 'Hit rate', 'Profit', 'ROI', 'Bankroll', 'Max drawdown'].map(label => <th key={label} className="px-3 py-2">{label}</th>)}</tr></thead><tbody>{result.summaries.map(summary => <tr key={summary.model} className="border-b border-slate-200 tabular-nums"><th className="px-3 py-3 font-medium">{summary.model}</th><td className="px-3">{summary.bets}</td><td className="px-3">{summary.races}</td><td className="px-3">{percent(summary.bets ? summary.wins / summary.bets * 100 : null)}</td><td className={`px-3 ${summary.profit < 0 ? 'text-red-700' : 'text-teal-800'}`}>{money(summary.profit)}</td><td className="px-3">{percent(summary.roi)}</td><td className="px-3">{money(summary.bankroll)}</td><td className="px-3">{percent(summary.maxDrawdown)}</td></tr>)}</tbody></table></section>
+    <section aria-label="Filtered bets">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><h3 className="font-semibold">Filtered bets ({displayed.length})</h3><div className="flex items-end gap-3"><Select label="Sort results" value={sort} onChange={value => { setSort(value); setPageNumber(0) }}><option value="start">Race time: newest</option><option value="profit">Profit: highest</option><option value="edge">Edge: highest</option></Select><button type="button" title="Export all filtered bets" aria-label="Export all filtered bets" disabled={!displayed.length} onClick={() => exportBets(displayed)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 bg-white disabled:opacity-40"><Download size={16} /></button></div></div>
+      {!displayed.length ? <p className="border-y border-slate-200 py-8 text-center text-sm text-slate-600">{dataset ? 'No bets match the current filters.' : 'Historical bets will appear after a successful report publication.'}</p> : <div className="overflow-x-auto" tabIndex={0} aria-label="Bet results table"><table className="w-full min-w-[1600px] text-left text-xs"><thead className="border-y border-slate-200 bg-slate-100"><tr>{['Race / start', 'Model / rank', 'Horse', 'Market', 'Win %', 'Top 3 %', 'Reliability', 'Implied %', 'Edge pts', 'Odds / source', 'Finish', 'Result', 'Stake', 'Return', 'Profit'].map(label => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead><tbody>{visible.map(bet => <tr key={bet.id} className="border-b border-slate-200 bg-white tabular-nums hover:bg-slate-50">
+        <td className="px-3 py-3"><Link href={`/races/${bet.race.id}`} prefetch={false} className="font-semibold text-teal-800">{bet.race.venue} R{bet.race.number}</Link><p className="mt-1 text-slate-500">{date(bet.race.start)}</p></td><td className="px-3">{bet.selection.model}<p className="text-slate-500">Rank {bet.selection.rank}</p></td><td className="px-3 font-medium" title={`Forecast: ${date(bet.selection.predictedAt)}`}>{bet.selection.horse}</td><td className={`px-3 font-semibold ${bet.market === 'PLACE' ? 'text-teal-800' : 'text-amber-800'}`}>{bet.market}</td><td className="px-3">{percent(bet.selection.winProbability === null ? null : bet.selection.winProbability * 100)}</td><td className="px-3">{percent(bet.selection.top3Probability === null ? null : bet.selection.top3Probability * 100)}</td><td className="px-3">{bet.selection.reliability ?? '-'}</td><td className="px-3">{percent(bet.implied === null ? null : bet.implied * 100)}</td><td className="px-3">{bet.edge?.toFixed(1) ?? '-'}</td><td className="px-3">{bet.odds?.toFixed(2) ?? '-'}<p className="text-slate-500">{bet.source === 'tab' ? 'TAB recorded' : 'Racing.com'}</p></td><td className="px-3">{bet.selection.scratched ? 'SCR' : bet.selection.position ?? '-'}</td><td className="max-w-48 px-3"><span className={bet.status === 'WON' ? 'text-teal-800' : bet.status === 'LOST' ? 'text-red-700' : 'text-slate-600'}>{bet.status.replaceAll('_', ' ')}</span>{bet.issue && <p className="mt-1 text-slate-500">{bet.issue}</p>}</td><td className="px-3">{money(bet.stake)}</td><td className="px-3">{money(bet.returned)}</td><td className={`px-3 ${bet.profit < 0 ? 'text-red-700' : 'text-teal-800'}`}>{money(bet.profit)}</td>
+      </tr>)}</tbody></table></div>}
+      <div className="mt-3 flex items-center justify-end gap-3 text-xs"><button type="button" title="Previous page" aria-label="Previous page" disabled={currentPage === 0} onClick={() => setPageNumber(currentPage - 1)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 disabled:opacity-40"><ChevronLeft size={16} /></button><span>Page {currentPage + 1} of {totalPages}</span><button type="button" title="Next page" aria-label="Next page" disabled={currentPage + 1 >= totalPages} onClick={() => setPageNumber(currentPage + 1)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 disabled:opacity-40"><ChevronRight size={16} /></button></div>
+    </section>
+  </>
+}

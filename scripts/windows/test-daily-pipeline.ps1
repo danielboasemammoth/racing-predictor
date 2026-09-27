@@ -21,6 +21,7 @@ function Invoke-Step {
 }
 
 foreach ($failedStep in @('', 'Backfill Predictions', 'Run Backtest')) {
+    $runMaintenance = $true
     $calls = [System.Collections.Generic.List[string]]::new()
     $anyFailures = $false
     . ([scriptblock]::Create($body)) | Out-Null
@@ -28,6 +29,13 @@ foreach ($failedStep in @('', 'Backfill Predictions', 'Run Backtest')) {
     if (-not $calls.Contains('Auto-Place Reliability Bets') -or -not $calls.Contains('Prune Stale PuntersEdge Data')) { throw 'Maintenance failure blocked later steps' }
     if ($anyFailures -ne [bool]$failedStep) { throw 'Incorrect failure status' }
 }
+
+$runMaintenance = $false
+$failedStep = ''
+$calls = [System.Collections.Generic.List[string]]::new()
+. ([scriptblock]::Create($body)) | Out-Null
+if ($calls.Contains('Run Backtest') -or $calls.Contains('Backfill Predictions') -or $calls.Contains('Refresh Reliability Calibration')) { throw 'Historical work must not run hourly' }
+if (-not $calls.Contains('Refresh Historical Simulator') -or -not $calls.Contains('Generate Predictions')) { throw 'Hourly live work or simulator refresh missing' }
 
 $failedStep = 'Sync Upcoming Races'
 $calls = [System.Collections.Generic.List[string]]::new()
@@ -59,6 +67,7 @@ foreach ($scriptName in @('run-daily-tasks.ps1', 'run-puntersedge-poll.ps1')) {
     $jobTry = $jobAst.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
     if ($jobTry.Finally.Extent.Text -notmatch 'refresh-page-cache.ps1') { throw "$scriptName must refresh even after pipeline failure" }
     if ($jobTry.Finally.Extent.Text.IndexOf('refresh-page-cache.ps1') -gt $jobTry.Finally.Extent.Text.IndexOf('taskkill')) { throw 'Cache refresh must precede server cleanup' }
+    if ($jobTry.Body.Extent.Text -notmatch 'database-pipeline.lock' -or $jobTry.Finally.Extent.Text -notmatch 'jobLock.Dispose') { throw 'Missing shared pipeline lock or release' }
 }
 
 function Invoke-RestMethod {
@@ -70,12 +79,15 @@ function Invoke-RestMethod {
 }
 function Write-Log { param([string]$Text) Write-Output $Text }
 $refreshed = [System.Collections.Generic.List[string]]::new()
-$result = & (Join-Path $PSScriptRoot 'refresh-page-cache.ps1') -BaseUrl 'http://test' -WebSession @{}
+$result = & (Join-Path $PSScriptRoot 'refresh-page-cache.ps1') -BaseUrl 'http://test' -WebSession @{} -IncludeHistorical
 if ($result -isnot [bool] -or $result) { throw 'Refresh logging must not mask failure status' }
 if ($refreshed.Count -ne 8 -or -not $refreshed.Contains('analytics')) { throw 'Snapshot failure blocked later refreshes' }
 $refreshed.Clear()
 $result = & (Join-Path $PSScriptRoot 'refresh-page-cache.ps1') -BaseUrl 'http://test' -WebSession @{} -PollOnly
-if ($result -isnot [bool] -or -not $result -or ($refreshed -join ',') -ne 'opportunities,validation,place-shadow') { throw 'Incorrect odds-poll refresh scope' }
+if ($result -isnot [bool] -or -not $result -or ($refreshed -join ',') -ne 'opportunities') { throw 'Incorrect odds-poll refresh scope' }
+$refreshed.Clear()
+$result = & (Join-Path $PSScriptRoot 'refresh-page-cache.ps1') -BaseUrl 'http://test' -WebSession @{}
+if (($refreshed -join ',') -ne 'home,opportunities,results') { throw 'Hourly refresh must exclude historical reports' }
 Write-Output 'PASS: pipeline failure isolation, bounded backfill, hourly triggers, launcher exit propagation, and after-run snapshot refresh isolation.'
 $finderAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'find-or-start-app.ps1'), [ref]$tokens, [ref]$parseErrors)
 $probe = $finderAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-AppUrl' }, $false)
