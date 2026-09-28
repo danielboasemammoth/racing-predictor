@@ -9,15 +9,22 @@ assert.ok(['localhost', '127.0.0.1'].includes(new URL(baseUrl).hostname), 'Use a
 const models = ['test-alpha', 'test-beta']
 const races: SimulationRace[] = Array.from({ length: 30 }, (_, index) => ({
   id: `test-race-${index}`, start: new Date(Date.UTC(2026, 8, 20, 1) + index * 3600000).toISOString(),
-  settledAt: new Date(Date.UTC(2026, 8, 20, 1, 10) + index * 3600000).toISOString(),
+  settledAt: '2026-10-01T00:00:00Z',
   venue: 'TEST DATA Flemington', state: 'VIC', number: index + 1, fieldSize: 8,
   selections: models.flatMap(model => Array.from({ length: 3 }, (_, rank) => ({
     id: `test-${model}-${rank}`, horse: `TEST Runner ${rank + 1}`, model, rank: rank + 1,
     predictedAt: '2026-09-19T00:00:00Z', winProbability: 0.4, top3Probability: rank === 2 ? 0.5 : 0.7,
     reliability: null, winOdds: 3, placeOdds: 2, winSource: 'tab' as const, placeSource: 'tab' as const,
+    tabQuotedAt: new Date(Date.UTC(2026, 8, 20, 0, 58, 30) + index * 3600000).toISOString(),
+    tabCapturedAt: new Date(Date.UTC(2026, 8, 20, 0, 59) + index * 3600000).toISOString(),
     position: rank + 1, scratched: false, winIssue: null, placeIssue: null,
   }))),
 })).reverse()
+for (const selection of races[0].selections.filter(selection => selection.rank === 3)) {
+  selection.top3Probability = 0.7
+  selection.winIssue = 'Changed field; deductions unverified'
+  selection.placeIssue = 'Top-three probability does not match paid places'
+}
 const manifest = {
   schema: 1, generatedAt: '2026-09-26T00:00:00Z', models,
   chunks: [`simulator/v1/${'a'.repeat(64)}.json`],
@@ -54,7 +61,26 @@ async function main() {
     assert.equal(await page.getByLabel('Completed races', { exact: true }).inputValue(), '500')
     assert.match(await results(), /75\.0%/)
     assert.match(await results(), /\$1,800\.00/)
+    assert.match(await results(), /4 excluded \(hidden/)
+    assert.equal(await page.getByRole('region', { name: 'Filtered bets', exact: true }).getByText('EXCLUDED', { exact: true }).count(), 0)
+    await page.getByLabel('Starting bankroll per model', { exact: true }).fill('50')
+    await page.getByLabel('Flat stake', { exact: true }).fill('1')
+    await page.getByRole('region', { name: 'Model comparison' }).getByText('$140.00', { exact: true }).first().waitFor()
+    assert.match(await results(), /\$240\.00/)
+    assert.match(await results(), /\$180\.00/)
+    assert.match(await results(), /0 unfunded/)
+    await page.getByLabel('Starting bankroll per model', { exact: true }).fill('500')
+    await page.getByLabel('Flat stake', { exact: true }).fill('10')
+    await page.getByRole('region', { name: 'Model comparison' }).getByText('$1,400.00', { exact: true }).first().waitFor()
     assert.equal(reportRequests, 2)
+    await page.getByLabel('WIN field size', { exact: true }).selectOption({ label: '< 8 starters' })
+    await waitForCount(120)
+    await page.getByLabel('PLACE field size', { exact: true }).selectOption({ label: '< 8 starters' })
+    await waitForCount(0)
+    await page.getByLabel('WIN field size', { exact: true }).selectOption({ label: '< 10 starters' })
+    await waitForCount(120)
+    await page.getByLabel('PLACE field size', { exact: true }).selectOption({ label: '< 12 starters' })
+    await waitForCount(240)
     await page.getByRole('checkbox', { name: 'WIN', exact: true }).uncheck()
     await waitForCount(120)
     await page.getByLabel('Flat stake', { exact: true }).fill('5')
@@ -74,6 +100,7 @@ async function main() {
     const csvChunks: Buffer[] = []
     for await (const chunk of stream) csvChunks.push(Buffer.from(chunk))
     assert.equal(Buffer.concat(csvChunks).toString('utf8').split('\r\n').length, 61)
+    assert.doesNotMatch(Buffer.concat(csvChunks).toString('utf8'), /"EXCLUDED"/)
     await page.getByLabel('PLACE model', { exact: true }).selectOption('test-alpha')
     await waitForCount(30)
     await page.getByLabel('Starting bankroll per model', { exact: true }).fill('100')
@@ -90,6 +117,7 @@ async function main() {
     await page.getByLabel('PLACE top-three probability', { exact: true }).selectOption('60')
     await page.getByLabel('PLACE venue', { exact: true }).selectOption('TEST DATA Flemington')
     await page.getByLabel('PLACE model', { exact: true }).selectOption('test-alpha')
+    await page.getByLabel('PLACE field size', { exact: true }).selectOption('12')
     await page.getByLabel('Sort results', { exact: true }).selectOption('edge')
     await waitForCount(60)
     await page.waitForFunction(key => JSON.parse(window.localStorage.getItem(key) ?? '{}').sort === 'edge', SIMULATION_PREFERENCES_KEY)
@@ -99,7 +127,7 @@ async function main() {
     await waitForCount(60)
     assert.equal(await results(), filteredResults)
     assert.equal(await page.evaluate(key => window.localStorage.getItem(key), SIMULATION_PREFERENCES_KEY), saved)
-    for (const [label, expected] of [['Completed races', '100'], ['Starting bankroll per model', '100'], ['Flat stake', '5'], ['Staking method', 'percent'], ['WIN edge', '10'], ['PLACE top-three probability', '60'], ['PLACE model', 'test-alpha'], ['PLACE venue', 'TEST DATA Flemington'], ['Sort results', 'edge']]) {
+    for (const [label, expected] of [['Completed races', '100'], ['Starting bankroll per model', '100'], ['Flat stake', '5'], ['Staking method', 'percent'], ['WIN edge', '10'], ['WIN field size', '10'], ['PLACE field size', '12'], ['PLACE top-three probability', '60'], ['PLACE model', 'test-alpha'], ['PLACE venue', 'TEST DATA Flemington'], ['Sort results', 'edge']]) {
       assert.equal(await page.getByLabel(label, { exact: true }).inputValue(), expected)
     }
     assert.equal(await page.getByRole('checkbox', { name: 'WIN', exact: true }).isChecked(), false)

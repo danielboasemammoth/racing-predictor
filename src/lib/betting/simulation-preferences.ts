@@ -43,7 +43,7 @@ function filters(value: unknown): SimulationFilters {
     minOdds: option(saved.minOdds, defaults.minOdds, [0, 1.5, 2, 3, 5, 10]),
     maxOdds: option(saved.maxOdds, defaults.maxOdds, [0, 2, 3, 5, 10, 20, 50]),
     source: option(saved.source, defaults.source, ['', 'tab', 'racing_com']),
-    venue: text(saved.venue), minField: option(saved.minField, defaults.minField, [0, 5, 8, 10, 12, 16]),
+    venue: text(saved.venue), maxField: option(saved.maxField, defaults.maxField, [0, 5, 8, 10, 12, 16]),
   }
 }
 

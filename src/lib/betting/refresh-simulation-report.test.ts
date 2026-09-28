@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { refreshSimulationReport } from './refresh-simulation-report'
-import { readSimulationChunks, readSimulationManifest, SIMULATION_MANIFEST_PATH } from './simulation-report'
+import { readSimulationChunks, readSimulationManifest, SIMULATION_MANIFEST_PATH, SIMULATION_PRICING_VERSION } from './simulation-report'
 import { CURRENT_MODEL_VERSIONS } from '../prediction-suite'
 
 vi.mock('./simulation-report', async importOriginal => ({
@@ -41,7 +41,7 @@ it('never switches the manifest if a chunk upload fails', async () => {
 })
 
 it('skips unchanged reports without reloading prediction payloads or writing storage', async () => {
-  vi.mocked(readSimulationManifest).mockResolvedValue({ schema: 1, generatedAt: '2026-01-01', models: [...CURRENT_MODEL_VERSIONS], chunks: [], races: refs })
+  vi.mocked(readSimulationManifest).mockResolvedValue({ schema: 1, pricingVersion: SIMULATION_PRICING_VERSION, generatedAt: '2026-01-01', models: [...CURRENT_MODEL_VERSIONS], chunks: [], races: refs })
   vi.mocked(readSimulationChunks).mockResolvedValue({ schema: 1, generatedAt: '2026-01-01', models: [...CURRENT_MODEL_VERSIONS], races: [{ ...source, fieldSize: 0, selections: [] }] })
   const { db, upload, rpc } = fixture()
   expect(await refreshSimulationReport(db)).toMatchObject({ skipped: true, reason: 'No source changes' })
@@ -54,6 +54,14 @@ it('does not publish after losing its lease', async () => {
   lease.maybeSingle.mockResolvedValue({ data: null, error: null })
   await expect(refreshSimulationReport(db)).rejects.toThrow('lease')
   expect(upload.mock.calls.some(call => call[0] === SIMULATION_MANIFEST_PATH)).toBe(false)
+})
+
+it('rebuilds legacy report prices even when source fingerprints are unchanged', async () => {
+  vi.mocked(readSimulationManifest).mockResolvedValue({ schema: 1, generatedAt: '2026-01-01', models: [...CURRENT_MODEL_VERSIONS], chunks: [], races: refs })
+  vi.mocked(readSimulationChunks).mockResolvedValue({ schema: 1, generatedAt: '2026-01-01', models: [...CURRENT_MODEL_VERSIONS], races: [{ ...source, fieldSize: 0, selections: [] }] })
+  const { db, rpc } = fixture()
+  expect(await refreshSimulationReport(db)).toMatchObject({ skipped: false, rebuilt: 1 })
+  expect(rpc.mock.calls.some(call => call[0] === 'simulation_race_sources')).toBe(true)
 })
 
 it('identifies timed-out source batches while preserving the database error code', async () => {

@@ -14,6 +14,17 @@ it('extracts three selections without fabricating historical reliability or TAB 
   expect(race.selections[0]).toMatchObject({ reliability: null, winSource: 'racing_com', winIssue: null, placeIssue: null })
 })
 
+it('replaces prices with verified near-start TAB quotes without changing the pre-race forecast', () => {
+  const quotes = new Map([['runner 0', { win: 4, place: 2.5, capturedAt: '2026-09-01T00:59:00Z', quotedAt: '2026-09-01T00:58:30Z' }]])
+  expect(buildSimulationRace(source, quotes).selections[0]).toMatchObject({ winOdds: 4, placeOdds: 2.5, winSource: 'tab', placeSource: 'tab', winProbability: 0.4, top3Probability: 0.7, predictedAt: source.forecasts[0].predictedAt, tabQuotedAt: '2026-09-01T00:58:30Z' })
+  expect(source.forecasts[0].podium[0].win_odds).toBe(3)
+})
+
+it('does not reuse timestamp-free TAB prices from frozen predictions', () => {
+  const old = { ...source, forecasts: [{ ...source.forecasts[0], podium: [{ ...source.forecasts[0].podium[0], win_odds_source: 'tab' as const, place_odds_source: 'tab' as const }] }] }
+  expect(buildSimulationRace(old).selections[0]).toMatchObject({ winOdds: null, placeOdds: null, winSource: 'tab', placeSource: 'tab', tabQuotedAt: null })
+})
+
 it('rejects retrospective, late-generated and backdated forecasts', () => {
   for (const override of [{ model: 'model-retrospective' }, { predictedAt: source.start }, { createdAt: source.start }]) {
     expect(buildSimulationRace({ ...source, forecasts: [{ ...source.forecasts[0], ...override }] }).selections).toEqual([])

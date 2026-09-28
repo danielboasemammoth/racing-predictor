@@ -11,8 +11,9 @@ it.each([null, '', '{broken', 'null', '[]', '{"schema":2,"count":100}'])('uses d
 
 it('round trips independent market filters and all simulator controls', () => {
   const preferences = readSimulationPreferences(null)
-  preferences.filters.WIN = { enabled: false, minReliability: 80, minEdge: -100, minImplied: 20, maxImplied: 70, minWin: 30, minTop3: 60, model: 'v5-trained', rank: 2, minOdds: 1.5, maxOdds: 20, source: 'tab', venue: 'Flemington', minField: 8 }
+  preferences.filters.WIN = { enabled: false, minReliability: 80, minEdge: -100, minImplied: 20, maxImplied: 70, minWin: 30, minTop3: 60, model: 'v5-trained', rank: 2, minOdds: 1.5, maxOdds: 20, source: 'tab', venue: 'Flemington', maxField: 8 }
   preferences.filters.PLACE.minTop3 = 70
+  preferences.filters.PLACE.maxField = 12
   preferences.settings = { startingBankroll: 0, flatStake: 0, method: 'kelly-0.25', stakePercent: 0.5 }
   preferences.count = 1000
   preferences.sort = 'edge'
@@ -34,4 +35,12 @@ it('keeps valid fields and defaults invalid or missing fields independently', ()
 
 it('rejects nonfinite and oversized monetary values', () => {
   expect(readSimulationPreferences('{"schema":1,"settings":{"startingBankroll":1e999,"flatStake":1e100}}').settings).toEqual(DEFAULT_SIMULATION_SETTINGS)
+})
+
+it('drops old minimum field limits without changing other saved filters', () => {
+  const saved = { schema: 1, filters: { WIN: { minField: 8, minTop3: 60 }, PLACE: { minField: 12, model: 'v5-trained' } }, count: 250 }
+  const preferences = readSimulationPreferences(JSON.stringify(saved))
+  expect(preferences.filters.WIN).toEqual({ ...DEFAULT_SIMULATION_FILTERS, minTop3: 60 })
+  expect(preferences.filters.PLACE).toEqual({ ...DEFAULT_SIMULATION_FILTERS, model: 'v5-trained' })
+  expect(preferences.count).toBe(250)
 })

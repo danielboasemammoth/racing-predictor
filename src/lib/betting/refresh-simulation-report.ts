@@ -2,15 +2,16 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CURRENT_MODEL_VERSIONS } from '../prediction-suite'
 import { buildSimulationRace, type SimulationSource } from './simulation-source'
-import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl, SIMULATION_MANIFEST_PATH, SIMULATION_REPORT_BUCKET, type SimulationManifest } from './simulation-report'
+import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl, SIMULATION_MANIFEST_PATH, SIMULATION_REPORT_BUCKET, SIMULATION_PRICING_VERSION, type SimulationManifest } from './simulation-report'
 import type { SimulationRace } from './historical-simulator'
+import { getTabPricesForInternalRaces } from '../paper-betting/internal-tab-odds'
 
-export async function refreshSimulationReport(db: SupabaseClient) {
+export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200_000) {
   const token = randomUUID()
   const acquired = await db.rpc('acquire_reporting_lease', { job_name: 'historical-simulator', lease_token: token })
   if (acquired.error) throw acquired.error
   if (!acquired.data) return { skipped: true, reason: 'Refresh already running' }
-  const deadline = Date.now() + 200_000
+  const deadline = Date.now() + Math.min(budgetMs, 600_000)
   let stage = 'Reading race window'
   try {
     const window = await db.rpc('simulation_race_window').abortSignal(AbortSignal.timeout(30000))
@@ -23,7 +24,8 @@ export async function refreshSimulationReport(db: SupabaseClient) {
     const fingerprints = new Map(previous?.races.map(race => [race.id, race.fingerprint]))
     const races = new Map<string, SimulationRace>(oldData?.races.map(race => [race.id, race]))
     const sameModels = JSON.stringify(previous?.models) === JSON.stringify(CURRENT_MODEL_VERSIONS)
-    const changed = refs.filter(race => !sameModels || !races.has(race.id) || fingerprints.get(race.id) !== race.fingerprint)
+    const recentCutoff = Date.now() - 24 * 60 * 60_000
+    const changed = refs.filter(race => !sameModels || previous?.pricingVersion !== SIMULATION_PRICING_VERSION || !races.has(race.id) || fingerprints.get(race.id) !== race.fingerprint || Date.parse(races.get(race.id)!.start) >= recentCutoff)
     if (previous && changed.length === 0 && JSON.stringify(previous.races) === JSON.stringify(refs)) return { skipped: true, reason: 'No source changes' }
     for (let offset = 0; offset < changed.length; offset += 10) {
       if (Date.now() > deadline) throw new Error('Simulation refresh deadline exceeded')
@@ -33,7 +35,9 @@ export async function refreshSimulationReport(db: SupabaseClient) {
       if (result.error) throw result.error
       const sources = result.data as SimulationSource[]
       if (!Array.isArray(sources) || sources.length !== batch.length || batch.some(ref => !sources.some(source => source.id === ref.id))) throw new Error('Source race changed during refresh; keeping previous report')
-      for (const source of sources) races.set(source.id, buildSimulationRace(source))
+      stage = `Reading near-start TAB quotes ${offset + 1}-${offset + batch.length} of ${changed.length}`
+      const prices = await getTabPricesForInternalRaces(db, sources.filter(source => source.forecasts.length).map(source => ({ id: source.id, racecourseName: source.venue, raceNumber: source.number, raceDatetime: source.start })), true)
+      for (const source of sources) races.set(source.id, buildSimulationRace(source, prices.get(source.id)))
     }
     const bucket = db.storage.from(SIMULATION_REPORT_BUCKET)
     const ordered = refs.map(ref => races.get(ref.id)!)
@@ -58,7 +62,7 @@ export async function refreshSimulationReport(db: SupabaseClient) {
     stage = 'Verifying report lease'
     const lease = await db.from('reporting_job_leases').select('token').eq('name', 'historical-simulator').eq('token', token).gt('expires_at', new Date().toISOString()).maybeSingle()
     if (lease.error || !lease.data || Date.now() > deadline) throw new Error('Simulation lease or deadline expired')
-    const manifest: SimulationManifest = { schema: 1, generatedAt: new Date().toISOString(), models: [...CURRENT_MODEL_VERSIONS], chunks, races: refs }
+    const manifest: SimulationManifest = { schema: 1, pricingVersion: SIMULATION_PRICING_VERSION, generatedAt: new Date().toISOString(), models: [...CURRENT_MODEL_VERSIONS], chunks, races: refs }
     stage = 'Publishing report manifest'
     const published = await bucket.upload(SIMULATION_MANIFEST_PATH, JSON.stringify(manifest), { contentType: 'application/json', cacheControl: '60', upsert: true })
     if (published.error) throw published.error
