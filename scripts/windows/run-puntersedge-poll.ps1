@@ -115,6 +115,7 @@ try {
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession
+    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Capture Decision-Time Evidence" -WebSession $webSession
 
     Write-Log "POLL COMPLETED"
 } catch {

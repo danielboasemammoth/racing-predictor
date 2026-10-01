@@ -42,6 +42,18 @@ These are recorded-price simulations with separate bankrolls, not real returns o
 
 ## Simulation Rules
 
+### TAB At Decision Time
+
+The odds-source selector now separates `TAB at decision time` (`tab_decision`) from `TAB near-start` (`tab`). The default latest-forecast/near-start view is unchanged and never adds decision observations as duplicate bets. Saved profiles, real-betting draft exports and CSV retain the selected source; decision CSV rows include the observation, quote and capture timestamps.
+
+The observer freezes the **first valid quote observation per race/model** within 1-180 minutes before scheduled start, currently for the production model selected by the internal picks reader. It stores the exact forecast, its database creation timestamp, active field, qualification evidence and available runner quotes under `analysis_snapshots.kind = simulator-decision-v1:<race-id>:<model>`. Insert-only conflict handling prevents later forecasts, better prices or changed qualification from overwriting that observation. This is a fixed observation rule, not the first time an arbitrary saved strategy later qualifies; filters evaluate that frozen observation and never scan forward for a more favorable price.
+
+Quotes come from existing TAB fixed-odds observations supplied through the odds feed, not a direct TAB wagering API. Matching requires an unambiguous venue/race/time and runner name. A quote must already have been captured by the decision and be no more than two minutes old at that decision, using reported quote age. Missing/unknown-age/stale quotes are excluded. Runner prices may have slightly different capture times within that freshness bound; this does not establish a simultaneously executable full-field offer. No credentials or provider orders are involved.
+
+The hourly pipeline and standalone poll observe after odds sync. Existing hourly triggers are unchanged, so short-lived offers between polls can still be missed. The snapshot persists after raw quote pruning. Report version 4 loads it independently of the latest pre-race prediction, validates forecast creation and quote provenance, and conservatively excludes changed fields/start times or unsupported PLACE settlement. No historical snapshots are backfilled and no missing price falls back to near-start or Racing.com. Old races without observations have no decision-time rows; the UI shows coverage explicitly.
+
+Activation October 1, 2026: a live poll captured 16 production-model decisions covering 160 runner quotes, with zero capture errors and no bets; all stored quote timestamps passed readback validation. Version 4 rebuilt and published all 1,000 races/40 chunks at `2026-10-01T05:56:16.073Z`. None of the newly observed races was yet in the completed report. Development and production browser checks verified source isolation, timestamped CSV, Save/Load and disabled-runner export across desktop/mobile. No schema migration was needed. Future real execution must obtain a fresh executable quote, recheck eligibility/stake and store TAB's accepted odds; these research observations do not guarantee acceptance.
+
 ### Saved Strategies And Presets (October 1)
 
 Named **Save settings** snapshots are separate from the auto-saved working draft. Load, delete and JSON export are available; replacing an existing name requires confirmation. Profiles stay in this browser under `racing-saved-strategies-v1`. JSON export moves a profile between local origins/devices without uploading it. `/real-betting` explicitly applies a copy as a disabled draft, never follows subsequent paper-page edits, and never receives TAB credentials.

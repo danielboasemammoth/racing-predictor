@@ -34,6 +34,7 @@ export interface SimulationRace {
   number: number
   fieldSize: number
   selections: SimulationSelection[]
+  decisionSelections?: SimulationSelection[]
 }
 
 export interface SimulationDataset {
@@ -107,16 +108,27 @@ export function isSimulationTabQuote(start: string, quotedAt?: string | null, ca
     && quoteTime <= captureTime && captureTime - quoteTime <= 2 * 60_000
 }
 
+export function isSimulationDecisionQuote(start: string, evaluatedAt?: string | null, quotedAt?: string | null, capturedAt?: string | null): boolean {
+  const decision = Date.parse(evaluatedAt ?? '')
+  const quote = Date.parse(quotedAt ?? '')
+  const capture = Date.parse(capturedAt ?? '')
+  const minutesToJump = (Date.parse(start) - decision) / 60_000
+  return minutesToJump >= 1 && minutesToJump <= 180 && quote <= capture && capture <= decision
+    && decision - quote <= 2 * 60_000
+}
+
 export function simulationCandidates(races: SimulationRace[]): SimulationBet[] {
-  return races.flatMap(race => race.selections.flatMap(selection => (['WIN', 'PLACE'] as const).map(market => {
+  return races.flatMap(race => [...race.selections, ...(race.decisionSelections ?? [])].flatMap(selection => (['WIN', 'PLACE'] as const).map(market => {
     const probability = market === 'WIN' ? selection.winProbability : selection.top3Probability
     const odds = market === 'WIN' ? selection.winOdds : selection.placeOdds
     const implied = odds !== null && odds > 1 ? 1 / odds : null
     const source = market === 'WIN' ? selection.winSource : selection.placeSource
     const issue = (market === 'WIN' ? selection.winIssue : selection.placeIssue)
+      ?? (source === 'tab_decision' && (!isSimulationDecisionQuote(race.start, selection.evaluatedAt, selection.tabQuotedAt, selection.tabCapturedAt)
+        || !(Date.parse(selection.predictedAt) <= Date.parse(selection.evaluatedAt ?? ''))) ? 'TAB quote not verified at decision time' : null)
       ?? (source === 'tab' && !isSimulationTabQuote(race.start, selection.tabQuotedAt, selection.tabCapturedAt) ? 'TAB quote not verified near race start' : null)
     return {
-      id: `${race.id}:${selection.id}:${selection.model}:${market}`, race, selection, market, probability, odds, implied,
+      id: `${race.id}:${selection.id}:${selection.model}:${market}${source === 'tab_decision' ? ':decision' : ''}`, race, selection, market, probability, odds, implied,
       edge: probability !== null && implied !== null ? (probability - implied) * 100 : null,
       source,
       issue: issue ?? (odds === null ? 'Missing recorded odds' : null),
@@ -131,6 +143,7 @@ export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationF
   const evaluatedAt = selection.evaluatedAt ?? (bet.source === 'tab' ? selection.tabCapturedAt : null)
   const minutesToJump = (Date.parse(bet.race.start) - Date.parse(evaluatedAt ?? '')) / 60_000
   return filter.enabled
+    && (bet.source !== 'tab_decision' || filter.source === 'tab_decision')
     && (!filter.model || selection.model === filter.model)
     && (!filter.rank || selection.rank === filter.rank)
     && (filter.maxRank ? selection.rank <= filter.maxRank : selection.fullField === true)

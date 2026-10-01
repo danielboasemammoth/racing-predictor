@@ -1,9 +1,10 @@
 import type { PredictedHorse } from '../types'
 import type { SimulationRace, SimulationSelection } from './historical-simulator'
-import { isSimulationTabQuote } from './historical-simulator'
+import { isSimulationDecisionQuote, isSimulationTabQuote } from './historical-simulator'
 import { normalizeHorseName } from '../paper-betting/fundamentals-bridge'
 import type { TabPrice } from '../paper-betting/internal-tab-odds'
 import type { SimulationEvidence } from './simulation-evidence'
+import type { SimulationDecision } from './simulation-decision'
 
 export interface SimulationSource {
   id: string
@@ -14,6 +15,7 @@ export interface SimulationSource {
   number: number
   entries: Array<{ horse_id: string; position: number | null; status: string }>
   forecasts: Array<{ id: string; model: string; predictedAt: string; createdAt: string; podium: PredictedHorse[]; allHorses?: PredictedHorse[]; evidence?: SimulationEvidence | null; field: string[] }>
+  decisions?: SimulationDecision[]
 }
 
 function probability(value: number | undefined): number | null {
@@ -75,5 +77,26 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       })
     }
   }
-  return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections }
+  const decisionSelections: SimulationSelection[] = []
+  const decisionModels = new Set<string>()
+  for (const decision of source.decisions ?? []) {
+    const forecast = decision.forecast
+    if (decision.schema !== 1 || decision.raceId !== source.id || Date.parse(decision.start) !== Date.parse(source.start)
+      || !forecast || decisionModels.has(forecast.model) || !forecast.evidence
+      || forecast.evidence.capturedAt !== decision.capturedAt || forecast.evidence.predictionId !== forecast.id
+      || !(Date.parse(forecast.createdAt) <= Date.parse(decision.capturedAt))
+      || !(Date.parse(forecast.predictedAt) <= Date.parse(decision.capturedAt))) continue
+    decisionModels.add(forecast.model)
+    const frozen = buildSimulationRace({ ...source, forecasts: [forecast], decisions: undefined })
+    for (const selection of frozen.selections) {
+      const price = decision.prices?.[selection.id]
+      const valid = price && isSimulationDecisionQuote(source.start, decision.capturedAt, price.quotedAt, price.capturedAt)
+      decisionSelections.push({ ...selection, evaluatedAt: decision.capturedAt,
+        winOdds: valid ? odds(price.win) : null, placeOdds: valid ? odds(price.place) : null,
+        winSource: 'tab_decision', placeSource: 'tab_decision', tabQuotedAt: price?.quotedAt ?? null, tabCapturedAt: price?.capturedAt ?? null,
+        winIssue: selection.winIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null),
+        placeIssue: selection.placeIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null) })
+    }
+  }
+  return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections, decisionSelections }
 }

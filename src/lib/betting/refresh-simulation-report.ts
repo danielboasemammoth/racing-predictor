@@ -5,6 +5,7 @@ import { buildSimulationRace, type SimulationSource } from './simulation-source'
 import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl, SIMULATION_MANIFEST_PATH, SIMULATION_REPORT_BUCKET, SIMULATION_PRICING_VERSION, type SimulationManifest } from './simulation-report'
 import type { SimulationRace } from './historical-simulator'
 import { getTabPricesForInternalRaces } from '../paper-betting/internal-tab-odds'
+import { simulationDecisionKey, type SimulationDecision } from './simulation-decision'
 
 export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200_000) {
   const token = randomUUID()
@@ -37,7 +38,19 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
       if (!Array.isArray(sources) || sources.length !== batch.length || batch.some(ref => !sources.some(source => source.id === ref.id))) throw new Error('Source race changed during refresh; keeping previous report')
       stage = `Reading near-start TAB quotes ${offset + 1}-${offset + batch.length} of ${changed.length}`
       const prices = await getTabPricesForInternalRaces(db, sources.filter(source => source.forecasts.length).map(source => ({ id: source.id, racecourseName: source.venue, raceNumber: source.number, raceDatetime: source.start })), true)
-      for (const source of sources) races.set(source.id, buildSimulationRace(source, prices.get(source.id)))
+      stage = `Reading frozen TAB decisions ${offset + 1}-${offset + batch.length} of ${changed.length}`
+      const decisions = await db.from('analysis_snapshots').select('kind, generated_at, payload')
+        .in('kind', sources.flatMap(source => CURRENT_MODEL_VERSIONS.map(model => simulationDecisionKey(source.id, model))))
+        .abortSignal(AbortSignal.timeout(30000)).retry(false)
+      if (decisions.error) throw decisions.error
+      for (const source of sources) {
+        const observations = (decisions.data ?? []).filter(row => {
+          const payload = row.payload as SimulationDecision
+          return payload?.raceId === source.id && payload.forecast && row.kind === simulationDecisionKey(source.id, payload.forecast.model)
+            && Date.parse(row.generated_at) === Date.parse(payload.capturedAt)
+        }).map(row => row.payload as SimulationDecision)
+        races.set(source.id, buildSimulationRace({ ...source, decisions: observations }, prices.get(source.id)))
+      }
     }
     const bucket = db.storage.from(SIMULATION_REPORT_BUCKET)
     const ordered = refs.map(ref => races.get(ref.id)!)

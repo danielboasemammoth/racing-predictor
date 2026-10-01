@@ -16,7 +16,7 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       message: !legacyPaperBettingEnabled()
-        ? `Legacy betting retired. PLACE shadow: ${summary.shadowRacesRecorded} new races, ${summary.shadowCaptureErrors} capture errors. No bets placed.`
+        ? `Legacy betting retired. PLACE shadow: ${summary.shadowRacesRecorded} new races; TAB decisions: ${summary.decisionSnapshotsRecorded}; ${summary.shadowCaptureErrors} capture errors. No bets placed.`
         : `${summary.policyVersion}: evaluated ${summary.marketsConsidered} runner/markets, placed ${summary.winBetsPlaced} WIN and ${summary.placeBetsPlaced} PLACE (${summary.skippedDuplicate} duplicates, ${summary.skippedZeroStake} zero stake). Rejections: ${rejected || 'none'}. Race skips: ${JSON.stringify(summary.raceSkips)}. Shadow: ${summary.shadowRacesRecorded} new races, ${summary.shadowCaptureErrors} capture errors.${summary.policyTrackingAvailable ? '' : ' Policy migration missing: new bets remain untagged.'}`,
       ...summary,
     })

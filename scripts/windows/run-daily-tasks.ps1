@@ -134,10 +134,9 @@ try {
         if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
         if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     }
-    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
-
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/simulation-report" -Label "Refresh Historical Simulator" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     # Prune's own response reports drained:false while a large backlog remains - re-invoke until
     # actually drained (or a safety cap), rather than leaving a partial prune after one call. A

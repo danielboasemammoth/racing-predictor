@@ -27,3 +27,12 @@ it('does not use unknown-age, old or ambiguous runner quotes', async () => {
 it('retains the existing live prediction lookup mode', async () => {
   expect((await getTabPricesForInternalRaces(fixture([capture('2026-09-01T00:40:00Z', null, 4)]), races)).get('internal')?.get('horse')?.win).toBe(4)
 })
+
+it('uses the latest fresh quote available at the decision, not a later or better historical price', async () => {
+  const db = fixture([capture('2026-09-01T00:31:00Z', 0, 99), capture('2026-09-01T00:29:30Z', 20, 3), capture('2026-09-01T00:29:00Z', 0, 10)])
+  expect((await getTabPricesForInternalRaces(db, races, false, '2026-09-01T00:30:00Z')).get('internal')?.get('horse')).toMatchObject({ win: 3, quotedAt: '2026-09-01T00:29:10.000Z' })
+  for (const snapshot of [capture('2026-09-01T00:28:00Z', 1, 3), capture('2026-09-01T00:29:30Z', null, 3)]) {
+    expect((await getTabPricesForInternalRaces(fixture([snapshot]), races, false, '2026-09-01T00:30:00Z')).size).toBe(0)
+  }
+  expect((await getTabPricesForInternalRaces(fixture([capture('2026-09-01T00:29:30Z', 0, 3)], true), races, false, '2026-09-01T00:30:00Z')).size).toBe(0)
+})

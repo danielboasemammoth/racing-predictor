@@ -13,6 +13,7 @@ import { recordPlaceShadow } from './place-shadow'
 import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 import { MIN_RELIABILITY_FOR_AUTO_BET, MIN_PLACE_PROBABILITY_FOR_AUTO_BET } from '@/lib/betting/simulation-presets'
 import { isQualifiedSimulationWin, recordSimulationEvidence } from '@/lib/betting/simulation-evidence'
+import { recordSimulationDecision } from '@/lib/betting/simulation-decision'
 export { MIN_RELIABILITY_FOR_AUTO_BET, MIN_PLACE_PROBABILITY_FOR_AUTO_BET } from '@/lib/betting/simulation-presets'
 
 const DEFAULT_STARTING_BANKROLL = 500 // shared 'default' account - matches puntersedge/sync and paper-betting/bets routes
@@ -73,6 +74,7 @@ export interface ReliabilityAutoBetSummary {
   policyTrackingAvailable: boolean
   shadowRacesRecorded: number
   shadowCaptureErrors: number
+  decisionSnapshotsRecorded: number
   marketsConsidered: number
   rejectionCounts: Record<string, number>
   raceSkips: { outsideWindow: number; invalidPrediction: number }
@@ -92,6 +94,7 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
     policyTrackingAvailable: bettingEnabled ? await supportsPolicyTracking(admin) : false,
     shadowRacesRecorded: 0,
     shadowCaptureErrors: 0,
+    decisionSnapshotsRecorded: 0,
     marketsConsidered: 0,
     rejectionCounts: {},
     raceSkips: { outsideWindow: 0, invalidPrediction: 0 },
@@ -135,6 +138,8 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
     if (evaluatedPick) {
       try { await recordSimulationEvidence(admin, evaluatedPick, activeHorseIds, now) }
       catch (error) { summary.shadowCaptureErrors += 1; console.warn('Simulation evidence capture failed', error) }
+      try { if (await recordSimulationDecision(admin, evaluatedPick, activeHorseIds, new Date())) summary.decisionSnapshotsRecorded += 1 }
+      catch (error) { summary.shadowCaptureErrors += 1; console.warn('TAB decision capture failed', error) }
     }
     if (!bettingEnabled) continue
     const { candidates, rejected, marketsConsidered } = evaluateInternalValueCandidates(race, activeHorseIds, qualifiedWinners.get(race.id))

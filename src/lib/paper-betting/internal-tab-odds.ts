@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findMatchingInternalRace, normalizeHorseName, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
-import { isSimulationTabQuote } from '@/lib/betting/historical-simulator'
+import { isSimulationDecisionQuote, isSimulationTabQuote } from '@/lib/betting/historical-simulator'
 
 export interface InternalRaceRef {
   id: string
@@ -35,10 +35,13 @@ export async function getTabPricesForInternalRaces(
   admin: SupabaseClient,
   races: InternalRaceRef[],
   nearStartOnly = false,
+  decisionAt?: string,
 ): Promise<Map<string, Map<string, TabPrice>>> {
   const result = new Map<string, Map<string, TabPrice>>()
+  const strict = nearStartOnly || decisionAt !== undefined
+  if (decisionAt !== undefined && (!Number.isFinite(Date.parse(decisionAt)) || nearStartOnly)) throw new Error('Invalid decision-time TAB lookup')
   if (races.length === 0) return result
-  if (nearStartOnly && races.length > 20) throw new Error('Near-start TAB lookup is limited to 20 races')
+  if (strict && races.length > 20) throw new Error('Verified TAB lookup is limited to 20 races')
 
   const times = races.map((race) => new Date(race.raceDatetime).getTime())
   const windowStart = new Date(Math.min(...times) - 60 * 60_000).toISOString()
@@ -54,7 +57,7 @@ export async function getTabPricesForInternalRaces(
     .abortSignal(AbortSignal.timeout(30000))
     .retry(false)
   if (peRaceError) throw new Error(`Failed to look up PuntersEdge candidate races: ${peRaceError.message}`)
-  if (nearStartOnly && peRaceRows?.length === 1000) throw new Error('TAB candidate race limit reached; refusing incomplete matching')
+  if (strict && peRaceRows?.length === 1000) throw new Error('TAB candidate race limit reached; refusing incomplete matching')
 
   const peCandidates: InternalRaceCandidate[] = (peRaceRows ?? []).map((row) => ({
     raceId: row.id as string,
@@ -66,7 +69,7 @@ export async function getTabPricesForInternalRaces(
 
   const peRaceIdByInternalRaceId = new Map<string, string>()
   for (const race of races) {
-    const match = findMatchingInternalRace(race.racecourseName, race.raceNumber, race.raceDatetime, peCandidates, nearStartOnly ? 5 : 20)
+    const match = findMatchingInternalRace(race.racecourseName, race.raceNumber, race.raceDatetime, peCandidates, strict ? 5 : 20)
     if (match) peRaceIdByInternalRaceId.set(race.id, match.raceId)
   }
   if (peRaceIdByInternalRaceId.size === 0) return result
@@ -81,7 +84,7 @@ export async function getTabPricesForInternalRaces(
     .abortSignal(AbortSignal.timeout(30000))
     .retry(false)
   if (runnerError) throw new Error(`Failed to look up PuntersEdge runners: ${runnerError.message}`)
-  if (nearStartOnly && runnerRows?.length === 1000) throw new Error('TAB runner limit reached; refusing incomplete matching')
+  if (strict && runnerRows?.length === 1000) throw new Error('TAB runner limit reached; refusing incomplete matching')
 
   const snapshotRows: Array<{ runner_id: string; tab_win_price: number | null; tab_place_price: number | null; captured_at: string; tab_age_seconds: number | null }> = []
   for (let offset = 0; ; offset += 500) {
@@ -90,6 +93,7 @@ export async function getTabPricesForInternalRaces(
       .in('race_id', matchedPeRaceIds)
       .order('captured_at', { ascending: false }).order('id', { ascending: false })
     if (nearStartOnly) query = query.gte('captured_at', new Date(Math.min(...times) - 10 * 60_000).toISOString()).lte('captured_at', new Date(Math.max(...times)).toISOString())
+    if (decisionAt) query = query.gte('captured_at', new Date(Date.parse(decisionAt) - 2 * 60_000).toISOString()).lte('captured_at', decisionAt)
     const { data, error } = await query.range(offset, offset + 499).abortSignal(AbortSignal.timeout(30000)).retry(false)
     if (error) throw new Error(`Failed to look up PuntersEdge odds snapshots: ${error.message}`)
     snapshotRows.push(...data ?? [])
@@ -98,7 +102,7 @@ export async function getTabPricesForInternalRaces(
   }
 
   const startByRunner = new Map<string, string>()
-  if (nearStartOnly) {
+  if (strict) {
     for (const [internalId, peId] of peRaceIdByInternalRaceId) {
       if ([...peRaceIdByInternalRaceId.values()].filter(value => value === peId).length !== 1) continue
       for (const runner of runnerRows ?? []) if (runner.race_id === peId) startByRunner.set(runner.id, races.find(race => race.id === internalId)!.raceDatetime)
@@ -112,6 +116,7 @@ export async function getTabPricesForInternalRaces(
     const age = row.tab_age_seconds
     const quotedAt = typeof age === 'number' && Number.isFinite(age) && age >= 0 && age <= 120 && Number.isFinite(Date.parse(row.captured_at)) ? new Date(Date.parse(row.captured_at) - age * 1000).toISOString() : null
     if (nearStartOnly && !isSimulationTabQuote(startByRunner.get(runnerId) ?? '', quotedAt, row.captured_at)) continue
+    if (decisionAt && !isSimulationDecisionQuote(startByRunner.get(runnerId) ?? '', decisionAt, quotedAt, row.captured_at)) continue
     if (!latestSnapshotByRunnerId.has(runnerId)) {
       latestSnapshotByRunnerId.set(runnerId, row)
     }
@@ -131,14 +136,14 @@ export async function getTabPricesForInternalRaces(
 
     const priceByName = new Map<string, TabPrice>()
     for (const [runnerId, normalizedName] of runnerNameByRunnerId) {
-      if (nearStartOnly && [...runnerNameByRunnerId.values()].filter(name => name === normalizedName).length !== 1) continue
+      if (strict && [...runnerNameByRunnerId.values()].filter(name => name === normalizedName).length !== 1) continue
       const snapshot = latestSnapshotByRunnerId.get(runnerId)
       if (!snapshot || (snapshot.tab_win_price == null && snapshot.tab_place_price == null)) continue
       priceByName.set(normalizedName, {
         win: snapshot.tab_win_price ?? undefined,
         place: snapshot.tab_place_price ?? undefined,
         capturedAt: snapshot.captured_at,
-        ...(nearStartOnly ? { quotedAt: new Date(Date.parse(snapshot.captured_at) - snapshot.tab_age_seconds! * 1000).toISOString() } : {}),
+        ...(strict ? { quotedAt: new Date(Date.parse(snapshot.captured_at) - snapshot.tab_age_seconds! * 1000).toISOString() } : {}),
       })
     }
     if (priceByName.size > 0) result.set(internalRaceId, priceByName)

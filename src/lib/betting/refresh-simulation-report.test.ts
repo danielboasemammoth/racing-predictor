@@ -20,7 +20,8 @@ function fixture() {
     return { ...result, abortSignal: () => Promise.resolve(result) }
   })
   const query = { delete: vi.fn(() => release), select: vi.fn(() => lease) }
-  return { db: { rpc, from: vi.fn(() => query), storage: { from: vi.fn(() => ({ upload })) } } as unknown as SupabaseClient, upload, rpc, query, lease }
+  const decisions = { select: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), abortSignal: vi.fn().mockReturnThis(), retry: vi.fn().mockResolvedValue({ data: [], error: null }) }
+  return { db: { rpc, from: vi.fn((table: string) => table === 'analysis_snapshots' ? decisions : query), storage: { from: vi.fn(() => ({ upload })) } } as unknown as SupabaseClient, upload, rpc, query, lease, decisions }
 }
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(readSimulationManifest).mockResolvedValue(null) })
 
@@ -72,4 +73,11 @@ it('identifies timed-out source batches while preserving the database error code
     : original(name))
   await expect(refreshSimulationReport(db)).rejects.toMatchObject({ code: '57014', message: 'Reading race sources 1-1 of 1: statement timeout' })
   expect(query.delete).toHaveBeenCalled()
+})
+
+it('retains the previous manifest when frozen decisions cannot be read', async () => {
+  const { db, upload, decisions } = fixture()
+  decisions.retry.mockResolvedValue({ data: [], error: { message: 'decision storage unavailable' } })
+  await expect(refreshSimulationReport(db)).rejects.toThrow('Reading frozen TAB decisions')
+  expect(upload).not.toHaveBeenCalled()
 })

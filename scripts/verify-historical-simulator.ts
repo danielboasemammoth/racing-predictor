@@ -26,6 +26,10 @@ for (const selection of races[0].selections.filter(selection => selection.rank =
   selection.winIssue = 'Changed field; deductions unverified'
   selection.placeIssue = 'Top-three probability does not match paid places'
 }
+races[0].decisionSelections = [{ ...races[0].selections[0], winOdds: 5, placeOdds: 3, winProbability: 0.3,
+  winSource: 'tab_decision', placeSource: 'tab_decision', evaluatedAt: new Date(Date.parse(races[0].start) - 30 * 60_000).toISOString(),
+  tabCapturedAt: new Date(Date.parse(races[0].start) - 30.5 * 60_000).toISOString(),
+  tabQuotedAt: new Date(Date.parse(races[0].start) - 31 * 60_000).toISOString() }]
 const manifest = {
   schema: 1, generatedAt: '2026-09-26T00:00:00Z', models,
   chunks: [`simulator/v1/${'a'.repeat(64)}.json`],
@@ -82,6 +86,22 @@ async function main() {
     }
     const expectedReportRequests = process.argv.includes('--development') ? 4 : 2
     assert.equal(reportRequests, expectedReportRequests)
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption({ label: 'TAB at decision time' })
+    await waitForCount(121)
+    await page.getByRole('status').filter({ hasText: '1 of 30 races have frozen decision observations' }).waitFor()
+    assert.equal(await page.getByRole('region', { name: 'Filtered bets', exact: true }).getByText('TAB decision', { exact: true }).count(), 1)
+    const decisionExportPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Export all filtered bets', exact: true }).click()
+    const decisionStream = await (await decisionExportPromise).createReadStream()
+    assert.ok(decisionStream)
+    const decisionChunks: Buffer[] = []
+    for await (const chunk of decisionStream) decisionChunks.push(Buffer.from(chunk))
+    const decisionCsv = Buffer.concat(decisionChunks).toString('utf8')
+    assert.match(decisionCsv, /Decision time/)
+    assert.match(decisionCsv, /tab_decision/)
+    assert.ok(decisionCsv.includes(races[0].decisionSelections![0].evaluatedAt!))
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('')
+    await waitForCount(240)
     await page.getByRole('button', { name: 'Apply legacy internal WIN policy', exact: true }).click()
     assert.equal(await page.getByLabel('WIN reliability', { exact: true }).inputValue(), '80')
     assert.equal(await page.getByLabel('WIN maximum odds', { exact: true }).inputValue(), '15')
@@ -94,11 +114,14 @@ async function main() {
     await page.getByRole('button', { name: 'Apply historical profit WIN preset', exact: true }).click()
     await waitForCount(240)
     await page.getByLabel('WIN edge', { exact: true }).selectOption('-5')
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('tab_decision')
     await page.getByLabel('Strategy name', { exact: true }).fill('Browser regression strategy')
     await page.getByRole('button', { name: 'Save settings', exact: true }).click()
     await page.getByLabel('WIN edge', { exact: true }).selectOption('10')
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('tab')
     await page.getByRole('button', { name: 'Load saved settings', exact: true }).click()
     assert.equal(await page.getByLabel('WIN edge', { exact: true }).inputValue(), '-5')
+    assert.equal(await page.getByLabel('WIN odds source', { exact: true }).inputValue(), 'tab_decision')
     const realPage = await context.newPage()
     realPage.on('pageerror', error => errors.push(error.message))
     await realPage.goto(`${baseUrl}/real-betting`)
@@ -108,6 +131,7 @@ async function main() {
     assert.ok(draft)
     assert.equal(JSON.parse(draft).strategy.preferences.filters.WIN.minEdge, -5)
     await page.getByLabel('WIN edge', { exact: true }).selectOption('0')
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('')
     assert.equal(await realPage.evaluate(() => window.localStorage.getItem('real-betting:draft:v1')), draft)
     assert.equal(JSON.parse((await page.evaluate(key => window.localStorage.getItem(key), SAVED_STRATEGIES_KEY))!)[0].preferences.filters.WIN.minEdge, -5)
     const configDownloadPromise = realPage.waitForEvent('download')
@@ -122,6 +146,7 @@ async function main() {
     assert.equal(config.enabled, false)
     assert.equal(config.appUrl, new URL(baseUrl).origin)
     assert.equal(config.strategy.preferences.filters.WIN.minEdge, -5)
+    assert.equal(config.strategy.preferences.filters.WIN.source, 'tab_decision')
     for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
       await realPage.setViewportSize(viewport)
       assert.equal(await realPage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)

@@ -8,7 +8,7 @@ import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationCandidates, type Si
 import { DEFAULT_SIMULATION_SETTINGS } from '../src/lib/betting/simulation-preferences'
 import { findProfitSuggestion } from '../src/lib/betting/simulation-optimizer'
 import { legacySimulationPreset } from '../src/lib/betting/simulation-presets'
-import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '../src/lib/betting/simulation-report'
+import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl, SIMULATION_PRICING_VERSION } from '../src/lib/betting/simulation-report'
 import type { SimulationEvidence } from '../src/lib/betting/simulation-evidence'
 import { loopbackOrigin } from '../src/lib/real-betting/config'
 
@@ -80,7 +80,7 @@ async function main() {
   const base = simulationReportBaseUrl()
   const manifest = await readSimulationManifest(base)
   assert.ok(manifest)
-  assert.equal(manifest.pricingVersion, 3)
+  assert.equal(manifest.pricingVersion, SIMULATION_PRICING_VERSION)
   const dataset = await readSimulationChunks(base, manifest)
   assert.ok(Date.parse(dataset.generatedAt) >= since, 'Report predates the new-results cutoff')
   const newRaces = dataset.races.filter(race => Date.parse(race.start) >= since)

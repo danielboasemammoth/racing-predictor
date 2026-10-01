@@ -19,6 +19,7 @@ it('round trips independent market filters and all simulator controls', () => {
   const preferences = readSimulationPreferences(null)
   preferences.filters.WIN = { ...DEFAULT_SIMULATION_FILTERS, enabled: false, minReliability: 80, minEdge: -100, minImplied: 20, maxImplied: 70, minWin: 30, minTop3: 60, model: 'v5-trained', rank: 2, minOdds: 1.5, maxOdds: 20, source: 'tab', venue: 'Flemington', maxField: 8 }
   preferences.filters.PLACE.minTop3 = 70
+  preferences.filters.PLACE.source = 'tab_decision'
   preferences.filters.PLACE.maxField = 12
   preferences.settings = { startingBankroll: 0, flatStake: 0, method: 'kelly-0.25', stakePercent: 0.5 }
   preferences.count = 1000

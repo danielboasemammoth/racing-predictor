@@ -47,6 +47,7 @@ $calls = [System.Collections.Generic.List[string]]::new()
 if ($calls.Contains('Run Backtest') -or $calls.Contains('Backfill Predictions') -or $calls.Contains('Refresh Reliability Calibration')) { throw 'Historical work must not run hourly' }
 if (-not $calls.Contains('Refresh Historical Simulator') -or -not $calls.Contains('Generate Predictions')) { throw 'Hourly live work or simulator refresh missing' }
 if ($calls.IndexOf('Refresh Historical Simulator') -lt $calls.IndexOf('Sync PuntersEdge Odds & Recommendations')) { throw 'Report refresh must not delay settlement and odds sync' }
+if ($calls.IndexOf('Auto-Place Reliability Bets') -lt $calls.IndexOf('Sync PuntersEdge Odds & Recommendations')) { throw 'Decision observation must follow fresh odds sync' }
 
 $failedStep = 'Sync Upcoming Races'
 $calls = [System.Collections.Generic.List[string]]::new()
@@ -126,3 +127,4 @@ if (Test-DailyPipelineOwnsSlot -Now ([datetime]'2026-10-01T12:00:00')) { throw '
 $pollTry = $pollAst.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
 if ($pollTry.Body.Extent.Text.IndexOf('Test-DailyPipelineOwnsSlot') -gt $pollTry.Body.Extent.Text.IndexOf('database-pipeline.lock')) { throw 'Priority must be decided before taking the lock' }
 Write-Output 'PASS: hourly pipeline priority without starving standalone polling.'
+if ($pollTry.Body.Extent.Text.IndexOf('/api/admin/reliability-auto-bet') -lt $pollTry.Body.Extent.Text.IndexOf('/api/admin/puntersedge/sync')) { throw 'Frequent poll must observe decisions after odds sync' }
