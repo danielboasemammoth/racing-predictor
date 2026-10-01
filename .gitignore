@@ -42,3 +42,5 @@ next-env.d.ts
 
 logs/
 scripts/output/
+tab-credentials*.xml
+real-betting-runner*.json

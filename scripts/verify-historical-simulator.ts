@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { chromium } from 'playwright'
 import type { SimulationRace } from '../src/lib/betting/historical-simulator'
 import { SIMULATION_PREFERENCES_KEY } from '../src/lib/betting/simulation-preferences'
+import { SAVED_STRATEGIES_KEY } from '../src/lib/betting/saved-strategies'
 
 const baseUrl = process.argv[2] ?? 'http://localhost:3021'
 assert.ok(['localhost', '127.0.0.1'].includes(new URL(baseUrl).hostname), 'Use a local preview only')
@@ -80,6 +81,53 @@ async function main() {
       await page.getByLabel(`${market} edge`, { exact: true }).selectOption('0')
     }
     assert.equal(reportRequests, 2)
+    await page.getByRole('button', { name: 'Apply legacy internal WIN policy', exact: true }).click()
+    assert.equal(await page.getByLabel('WIN reliability', { exact: true }).inputValue(), '80')
+    assert.equal(await page.getByLabel('WIN maximum odds', { exact: true }).inputValue(), '15')
+    await page.getByRole('button', { name: 'Reset WIN filters', exact: true }).click()
+    await page.getByRole('button', { name: 'Apply legacy internal PLACE policy', exact: true }).click()
+    assert.equal(await page.getByLabel('PLACE runner scope', { exact: true }).inputValue(), '0')
+    assert.equal(await page.getByLabel('PLACE minimum field size', { exact: true }).inputValue(), '8')
+    await page.getByRole('button', { name: 'Reset PLACE filters', exact: true }).click()
+    await waitForCount(240)
+    await page.getByRole('button', { name: 'Apply historical profit WIN preset', exact: true }).click()
+    await waitForCount(240)
+    await page.getByLabel('WIN edge', { exact: true }).selectOption('-5')
+    await page.getByLabel('Strategy name', { exact: true }).fill('Browser regression strategy')
+    await page.getByRole('button', { name: 'Save settings', exact: true }).click()
+    await page.getByLabel('WIN edge', { exact: true }).selectOption('10')
+    await page.getByRole('button', { name: 'Load saved settings', exact: true }).click()
+    assert.equal(await page.getByLabel('WIN edge', { exact: true }).inputValue(), '-5')
+    const realPage = await context.newPage()
+    realPage.on('pageerror', error => errors.push(error.message))
+    await realPage.goto(`${baseUrl}/real-betting`)
+    await realPage.getByRole('button', { name: 'Apply as draft', exact: true }).click()
+    await realPage.waitForFunction(() => window.localStorage.getItem('real-betting:draft:v1')?.includes('Browser regression strategy'))
+    const draft = await realPage.evaluate(() => window.localStorage.getItem('real-betting:draft:v1'))
+    assert.ok(draft)
+    assert.equal(JSON.parse(draft).strategy.preferences.filters.WIN.minEdge, -5)
+    await page.getByLabel('WIN edge', { exact: true }).selectOption('0')
+    assert.equal(await realPage.evaluate(() => window.localStorage.getItem('real-betting:draft:v1')), draft)
+    assert.equal(JSON.parse((await page.evaluate(key => window.localStorage.getItem(key), SAVED_STRATEGIES_KEY))!)[0].preferences.filters.WIN.minEdge, -5)
+    const configDownloadPromise = realPage.waitForEvent('download')
+    await realPage.getByRole('button', { name: 'Export runner config', exact: true }).click()
+    const configDownload = await configDownloadPromise
+    const configStream = await configDownload.createReadStream()
+    assert.ok(configStream)
+    const configChunks: Buffer[] = []
+    for await (const chunk of configStream) configChunks.push(Buffer.from(chunk))
+    const config = JSON.parse(Buffer.concat(configChunks).toString('utf8'))
+    assert.equal(config.mode, 'disabled')
+    assert.equal(config.enabled, false)
+    assert.equal(config.appUrl, new URL(baseUrl).origin)
+    assert.equal(config.strategy.preferences.filters.WIN.minEdge, -5)
+    for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
+      await realPage.setViewportSize(viewport)
+      assert.equal(await realPage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)
+      await mkdir('scripts/output', { recursive: true })
+      await realPage.screenshot({ path: `scripts/output/real-betting-${viewport.name}.png` })
+    }
+    await realPage.close()
     await page.getByLabel('WIN field size', { exact: true }).selectOption({ label: '< 8 starters' })
     await waitForCount(120)
     await page.getByLabel('PLACE field size', { exact: true }).selectOption({ label: '< 8 starters' })
