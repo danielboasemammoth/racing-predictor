@@ -19,8 +19,18 @@ function Invoke-Step {
     }
     return @{ Ok = $true; Response = @{ drained = $true } }
 }
+    $stepAst = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Step' }, $false)
+    $stepTry = $stepAst.Body.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
+    $classification = $stepTry.CatchClauses[0].Body.Statements[0].Extent.Text
+    foreach ($Path in @('/api/admin/simulation-report', '/api/admin/scrape')) {
+        $script:databaseUnavailable = $false
+        $_ = [pscustomobject]@{ Exception = [pscustomobject]@{ Response = [pscustomobject]@{ StatusCode = 503 } } }
+        . ([scriptblock]::Create($classification))
+        if ($script:databaseUnavailable -ne ($Path -eq '/api/admin/scrape')) { throw 'Report-specific 503 must not suppress unrelated live work' }
+    }
+    Write-Output 'PASS: report failure does not imply provider-wide unavailability.'
 
-foreach ($failedStep in @('', 'Backfill Predictions', 'Run Backtest')) {
+foreach ($failedStep in @('', 'Backfill Predictions', 'Run Backtest', 'Refresh Historical Simulator')) {
     $runMaintenance = $true
     $calls = [System.Collections.Generic.List[string]]::new()
     $anyFailures = $false
@@ -36,6 +46,7 @@ $calls = [System.Collections.Generic.List[string]]::new()
 . ([scriptblock]::Create($body)) | Out-Null
 if ($calls.Contains('Run Backtest') -or $calls.Contains('Backfill Predictions') -or $calls.Contains('Refresh Reliability Calibration')) { throw 'Historical work must not run hourly' }
 if (-not $calls.Contains('Refresh Historical Simulator') -or -not $calls.Contains('Generate Predictions')) { throw 'Hourly live work or simulator refresh missing' }
+if ($calls.IndexOf('Refresh Historical Simulator') -lt $calls.IndexOf('Sync PuntersEdge Odds & Recommendations')) { throw 'Report refresh must not delay settlement and odds sync' }
 
 $failedStep = 'Sync Upcoming Races'
 $calls = [System.Collections.Generic.List[string]]::new()
@@ -99,3 +110,19 @@ function Invoke-RestMethod {
 }
 if (-not (Test-AppUrl -Url 'http://test')) { throw 'App health probe failed' }
 Write-Output 'PASS: database-independent app detection.'
+$pollAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-puntersedge-poll.ps1'), [ref]$tokens, [ref]$parseErrors)
+$priority = $pollAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-DailyPipelineOwnsSlot' }, $false)
+. ([scriptblock]::Create($priority.Extent.Text))
+function Get-ScheduledTask { param($TaskName, $ErrorAction) return $script:dailyTask }
+$dailyTask = @{ State = 'Ready' }
+foreach ($hour in @(0, 6, 12, 23)) {
+    if (-not (Test-DailyPipelineOwnsSlot -Now ([datetime]'2026-10-01').AddHours($hour))) { throw 'Poll can starve DailySync at hourly trigger' }
+}
+if (Test-DailyPipelineOwnsSlot -Now ([datetime]'2026-10-01T12:15:00')) { throw 'Off-slot polling must remain available' }
+$dailyTask = @{ State = 'Disabled' }
+if (Test-DailyPipelineOwnsSlot -Now ([datetime]'2026-10-01T12:00:00')) { throw 'Disabled DailySync cannot own the slot' }
+$dailyTask = $null
+if (Test-DailyPipelineOwnsSlot -Now ([datetime]'2026-10-01T12:00:00')) { throw 'Missing DailySync cannot own the slot' }
+$pollTry = $pollAst.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] } | Select-Object -Last 1
+if ($pollTry.Body.Extent.Text.IndexOf('Test-DailyPipelineOwnsSlot') -gt $pollTry.Body.Extent.Text.IndexOf('database-pipeline.lock')) { throw 'Priority must be decided before taking the lock' }
+Write-Output 'PASS: hourly pipeline priority without starving standalone polling.'

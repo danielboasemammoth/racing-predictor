@@ -27,6 +27,13 @@ function Write-Log {
     $line | Tee-Object -FilePath $logFile -Append
 }
 
+function Test-DailyPipelineOwnsSlot {
+    param([datetime]$Now)
+    if ($Now.Minute -ge 10 -or ($Now.Hour -gt 0 -and $Now.Hour -lt 6)) { return $false }
+    $dailyTask = Get-ScheduledTask -TaskName 'RacingPredictor-DailySync' -ErrorAction SilentlyContinue
+    return $null -ne $dailyTask -and $dailyTask.State -ne 'Disabled'
+}
+
 function Get-AdminSessionCookie {
     param([string]$ProjectRoot)
 
@@ -83,6 +90,10 @@ function Invoke-Step {
 }
 
 try {
+    if (-not $ForceRun -and (Test-DailyPipelineOwnsSlot -Now (Get-Date))) {
+        Write-Log 'DEFER hourly settlement and odds sync to DailySync; reserving its pipeline slot'
+        exit 0
+    }
     try {
         $jobLock = [System.IO.File]::Open((Join-Path $logDir 'database-pipeline.lock'), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
     } catch [System.IO.IOException] {

@@ -97,7 +97,7 @@ function Invoke-Step {
         Write-Log "OK    $Label -> $($response.message)"
         return @{ Ok = $true; Response = $response }
     } catch {
-        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -in @(502, 503, 504, 520, 522, 524)) { $script:databaseUnavailable = $true }
+        if ($Path -ne '/api/admin/simulation-report' -and $_.Exception.Response -and [int]$_.Exception.Response.StatusCode -in @(502, 503, 504, 520, 522, 524)) { $script:databaseUnavailable = $true }
         Write-Log "FAIL  $Label -> $($_.Exception.Message)"
         if ($ContinueOnError) { return @{ Ok = $false; Response = $null } }
         throw
@@ -134,11 +134,11 @@ try {
         if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/backtest" -Label "Run Backtest" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
         if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-refresh" -Label "Refresh Reliability Calibration" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     }
-    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/simulation-report" -Label "Refresh Historical Simulator" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/reliability-auto-bet" -Label "Auto-Place Reliability Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
 
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/settle" -Label "Settle Paper Bets" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/puntersedge/sync" -Label "Sync PuntersEdge Odds & Recommendations" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
+    if (-not (Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/simulation-report" -Label "Refresh Historical Simulator" -WebSession $webSession -ContinueOnError).Ok) { $anyFailures = $true }
     # Prune's own response reports drained:false while a large backlog remains - re-invoke until
     # actually drained (or a safety cap), rather than leaving a partial prune after one call. A
     # single call only processes up to MAX_BATCHES_PER_CALL batches (see the route) to stay well
