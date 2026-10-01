@@ -11,7 +11,7 @@ Status: **TAB provider not connected. No real bets can be placed.** This feature
 | Dry-run parsing | `src/lib/real-betting/dry-run.ts` | Server decides the decision; only `BLOCKED_PROVIDER_DISCONNECTED` or `BLOCKED_RISK_LIMIT` are possible. |
 | Ledger access | `src/lib/real-betting/ledger.ts` | Service-role reads/writes; reports a missing migration instead of failing. |
 | API | `GET /api/real-betting/ledger`, `POST /api/real-betting/dry-run` | Both admin-session gated, `Cache-Control: no-store`. No route writes `real_bets`. |
-| Migration | `supabase/migrate-real-betting.sql` | `real_bets` + `real_betting_attempts`, service_role only. **Not applied yet.** |
+| Migration | `supabase/migrate-real-betting.sql` | `real_bets` + `real_betting_attempts`, service_role only. **Applied October 1, 2026.** |
 | Runner | `scripts/windows/run-real-betting.ps1` | Local runner; disabled or dry-run only. |
 | Schedule | `scripts/windows/register-real-betting-task.ps1` | Manual opt-in; registers the task **disabled**. |
 | Checks | `scripts/windows/test-real-betting.ps1` | Offline safety checks for both scripts. |
@@ -30,7 +30,9 @@ Status: **TAB provider not connected. No real bets can be placed.** This feature
 - No foreign keys to paper betting tables. No wallet, deposit or withdrawal logic.
 - RLS enabled; all privileges revoked from `anon`/`authenticated`; only `service_role` may select/insert (and update `real_bets`).
 
-Apply once via the Supabase SQL Editor: `supabase/migrate-real-betting.sql` (idempotent). Until then the page and `GET /api/real-betting/ledger` report "migration pending".
+For a new database, apply `supabase/migrate-real-betting.sql` once via the Supabase SQL Editor (idempotent). Until then the page and `GET /api/real-betting/ledger` report "migration pending".
+
+Activation verified October 1, 2026: the migration was applied to the configured Supabase project. Both tables have RLS enabled, deny reads to `anon` and `authenticated`, and grant the intended service-role access. The application ledger loader returned `ready` with zero bets and zero attempts. No test records, TAB connections, credentials or schedules were created; real wagering remains disconnected.
 
 ## Local runner
 

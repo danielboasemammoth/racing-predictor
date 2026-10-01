@@ -18,6 +18,8 @@ The manual CLI has a ten-minute overall budget for first publication or a pricin
 
 Activation verified September 26, 2026: the user applied the migration, and the first report was published at 12:10 UTC with 1,000 races, seven current models and 20 chunks. Public Storage readback validated every chunk; 975 races had eligible pre-race forecasts. Earlier attempts correctly withheld publication on source changes, and one encountered PostgreSQL `57014`; this successful publication does not establish sustained database capacity. CLI errors now identify the failing stage and preserve the database error code. No racing or betting history was altered by report publication.
 
+Version 3 activation verified October 1, 2026: the updated migration was applied, including the valid prediction-creation index and full-field/evidence source function. A live refresh rebuilt all 1,000 races into 40 chunks and published at `2026-10-01T03:47:54.228Z`; the application's public report loader read and validated every chunk. This recovered the previously failing race-window query (`57014`). The 13:00 Melbourne scheduled run also confirmed that a report failure no longer prevents odds sync, pruning or page publication. Sustained unattended report refreshes still need observation; missing historical qualification evidence is not backfilled.
+
 ## Simulation Rules
 
 ### Saved Strategies And Presets (October 1)
