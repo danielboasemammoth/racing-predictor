@@ -20,6 +20,26 @@ Activation verified September 26, 2026: the user applied the migration, and the 
 
 Version 3 activation verified October 1, 2026: the updated migration was applied, including the valid prediction-creation index and full-field/evidence source function. A live refresh rebuilt all 1,000 races into 40 chunks and published at `2026-10-01T03:47:54.228Z`; the application's public report loader read and validated every chunk. This recovered the previously failing race-window query (`57014`). The 13:00 Melbourne scheduled run also confirmed that a report failure no longer prevents odds sync, pruning or page publication. Sustained unattended report refreshes still need observation; missing historical qualification evidence is not backfilled.
 
+Unattended recovery verified later October 1: the 14:00 and 15:00 Melbourne DailySync runs both published simulator reports, completed all steps, and refreshed home/opportunities/results snapshots. Windows reported `LastTaskResult = 0` for the 15:00 run and the next trigger at 16:00. The public report generated at `2026-10-01T05:11:29.797Z` passed the application loader's validation of all 1,000 races and 40 chunks. These two successful unattended runs establish recovery, not a guarantee against future provider outages.
+
+### Evidence And Preset Assessment
+
+```powershell
+npx tsx --env-file=.env.local scripts/assess-betting-readiness.ts --app-url=http://localhost:3030 --since=2026-10-01T03:47:54.228Z --capture-evidence
+```
+
+Omit `--capture-evidence` for a read-only assessment. The capture option calls the existing retired-betting observer, verifies zero bets and capture errors, and checks existing evidence was not changed. The script validates evidence timestamps against prediction creation and race start, then writes a timestamped JSON research snapshot under `scripts/output/`. It uses the default $500 bankroll per model and $10 flat stakes, not any saved user strategy. New-result metrics include only races starting after `--since` that are also outside the optimizer's older-day training period.
+
+October 1 assessment at 15:30 Melbourne:
+
+- One additional qualification snapshot and one PLACE shadow race were captured with zero errors and no bets. There are 68 qualification snapshots across 35 distinct races, including five qualified snapshots and 11 completed races. All 67 existing snapshots were unchanged; all linked pre-race timestamp checks passed. Forty-six snapshots were captured after the activation cutoff. Snapshots are per prediction and must not be counted as independent race observations.
+- The current report contains eight completed races starting after the activation cutoff. Each market searched 1,120 configurations; training days precede September 25, with later days reserved for holdout. Both training winners passed the existing holdout gate.
+- WIN winner: `v6-market-blend`, any top-three rank, strict edge >0 points, odds <=15, no probability or reliability floor. Training: +$486 across 106 selected races. Holdout: +$251.50 across 74. New-result subset: 14 bets across five selected races, four wins, $140 staked, +$86 simulated profit.
+- PLACE winner: `v6-market-blend`, any top-three rank, strict edge >-10 points, odds <=10, no probability or reliability floor. Training: +$949 across 120 selected races. Holdout: +$501.70 across 90. New-result subset: 10 bets across four selected races, seven wins, $100 staked, +$154 simulated profit.
+- The legacy internal WIN preset selected no new bets; legacy PLACE selected one winning bet (+$11 at $10 stake). Missing historical WIN evidence remains excluded.
+
+These are recorded-price simulations with separate bankrolls, not real returns or an executable TAB-price guarantee. The new subset is outside training but is part of the holdout used for eligibility; it is not a prospectively frozen, untouched trading trial. Four or five selected races are far too few to establish profitability. The exact filters and report timestamp are retained for later comparison; no saved settings, drafts, schedules or live strategies were activated or changed.
+
 ## Simulation Rules
 
 ### Saved Strategies And Presets (October 1)
