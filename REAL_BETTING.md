@@ -43,6 +43,18 @@ Activation verified October 1, 2026: the migration was applied to the configured
 
 The runner refuses any other mode, `enabled: true`, unknown fields, credential-like keys and non-loopback URLs (no redirects followed). `Invoke-TabProvider` is a fail-closed placeholder and is never called.
 
+### End-to-end verification
+
+Run against an already-running local app:
+
+```powershell
+npx tsx --env-file=.env.local scripts/verify-real-betting-runner.ts http://localhost:3030 --record-dry-run
+```
+
+The explicit opt-in creates one permanent, labelled smoke-test heartbeat in the private audit ledger. The script creates and removes its own temporary config, runs the actual PowerShell runner in validate-only and disabled modes, then twice in dry-run mode. It checks that disabled mode writes nothing, the first dry run records a blocked heartbeat with the exact strategy snapshot/hash and limits, the duplicate preserves the same row, and the real-bets count does not change. It never changes saved strategies or registers a task. Run away from a quarter-hour boundary; crossing a slot invalidates the duplicate comparison.
+
+Verified October 1, 2026 at 15:27 Melbourne: config `f63aad2d-4e2d-47c4-8915-a9ac792c2658` produced exactly one `BLOCKED_PROVIDER_DISCONNECTED` attempt (`89e20f71-548a-411b-b4a1-fce220b0149b`); the second execution reported "already recorded" and the database row was unchanged. No real bets were created. The temporary config was removed; the labelled audit record remains intentionally.
+
 ## Credentials (future)
 
 TAB credentials must never be stored in the repo, the runner config, the browser or the app/server. When an integration exists, store them per Windows user with DPAPI, typed directly in a local terminal:
