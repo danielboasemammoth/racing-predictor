@@ -72,6 +72,13 @@ async function main() {
     await page.getByLabel('Starting bankroll per model', { exact: true }).fill('500')
     await page.getByLabel('Flat stake', { exact: true }).fill('10')
     await page.getByRole('region', { name: 'Model comparison' }).getByText('$1,400.00', { exact: true }).first().waitFor()
+    for (const market of ['WIN', 'PLACE']) {
+      for (const threshold of [-2, -5, -10, -15, -20]) {
+        await page.getByLabel(`${market} edge`, { exact: true }).selectOption({ label: `> ${threshold} pts` })
+        assert.equal(await page.getByLabel(`${market} edge`, { exact: true }).inputValue(), String(threshold))
+      }
+      await page.getByLabel(`${market} edge`, { exact: true }).selectOption('0')
+    }
     assert.equal(reportRequests, 2)
     await page.getByLabel('WIN field size', { exact: true }).selectOption({ label: '< 8 starters' })
     await waitForCount(120)

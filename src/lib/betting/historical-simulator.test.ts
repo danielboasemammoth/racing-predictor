@@ -6,6 +6,16 @@ const filters = { WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SI
 const race: SimulationRace = { id: 'race', start: '2026-09-01T01:00:00Z', settledAt: '2026-09-01T01:10:00Z', venue: 'Test', state: 'VIC', number: 1, fieldSize: 8,
   selections: [{ id: 'horse', horse: 'Runner', model: 'model', rank: 1, predictedAt: '2026-09-01T00:00:00Z', winProbability: 0.4, top3Probability: 0.7, reliability: null, winOdds: 3, placeOdds: 2, winSource: 'racing_com', placeSource: 'racing_com', position: 2, scratched: false, winIssue: null, placeIssue: null }] }
 
+it.each([-2, -5, -10, -15, -20])('applies the strict negative edge threshold %s to both markets', minEdge => {
+  for (const bet of simulationCandidates([race])) {
+    const filter = { ...filters[bet.market], minEdge }
+    expect(matchesSimulationFilters({ ...bet, edge: minEdge + 0.01 }, filter)).toBe(true)
+    expect(matchesSimulationFilters({ ...bet, edge: minEdge }, filter)).toBe(false)
+    expect(matchesSimulationFilters({ ...bet, edge: minEdge - 0.01 }, filter)).toBe(false)
+    expect(matchesSimulationFilters({ ...bet, edge: null }, filter)).toBe(false)
+  }
+})
+
 it('creates both markets and applies strict default probability and edge thresholds', () => {
   const bets = simulationCandidates([race])
   expect(bets).toHaveLength(2)

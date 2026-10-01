@@ -34,7 +34,7 @@ function filters(value: unknown): SimulationFilters {
   return {
     enabled: typeof saved.enabled === 'boolean' ? saved.enabled : defaults.enabled,
     minReliability: option(saved.minReliability, defaults.minReliability, probabilities),
-    minEdge: option(saved.minEdge, defaults.minEdge, [-100, 0, 2, 5, 10, 15, 20]),
+    minEdge: option(saved.minEdge, defaults.minEdge, [-100, -20, -15, -10, -5, -2, 0, 2, 5, 10, 15, 20]),
     minImplied: option(saved.minImplied, defaults.minImplied, probabilities),
     maxImplied: option(saved.maxImplied, defaults.maxImplied, [...probabilities.slice(1), 100]),
     minWin: option(saved.minWin, defaults.minWin, probabilities),
