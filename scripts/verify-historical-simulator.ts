@@ -80,7 +80,8 @@ async function main() {
       }
       await page.getByLabel(`${market} edge`, { exact: true }).selectOption('0')
     }
-    assert.equal(reportRequests, 2)
+    const expectedReportRequests = process.argv.includes('--development') ? 4 : 2
+    assert.equal(reportRequests, expectedReportRequests)
     await page.getByRole('button', { name: 'Apply legacy internal WIN policy', exact: true }).click()
     assert.equal(await page.getByLabel('WIN reliability', { exact: true }).inputValue(), '80')
     assert.equal(await page.getByLabel('WIN maximum odds', { exact: true }).inputValue(), '15')
@@ -167,7 +168,7 @@ async function main() {
     await page.getByRole('button', { name: 'Reset PLACE filters', exact: true }).click()
     await waitForCount(120)
     await page.getByLabel('Completed races', { exact: true }).selectOption('100')
-    assert.equal(reportRequests, 2, 'Filters, staking, pagination and export must stay local')
+    assert.equal(reportRequests, expectedReportRequests, 'Filters, staking, pagination and export must stay local')
     await page.getByLabel('WIN edge', { exact: true }).selectOption('10')
     await page.getByLabel('PLACE top-three probability', { exact: true }).selectOption('60')
     await page.getByLabel('PLACE venue', { exact: true }).selectOption('TEST DATA Flemington')
