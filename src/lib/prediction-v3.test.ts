@@ -55,12 +55,14 @@ describe('v3 contextual ranking', () => {
       race,
       entries,
       history,
-      oddsByHorse: { alpha: { win: 50, place: 10 }, beta: { win: 1.2, place: 1.05 } },
+      oddsByHorse: { alpha: { win: 50, place: 10, winProvider: 'SB2', placeProvider: 'PB3' }, beta: { win: 1.2, place: 1.05 } },
     })
 
     expect(withOdds.predictions.all_horses.map((horse) => horse.win_probability))
       .toEqual(withoutOdds.predictions.all_horses.map((horse) => horse.win_probability))
     expect(withOdds.predictions.value_opportunities?.[0].horse_id).toBe('alpha')
+    expect(withOdds.predictions.all_horses.find(horse => horse.horse_id === 'alpha')).toMatchObject({ win_odds: 50, place_odds: 10, win_odds_provider: 'SB2', place_odds_provider: 'PB3' })
+    expect(withOdds.predictions.all_horses.find(horse => horse.horse_id === 'beta')).not.toHaveProperty('win_odds_provider')
   })
 
   it('ignores results occurring after the target race', () => {

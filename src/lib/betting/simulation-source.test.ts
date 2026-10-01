@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { buildSimulationRace, type SimulationSource } from './simulation-source'
 import type { SimulationDecision } from './simulation-decision'
+import { simulationBetProvider, simulationCandidates } from './historical-simulator'
 
 const source: SimulationSource = {
   id: 'race', start: '2026-09-01T01:00:00Z', settledAt: '2026-09-01T02:00:00Z', venue: 'Test', state: 'VIC', number: 1,
@@ -70,4 +71,14 @@ it('replays the frozen decision forecast and quote instead of the latest forecas
   for (const override of [{ start: '2026-09-01T02:00:00Z' }, { forecast: { ...decision.forecast, createdAt: '2026-09-01T00:31:00Z' } }]) {
     expect(buildSimulationRace({ ...source, decisions: [{ ...decision, ...override }] }).decisionSelections).toEqual([])
   }
+})
+
+it('keeps frozen market-specific provider codes, with no attribution guessed for older forecasts', () => {
+  const supplied = { ...source, forecasts: [{ ...source.forecasts[0], podium: [{ ...source.forecasts[0].podium[0], win_odds_provider: 'SB2', place_odds_provider: 'PB3' }] }] }
+  const bets = simulationCandidates([buildSimulationRace(supplied)])
+  expect(simulationBetProvider(bets[0])).toBe('Sportsbet (SB2)')
+  expect(simulationBetProvider(bets[1])).toBe('PointsBet (PB3)')
+  expect(simulationBetProvider(simulationCandidates([buildSimulationRace(source)])[0])).toBe('Provider not recorded')
+  const tab = buildSimulationRace(supplied, new Map([['runner 0', { win: 4, place: 2, capturedAt: '2026-09-01T00:59:00Z', quotedAt: '2026-09-01T00:58:30Z' }]]))
+  expect(simulationBetProvider(simulationCandidates([tab])[0])).toBe('TAB')
 })

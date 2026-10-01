@@ -150,6 +150,8 @@ export interface EntryOdds {
   /** Whether win/place came from a real TAB Fixed Win/Place price (via the PuntersEdge bridge) or Racing.com's own recorded (unconfirmed) feed - see internal-tab-odds.ts. Defaults to 'racing_com' when omitted. */
   winSource?: 'tab' | 'racing_com'
   placeSource?: 'tab' | 'racing_com'
+  winProvider?: string
+  placeProvider?: string
 }
 
 export interface ContextualPredictionInput {
@@ -435,6 +437,8 @@ export function predictContextualRace(
       top3_probability: entry.top3Probability,
       ...(entry.odds.win ? { win_odds: entry.odds.win, win_return_10: entry.odds.win * 10, win_value_edge: winEdge, win_odds_source: entry.odds.winSource ?? 'racing_com' } : {}),
       ...(entry.odds.place ? { place_odds: entry.odds.place, place_return_10: entry.odds.place * 10, place_value_edge: placeEdge, place_odds_source: entry.odds.placeSource ?? 'racing_com' } : {}),
+      ...(entry.odds.win && entry.odds.winProvider ? { win_odds_provider: entry.odds.winProvider } : {}),
+      ...(entry.odds.place && entry.odds.placeProvider ? { place_odds_provider: entry.odds.placeProvider } : {}),
       value_rating: bestEdge >= 0.2 ? 'strong' : bestEdge > 0 ? 'positive' : 'neutral',
     }
   })

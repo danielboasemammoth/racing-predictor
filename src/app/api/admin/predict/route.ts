@@ -10,6 +10,7 @@ import { getTabPricesForInternalRaces, type InternalRaceRef, type TabPrice } fro
 import { normalizeHorseName } from '@/lib/paper-betting/fundamentals-bridge'
 import { withSupabaseReadRetry as withRetry } from '@/lib/supabase/read-retry'
 import { insertPredictionSnapshots, type PredictionSnapshotRow } from '@/lib/prediction-storage'
+import { bestRacingComOdds } from '@/lib/betting/racing-com-odds'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -40,20 +41,6 @@ interface HistoricalEntryRow {
     track_condition: string | null
     race_class: string | null
     field: Array<{ count: number }>
-  }
-}
-
-function bestOdds(entry: RaceEntryWithHorse) {
-  const metadata = entry.sectional_times
-  if (!metadata || Array.isArray(metadata) || typeof metadata !== 'object') return {}
-  const quotes = metadata.odds
-  if (!Array.isArray(quotes)) return {}
-  const values = quotes.filter((quote): quote is { [key: string]: string | number | boolean | null } =>
-    Boolean(quote && typeof quote === 'object' && !Array.isArray(quote)),
-  )
-  return {
-    win: Math.max(0, ...values.map((quote) => Number(quote.win) || 0)) || undefined,
-    place: Math.max(0, ...values.map((quote) => Number(quote.place) || 0)) || undefined,
   }
 }
 
@@ -277,13 +264,15 @@ export async function POST(request: Request) {
 
       const tabPricesForRace = tabPricesByRace.get(race.id)
       const oddsByHorse = Object.fromEntries(typedEntries.map((entry) => {
-        const racingComOdds = bestOdds(entry)
+        const racingComOdds = bestRacingComOdds(entry)
         const tabPrice = entry.horses ? tabPricesForRace?.get(normalizeHorseName(entry.horses.name)) : undefined
         return [entry.horse_id, {
           win: tabPrice?.win ?? racingComOdds.win,
           place: tabPrice?.place ?? racingComOdds.place,
           winSource: tabPrice?.win != null ? 'tab' as const : 'racing_com' as const,
           placeSource: tabPrice?.place != null ? 'tab' as const : 'racing_com' as const,
+          winProvider: tabPrice?.win != null ? 'TAB' : racingComOdds.winProvider,
+          placeProvider: tabPrice?.place != null ? 'TAB' : racingComOdds.placeProvider,
         }]
       }))
 

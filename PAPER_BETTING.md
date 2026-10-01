@@ -42,6 +42,14 @@ These are recorded-price simulations with separate bankrolls, not real returns o
 
 ## Simulation Rules
 
+### Racing.com Provider Attribution
+
+The simulator table and CSV include an `Odds provider` field. New predictions retain the exact provider code separately for WIN and PLACE alongside the selected price. Racing.com prices have always been the maximum recorded quote per market across the feed, not prices from a single bookmaker; ties now retain the first matching provider. This change does not alter odds, probabilities, filters or returns.
+
+Provider names were verified on October 1, 2026 against Racing.com's public `https://www.racing.com/form/config.js?v=4550`, `siteConfig.WageringProviders`: `SB2` = Sportsbet, `LB2` = Ladbrokes, `PB3` = PointsBet, `BT` = bet365. Product codes retain the site's labels: `BTOTE` = Sportsbet BT+ WIN, `BTOTESP_LB2` = Ladbrokes BTSP, `BTOTESP_PB3` = PointsBet BT+SP, `BTOTESP_BT` = bet365 TOTE WIN. Displayed names include the original code. Unverified codes, including `BTOTESP`, `N`, `Q`, `V` and `OP`, remain explicitly unmapped rather than guessed. The mapping is local; rendering never contacts a bookmaker.
+
+Older prediction snapshots discarded provider metadata and therefore show `Provider not recorded`. Attribution is not reconstructed from present-day race-entry quotes or matched by price after the result. Near-start and decision-time TAB overrides always display TAB and cannot inherit a Racing.com provider. Newly captured prediction metadata flows through ordinary report refreshes; no migration, historical rewrite or report pricing-version change is required. Best-of-feed/tote-product observations are not guaranteed executable fixed odds, so higher simulated profit is not evidence that one provider offers those returns.
+
 ### TAB At Decision Time
 
 The odds-source selector now separates `TAB at decision time` (`tab_decision`) from `TAB near-start` (`tab`). The default latest-forecast/near-start view is unchanged and never adds decision observations as duplicate bets. Saved profiles, real-betting draft exports and CSV retain the selected source; decision CSV rows include the observation, quote and capture timestamps.

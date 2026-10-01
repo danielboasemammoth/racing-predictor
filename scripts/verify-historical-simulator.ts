@@ -26,6 +26,12 @@ for (const selection of races[0].selections.filter(selection => selection.rank =
   selection.winIssue = 'Changed field; deductions unverified'
   selection.placeIssue = 'Top-three probability does not match paid places'
 }
+for (const selection of races[0].selections.slice(0, 2)) {
+  selection.winSource = 'racing_com'
+  selection.placeSource = 'racing_com'
+}
+races[0].selections[0].winProvider = 'SB2'
+races[0].selections[0].placeProvider = 'PB3'
 races[0].decisionSelections = [{ ...races[0].selections[0], winOdds: 5, placeOdds: 3, winProbability: 0.3,
   winSource: 'tab_decision', placeSource: 'tab_decision', evaluatedAt: new Date(Date.parse(races[0].start) - 30 * 60_000).toISOString(),
   tabCapturedAt: new Date(Date.parse(races[0].start) - 30.5 * 60_000).toISOString(),
@@ -68,6 +74,27 @@ async function main() {
     assert.match(await results(), /\$1,800\.00/)
     assert.match(await results(), /4 excluded \(hidden/)
     assert.equal(await page.getByRole('region', { name: 'Filtered bets', exact: true }).getByText('EXCLUDED', { exact: true }).count(), 0)
+    await page.getByRole('columnheader', { name: 'Odds provider', exact: true }).waitFor()
+    await page.getByRole('cell', { name: 'Sportsbet (SB2)', exact: true }).waitFor()
+    await page.getByRole('cell', { name: 'PointsBet (PB3)', exact: true }).waitFor()
+    assert.equal(await page.getByRole('cell', { name: 'Provider not recorded', exact: true }).count(), 2)
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('racing_com')
+    await page.getByLabel('PLACE odds source', { exact: true }).selectOption('racing_com')
+    await waitForCount(4)
+    const providerDownload = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Export all filtered bets', exact: true }).click()
+    const providerStream = await (await providerDownload).createReadStream()
+    assert.ok(providerStream)
+    const providerChunks: Buffer[] = []
+    for await (const chunk of providerStream) providerChunks.push(Buffer.from(chunk))
+    const providerCsv = Buffer.concat(providerChunks).toString('utf8')
+    assert.match(providerCsv, /"Odds provider"/)
+    assert.match(providerCsv, /"racing_com","Sportsbet \(SB2\)","3"/)
+    assert.match(providerCsv, /"racing_com","PointsBet \(PB3\)","2"/)
+    assert.match(providerCsv, /"Provider not recorded"/)
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('')
+    await page.getByLabel('PLACE odds source', { exact: true }).selectOption('')
+    await waitForCount(240)
     await page.getByLabel('Starting bankroll per model', { exact: true }).fill('50')
     await page.getByLabel('Flat stake', { exact: true }).fill('1')
     await page.getByRole('region', { name: 'Model comparison' }).getByText('$140.00', { exact: true }).first().waitFor()
@@ -99,6 +126,7 @@ async function main() {
     const decisionCsv = Buffer.concat(decisionChunks).toString('utf8')
     assert.match(decisionCsv, /Decision time/)
     assert.match(decisionCsv, /tab_decision/)
+    assert.match(decisionCsv, /"tab_decision","TAB","5"/)
     assert.ok(decisionCsv.includes(races[0].decisionSelections![0].evaluatedAt!))
     await page.getByLabel('WIN odds source', { exact: true }).selectOption('')
     await waitForCount(240)

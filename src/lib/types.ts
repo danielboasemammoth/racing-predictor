@@ -91,6 +91,8 @@ export interface PredictedHorse {
   /** Whether win_odds/place_odds is a real TAB Fixed price (via the PuntersEdge bridge) or Racing.com's own recorded (unconfirmed) feed. Absent on older stored predictions - treat as 'racing_com'. */
   win_odds_source?: 'tab' | 'racing_com'
   place_odds_source?: 'tab' | 'racing_com'
+  win_odds_provider?: string
+  place_odds_provider?: string
   value_rating?: 'strong' | 'positive' | 'neutral'
 }
 

@@ -1,4 +1,5 @@
 import { kellyFraction } from './kelly'
+import { racingComProviderLabel } from './racing-com-odds'
 
 export type SimulationMarket = 'WIN' | 'PLACE'
 export interface SimulationSelection {
@@ -17,6 +18,8 @@ export interface SimulationSelection {
   placeOdds: number | null
   winSource: string
   placeSource: string
+  winProvider?: string | null
+  placeProvider?: string | null
   tabQuotedAt?: string | null
   tabCapturedAt?: string | null
   position: number | null
@@ -216,4 +219,10 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
       unfunded: portfolio.filter(bet => bet.status === 'NO_BANKROLL').length }
   })
   return { bets, summaries }
+}
+
+export function simulationBetProvider(bet: Pick<SimulationBet, 'source' | 'market' | 'selection'>): string {
+  if (bet.source === 'tab' || bet.source === 'tab_decision') return 'TAB'
+  const provider = bet.market === 'WIN' ? bet.selection.winProvider : bet.selection.placeProvider
+  return racingComProviderLabel(provider)
 }

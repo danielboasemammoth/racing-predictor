@@ -70,6 +70,8 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
         placeOdds: tabPlace ?? odds(horse.place_odds_source === 'tab' ? undefined : horse.place_odds),
         winSource: tabWin !== null ? 'tab' : horse.win_odds_source ?? 'racing_com',
         placeSource: tabPlace !== null ? 'tab' : horse.place_odds_source ?? 'racing_com',
+        winProvider: tabWin !== null ? 'TAB' : horse.win_odds_provider ?? null,
+        placeProvider: tabPlace !== null ? 'TAB' : horse.place_odds_provider ?? null,
         tabQuotedAt: tab?.quotedAt ?? null, tabCapturedAt: tab?.capturedAt ?? null,
         position: entry?.position ?? null, scratched: entry?.status === 'scratched',
         winIssue: entry?.status === 'scratched' ? null : issue,
@@ -94,6 +96,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       decisionSelections.push({ ...selection, evaluatedAt: decision.capturedAt,
         winOdds: valid ? odds(price.win) : null, placeOdds: valid ? odds(price.place) : null,
         winSource: 'tab_decision', placeSource: 'tab_decision', tabQuotedAt: price?.quotedAt ?? null, tabCapturedAt: price?.capturedAt ?? null,
+        winProvider: 'TAB', placeProvider: 'TAB',
         winIssue: selection.winIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null),
         placeIssue: selection.placeIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null) })
     }
