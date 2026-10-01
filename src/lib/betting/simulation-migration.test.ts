@@ -16,6 +16,7 @@ beforeAll(async () => {
     create table public.races(id uuid primary key, racecourse_id uuid, race_number int, race_datetime timestamptz, status text, updated_at timestamptz);
     create table public.race_entries(race_id uuid, horse_id uuid, finishing_position int, status text, updated_at timestamptz);
     create table public.predictions(id uuid primary key, race_id uuid, model_version text, predicted_at timestamptz, created_at timestamptz, predictions jsonb);
+    create table public.analysis_snapshots(kind text unique, payload jsonb, generated_at timestamptz);
   `)
   await db.exec(readFileSync(resolve('supabase/migrate-historical-simulator.sql'), 'utf8'))
   await db.query('insert into public.racecourses values ($1, $2, $3)', [courseId, 'Test', 'VIC'])
@@ -61,4 +62,14 @@ it('serializes report publishers and allows recovery after lease expiry', async 
   await db.exec("update public.reporting_job_leases set expires_at = now() - interval '1 minute'")
   const recovered = await db.query<{ acquired: boolean }>('select public.acquire_reporting_lease($1, $2) as acquired', ['test', courseId])
   expect(recovered.rows[0].acquired).toBe(true)
+})
+
+it('fingerprints the newest genuinely pre-race creation, ignoring later backdated inserts', async () => {
+  const before = await db.query<{ fingerprint: string }>('select * from public.simulation_race_window()')
+  await db.query("insert into public.predictions values ($1, $2, 'model', '2026-01-01T00:59:30Z', '2026-01-01T00:59:30Z', '{}'::jsonb)", ['00000000-0000-0000-0000-000000000009', raceId])
+  const changed = await db.query<{ fingerprint: string }>('select * from public.simulation_race_window()')
+  expect(changed.rows[0].fingerprint).not.toBe(before.rows[0].fingerprint)
+  await db.query("insert into public.predictions values ($1, $2, 'model', '2026-01-01T00:50:00Z', '2026-01-01T03:00:00Z', '{}'::jsonb)", ['00000000-0000-0000-0000-000000000010', raceId])
+  const unchanged = await db.query<{ fingerprint: string }>('select * from public.simulation_race_window()')
+  expect(unchanged.rows[0].fingerprint).toBe(changed.rows[0].fingerprint)
 })

@@ -42,9 +42,9 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
     const bucket = db.storage.from(SIMULATION_REPORT_BUCKET)
     const ordered = refs.map(ref => races.get(ref.id)!)
     const chunks: string[] = []
-    for (let offset = 0; offset < ordered.length; offset += 50) {
+    for (let offset = 0; offset < ordered.length; offset += 25) {
       if (Date.now() > deadline) throw new Error('Simulation refresh deadline exceeded')
-      const body = JSON.stringify(ordered.slice(offset, offset + 50))
+      const body = JSON.stringify(ordered.slice(offset, offset + 25))
       if (Buffer.byteLength(body) > 1_900_000) throw new Error('Simulation report chunk exceeds size limit')
       const path = `simulator/v1/${createHash('sha256').update(body).digest('hex')}.json`
       if (!previous?.chunks.includes(path)) {

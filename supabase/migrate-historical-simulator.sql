@@ -1,15 +1,19 @@
 create index if not exists idx_races_completed_recent
   on public.races (race_datetime desc, id desc) where status = 'completed';
 
+create index if not exists idx_predictions_simulation_created
+  on public.predictions (race_id, created_at desc) include (predicted_at);
+
 create or replace function public.simulation_race_window()
 returns table (id uuid, fingerprint text)
 language sql stable security invoker set search_path = public
 as $$
-  select recent.id, md5(concat_ws('|', to_jsonb(recent)::text, course.name, course.state,
+  select recent.id, md5(concat_ws('|', 'full-field-v1', to_jsonb(recent)::text, course.name, course.state,
     (select jsonb_agg(jsonb_build_array(entry.horse_id, entry.status, entry.finishing_position, entry.updated_at) order by entry.horse_id)::text
       from public.race_entries entry where entry.race_id = recent.id),
-    (select max(prediction.created_at)::text from public.predictions prediction where prediction.race_id = recent.id
-      and prediction.predicted_at < recent.race_datetime and prediction.created_at < recent.race_datetime)))
+    (select prediction.created_at::text from public.predictions prediction where prediction.race_id = recent.id
+      and prediction.predicted_at < recent.race_datetime and prediction.created_at < recent.race_datetime
+      order by prediction.created_at desc limit 1)))
   from (
     select race.id, race.updated_at, race.race_datetime, race.race_number, race.racecourse_id from public.races race
     where race.status = 'completed' and race.race_datetime < now()
@@ -36,6 +40,10 @@ begin
     'forecasts', coalesce((select jsonb_agg(jsonb_build_object(
       'id', latest.id, 'model', latest.model_version, 'predictedAt', latest.predicted_at,
       'createdAt', latest.created_at, 'podium', latest.predictions->'podium',
+      'allHorses', latest.predictions->'all_horses',
+      'evidence', (select snapshot.payload from public.analysis_snapshots snapshot
+        where snapshot.kind = 'simulator-evidence-v1:' || latest.id::text
+          and snapshot.generated_at >= latest.created_at and snapshot.generated_at < race.race_datetime),
       'field', (select jsonb_agg(horse->>'horse_id')
         from jsonb_array_elements(case when jsonb_typeof(latest.predictions->'all_horses') = 'array' then latest.predictions->'all_horses' else '[]'::jsonb end) horse)))
       from unnest(model_versions) model_name

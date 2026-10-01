@@ -16,6 +16,18 @@ it.each([-2, -5, -10, -15, -20])('applies the strict negative edge threshold %s 
   }
 })
 
+it('supports inclusive legacy boundaries, field minimum, frozen qualification and decision window', () => {
+  const bet = { ...simulationCandidates([race])[1], source: 'tab', edge: 5, selection: { ...race.selections[0], top3Probability: 0.6, tabCapturedAt: '2026-09-01T00:55:00Z' } }
+  const filter = { ...DEFAULT_SIMULATION_FILTERS, inclusiveThresholds: true, minEdge: 5, minTop3: 60, minimumFieldSize: 8, maxOdds: 15, minMinutesToJump: 1, maxMinutesToJump: 180 }
+  expect(matchesSimulationFilters(bet, filter)).toBe(true)
+  expect(matchesSimulationFilters(bet, { ...filter, minimumFieldSize: 10 })).toBe(false)
+  expect(matchesSimulationFilters(bet, { ...filter, requireQualifiedWin: true })).toBe(false)
+  expect(matchesSimulationFilters({ ...bet, selection: { ...bet.selection, qualifiedWin: true } }, { ...filter, requireQualifiedWin: true })).toBe(true)
+  expect(matchesSimulationFilters({ ...bet, selection: { ...bet.selection, tabCapturedAt: undefined } }, filter)).toBe(false)
+  expect(matchesSimulationFilters({ ...bet, probability: 1 }, { ...filter, positiveValueOnly: true })).toBe(false)
+  expect(matchesSimulationFilters({ ...bet, probability: 0.1 }, { ...filter, positiveValueOnly: true })).toBe(false)
+})
+
 it('creates both markets and applies strict default probability and edge thresholds', () => {
   const bets = simulationCandidates([race])
   expect(bets).toHaveLength(2)

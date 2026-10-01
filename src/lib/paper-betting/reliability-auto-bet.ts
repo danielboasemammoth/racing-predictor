@@ -11,6 +11,9 @@ import type { PredictedHorse, RaceWithPrediction } from '@/lib/types'
 import { INTERNAL_VALUE_POLICY_VERSION, supportsPolicyTracking } from './policy-tracking'
 import { recordPlaceShadow } from './place-shadow'
 import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
+import { MIN_RELIABILITY_FOR_AUTO_BET, MIN_PLACE_PROBABILITY_FOR_AUTO_BET } from '@/lib/betting/simulation-presets'
+import { isQualifiedSimulationWin, recordSimulationEvidence } from '@/lib/betting/simulation-evidence'
+export { MIN_RELIABILITY_FOR_AUTO_BET, MIN_PLACE_PROBABILITY_FOR_AUTO_BET } from '@/lib/betting/simulation-presets'
 
 const DEFAULT_STARTING_BANKROLL = 500 // shared 'default' account - matches puntersedge/sync and paper-betting/bets routes
 
@@ -20,8 +23,6 @@ const DEFAULT_STARTING_BANKROLL = 500 // shared 'default' account - matches punt
  * NOT yet tuned against real settled outcomes (same honesty convention as every other untuned
  * threshold in this codebase - see the tuning register in /memories/repo/racing-predictor-notes.md).
  */
-export const MIN_RELIABILITY_FOR_AUTO_BET = 80
-export const MIN_PLACE_PROBABILITY_FOR_AUTO_BET = 0.6
 
 type RejectionReason = 'field_mismatch' | 'win_reliability' | 'unsupported_place_market' | 'invalid_odds' | 'odds_cap' | 'invalid_probability' | 'place_chance' | 'nonpositive_ev' | 'edge_floor'
 
@@ -103,14 +104,16 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
     skippedDuplicate: 0,
   }
 
-  const reliabilityContext = bettingEnabled ? await loadReliabilityContext(admin) : null
+  const reliabilityContext = await loadReliabilityContext(admin)
   const races = await getUpcomingRaces(admin)
   const reliabilityFilters = { calibration: reliabilityContext?.calibration, history: reliabilityContext?.history, minReliability: MIN_RELIABILITY_FOR_AUTO_BET }
 
-  const qualified = bettingEnabled ? [
-    ...getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, reliabilityFilters),
-    ...getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, reliabilityFilters),
-  ] : []
+  const evaluated = [
+    ...getDailyPicks(races, now, Number.MAX_SAFE_INTEGER, { ...reliabilityFilters, minReliability: undefined, skipQualificationGate: true }),
+    ...getTomorrowPicks(races, now, Number.MAX_SAFE_INTEGER, { ...reliabilityFilters, minReliability: undefined, skipQualificationGate: true }),
+  ]
+  const qualified = evaluated.filter(isQualifiedSimulationWin)
+  const evaluatedByRace = new Map(evaluated.map(pick => [pick.race.id, pick]))
   const qualifiedWinners = new Map(qualified.map((pick) => [pick.race.id, pick.horse.horse_id]))
 
   for (const race of races) {
@@ -127,6 +130,11 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
     } catch (error) {
       summary.shadowCaptureErrors += 1
       console.warn('PLACE shadow capture failed', error)
+    }
+    const evaluatedPick = evaluatedByRace.get(race.id)
+    if (evaluatedPick) {
+      try { await recordSimulationEvidence(admin, evaluatedPick, activeHorseIds, now) }
+      catch (error) { summary.shadowCaptureErrors += 1; console.warn('Simulation evidence capture failed', error) }
     }
     if (!bettingEnabled) continue
     const { candidates, rejected, marketsConsidered } = evaluateInternalValueCandidates(race, activeHorseIds, qualifiedWinners.get(race.id))

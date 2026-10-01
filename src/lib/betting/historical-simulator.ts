@@ -10,6 +10,9 @@ export interface SimulationSelection {
   winProbability: number | null
   top3Probability: number | null
   reliability: number | null
+  qualifiedWin?: boolean | null
+  fullField?: boolean
+  evaluatedAt?: string | null
   winOdds: number | null
   placeOdds: number | null
   winSource: string
@@ -55,12 +58,20 @@ export interface SimulationFilters {
   source: string
   venue: string
   maxField: number
+  minimumFieldSize: number
+  inclusiveThresholds: boolean
+  requireQualifiedWin: boolean
+  minMinutesToJump: number
+  maxMinutesToJump: number
+  maxRank: number
+  positiveValueOnly: boolean
 }
 
 export const DEFAULT_SIMULATION_FILTERS: SimulationFilters = {
   enabled: true, minReliability: 0, minEdge: 0, minImplied: 0, maxImplied: 100,
   minWin: 0, minTop3: 50, model: '', rank: 0, minOdds: 0, maxOdds: 0,
-  source: '', venue: '', maxField: 0,
+  source: '', venue: '', maxField: 0, minimumFieldSize: 0, inclusiveThresholds: false,
+  requireQualifiedWin: false, minMinutesToJump: 0, maxMinutesToJump: 0, maxRank: 3, positiveValueOnly: false,
 }
 
 export interface SimulationSettings {
@@ -116,16 +127,25 @@ export function simulationCandidates(races: SimulationRace[]): SimulationBet[] {
 
 export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationFilters): boolean {
   const selection = bet.selection
+  const passes = (value: number | null, threshold: number) => value !== null && (filter.inclusiveThresholds ? value >= threshold : value > threshold)
+  const evaluatedAt = selection.evaluatedAt ?? (bet.source === 'tab' ? selection.tabCapturedAt : null)
+  const minutesToJump = (Date.parse(bet.race.start) - Date.parse(evaluatedAt ?? '')) / 60_000
   return filter.enabled
     && (!filter.model || selection.model === filter.model)
     && (!filter.rank || selection.rank === filter.rank)
+    && (filter.maxRank ? selection.rank <= filter.maxRank : selection.fullField === true)
     && (!filter.source || bet.source === filter.source)
     && (!filter.venue || bet.race.venue === filter.venue)
     && (!filter.maxField || bet.race.fieldSize < filter.maxField)
+    && (!filter.minimumFieldSize || bet.race.fieldSize >= filter.minimumFieldSize)
+    && (!filter.requireQualifiedWin || selection.qualifiedWin === true)
+    && (!filter.positiveValueOnly || (bet.probability !== null && bet.probability > 0 && bet.probability < 1 && bet.odds !== null && bet.odds > 1 && bet.probability * bet.odds > 1))
+    && (!filter.minMinutesToJump || (Number.isFinite(minutesToJump) && minutesToJump >= filter.minMinutesToJump))
+    && (!filter.maxMinutesToJump || (Number.isFinite(minutesToJump) && minutesToJump <= filter.maxMinutesToJump))
     && (!filter.minReliability || (selection.reliability !== null && selection.reliability >= filter.minReliability))
-    && (filter.minEdge === -100 || (bet.edge !== null && bet.edge > filter.minEdge))
-    && (!filter.minTop3 || (selection.top3Probability !== null && selection.top3Probability * 100 > filter.minTop3))
-    && (!filter.minWin || (selection.winProbability !== null && selection.winProbability * 100 > filter.minWin))
+    && (filter.minEdge === -100 || passes(bet.edge, filter.minEdge))
+    && (!filter.minTop3 || passes(selection.top3Probability === null ? null : selection.top3Probability * 100, filter.minTop3))
+    && (!filter.minWin || passes(selection.winProbability === null ? null : selection.winProbability * 100, filter.minWin))
     && (!filter.minImplied || (bet.implied !== null && bet.implied * 100 >= filter.minImplied))
     && (filter.maxImplied === 100 || (bet.implied !== null && bet.implied * 100 <= filter.maxImplied))
     && (!filter.minOdds || (bet.odds !== null && bet.odds >= filter.minOdds))

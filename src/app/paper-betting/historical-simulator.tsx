@@ -2,10 +2,13 @@
 
 import { startTransition, useDeferredValue, useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { ChevronLeft, ChevronRight, Download, RefreshCw, RotateCcw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, History, RefreshCw, RotateCcw, TrendingUp } from 'lucide-react'
 import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationCandidates, type SimulationBet, type SimulationDataset, type SimulationFilters, type SimulationMarket, type SimulationSettings } from '@/lib/betting/historical-simulator'
 import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '@/lib/betting/simulation-report'
 import { DEFAULT_SIMULATION_SETTINGS, readSimulationPreferences, SIMULATION_PREFERENCES_KEY } from '@/lib/betting/simulation-preferences'
+import { StrategySettings } from './strategy-settings'
+import { legacySimulationPreset } from '@/lib/betting/simulation-presets'
+import { findProfitSuggestion, type ProfitSuggestion } from '@/lib/betting/simulation-optimizer'
 
 const amounts = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 const money = (amount: number) => new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(amount)
@@ -16,27 +19,42 @@ function Select({ label, value, onChange, children }: { label: string; value: st
   return <label className="min-w-0 text-xs font-medium text-slate-600">{label}<select aria-label={label} value={value} onChange={event => onChange(event.target.value)} className="mt-1 block h-9 w-full min-w-0 rounded border border-slate-300 bg-white px-2 text-sm text-slate-900">{children}</select></label>
 }
 
-function Filters({ market, value, setValue, models, venues }: { market: SimulationMarket; value: SimulationFilters; setValue: (value: SimulationFilters) => void; models: string[]; venues: string[] }) {
+function Filters({ market, value, setValue, models, venues, suggestion, searching }: { market: SimulationMarket; value: SimulationFilters; setValue: (value: SimulationFilters) => void; models: string[]; venues: string[]; suggestion: ProfitSuggestion | null; searching: boolean }) {
   const update = (key: keyof SimulationFilters, next: string | number | boolean) => setValue({ ...value, [key]: next })
+  const [notice, setNotice] = useState('')
+  const comparison = value.inclusiveThresholds ? '>=' : '>'
   return <fieldset className={`min-w-0 border-t-4 py-4 ${market === 'PLACE' ? 'border-teal-600' : 'border-amber-500'}`}>
     <legend className="sr-only">{market} filters</legend>
     <div className="mb-3 flex items-center justify-between"><label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={value.enabled} onChange={event => update('enabled', event.target.checked)} className="accent-teal-700" />{market}</label>
-      <button type="button" title={`Reset ${market} filters`} aria-label={`Reset ${market} filters`} onClick={() => setValue({ ...DEFAULT_SIMULATION_FILTERS })} className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 hover:bg-white"><RotateCcw size={15} /></button></div>
+      <div className="flex gap-2">
+        <button type="button" title={`Apply legacy internal ${market} policy`} aria-label={`Apply legacy internal ${market} policy`} onClick={() => { setValue(legacySimulationPreset(market)); setNotice('Legacy internal policy applied. Only frozen WIN qualification is accepted; full-field PLACE requires the updated report. Missing evidence is excluded.') }} className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 hover:bg-white"><History size={15} /></button>
+        <button type="button" title={`Apply historical profit ${market} preset`} aria-label={`Apply historical profit ${market} preset`} disabled={searching || !suggestion} onClick={() => { if (suggestion?.eligible && suggestion.filter) setValue({ ...suggestion.filter }); setNotice(suggestion?.reason ?? 'Report unavailable.') }} className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 hover:bg-white disabled:opacity-40"><TrendingUp size={15} /></button>
+        <button type="button" title={`Reset ${market} filters`} aria-label={`Reset ${market} filters`} onClick={() => { setValue({ ...DEFAULT_SIMULATION_FILTERS }); setNotice('') }} className="flex h-8 w-8 items-center justify-center rounded border border-slate-300 hover:bg-white"><RotateCcw size={15} /></button>
+      </div></div>
+    {notice && <p role="status" className="mb-3 text-xs text-slate-600">{notice}</p>}
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
       <Select label={`${market} model`} value={value.model} onChange={next => update('model', next)}><option value="">All models</option>{value.model && !models.includes(value.model) && <option value={value.model}>{value.model} (unavailable)</option>}{models.map(model => <option key={model}>{model}</option>)}</Select>
       <Select label={`${market} reliability`} value={value.minReliability} onChange={next => update('minReliability', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `${amount}+ (pre-race)` : 'Any / unavailable'}</option>)}</Select>
-      <Select label={`${market} edge`} value={value.minEdge} onChange={next => update('minEdge', Number(next))}><option value={-100}>Any / unavailable</option>{[-20, -15, -10, -5, -2, 0, 2, 5, 10, 15, 20].map(amount => <option key={amount} value={amount}>{`> ${amount} pts`}</option>)}</Select>
-      <Select label={`${market} win probability`} value={value.minWin} onChange={next => update('minWin', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `> ${amount}%` : 'Any'}</option>)}</Select>
-      <Select label={`${market} top-three probability`} value={value.minTop3} onChange={next => update('minTop3', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `> ${amount}%` : 'Any'}</option>)}</Select>
-      <Select label={`${market} predicted rank`} value={value.rank} onChange={next => update('rank', Number(next))}><option value={0}>All three</option>{[1, 2, 3].map(rank => <option key={rank} value={rank}>{rank}</option>)}</Select>
+      <Select label={`${market} edge`} value={value.minEdge} onChange={next => update('minEdge', Number(next))}><option value={-100}>Any / unavailable</option>{[-20, -15, -10, -5, -2, 0, 2, 5, 10, 15, 20].map(amount => <option key={amount} value={amount}>{`${comparison} ${amount} pts`}</option>)}</Select>
+      <Select label={`${market} win probability`} value={value.minWin} onChange={next => update('minWin', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `${comparison} ${amount}%` : 'Any'}</option>)}</Select>
+      <Select label={`${market} top-three probability`} value={value.minTop3} onChange={next => update('minTop3', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount ? `${comparison} ${amount}%` : 'Any'}</option>)}</Select>
+      <Select label={`${market} predicted rank`} value={value.rank} onChange={next => update('rank', Number(next))}><option value={0}>Any within scope</option>{[1, 2, 3].map(rank => <option key={rank} value={rank}>{rank}</option>)}</Select>
       <Select label={`${market} implied minimum`} value={value.minImplied} onChange={next => update('minImplied', Number(next))}>{amounts.map(amount => <option key={amount} value={amount}>{amount}%</option>)}</Select>
       <Select label={`${market} implied maximum`} value={value.maxImplied} onChange={next => update('maxImplied', Number(next))}>{[...amounts.slice(1), 100].map(amount => <option key={amount} value={amount}>{amount}%</option>)}</Select>
       <Select label={`${market} odds source`} value={value.source} onChange={next => update('source', next)}><option value="">All recorded prices</option><option value="tab">TAB near-start</option><option value="racing_com">Racing.com recorded</option></Select>
       <Select label={`${market} minimum odds`} value={value.minOdds} onChange={next => update('minOdds', Number(next))}>{[0, 1.5, 2, 3, 5, 10].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
-      <Select label={`${market} maximum odds`} value={value.maxOdds} onChange={next => update('maxOdds', Number(next))}>{[0, 2, 3, 5, 10, 20, 50].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
+      <Select label={`${market} maximum odds`} value={value.maxOdds} onChange={next => update('maxOdds', Number(next))}>{[0, 2, 3, 5, 10, 15, 20, 50].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
       <Select label={`${market} field size`} value={value.maxField} onChange={next => update('maxField', Number(next))}>{[0, 5, 8, 10, 12, 16].map(amount => <option key={amount} value={amount}>{amount ? `< ${amount} starters` : 'Any'}</option>)}</Select>
+      <Select label={`${market} minimum field size`} value={value.minimumFieldSize} onChange={next => update('minimumFieldSize', Number(next))}>{[0, 5, 8, 10, 12, 16].map(amount => <option key={amount} value={amount}>{amount ? `${amount}+ starters` : 'Any'}</option>)}</Select>
+      <Select label={`${market} runner scope`} value={value.maxRank} onChange={next => update('maxRank', Number(next))}><option value={3}>Predicted top three</option><option value={0}>Complete forecast field</option></Select>
+      <Select label={`${market} minimum minutes to jump`} value={value.minMinutesToJump} onChange={next => update('minMinutesToJump', Number(next))}>{[0, 1, 2, 5, 10, 15, 30, 60, 180].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
+      <Select label={`${market} maximum minutes to jump`} value={value.maxMinutesToJump} onChange={next => update('maxMinutesToJump', Number(next))}>{[0, 1, 2, 5, 10, 15, 30, 60, 180].map(amount => <option key={amount} value={amount}>{amount || 'Any'}</option>)}</Select>
+      <label className="flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" checked={value.inclusiveThresholds} onChange={event => update('inclusiveThresholds', event.target.checked)} />Inclusive edge / probability floors</label>
+      <label className="flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" checked={value.requireQualifiedWin} onChange={event => update('requireQualifiedWin', event.target.checked)} />Verified pre-race WIN qualification</label>
+      <label className="flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" checked={value.positiveValueOnly} onChange={event => update('positiveValueOnly', event.target.checked)} />Positive expected value only</label>
       <div className="col-span-2 sm:col-span-3"><Select label={`${market} venue`} value={value.venue} onChange={next => update('venue', next)}><option value="">All venues</option>{value.venue && !venues.includes(value.venue) && <option value={value.venue}>{value.venue} (unavailable)</option>}{venues.map(venue => <option key={venue}>{venue}</option>)}</Select></div>
     </div>
+    <p className="mt-3 text-xs text-slate-600">{searching ? 'Evaluating historical profit...' : suggestion ? `${suggestion.reason} Training: ${money(suggestion.trainProfit)} / ${suggestion.trainRaces} races. Holdout: ${money(suggestion.holdoutProfit)} / ${suggestion.holdoutRaces} races${suggestion.splitDate ? ` from ${suggestion.splitDate}` : ''}. ${suggestion.tested} configurations tested.` : 'Profit research awaits a published report.'}</p>
   </fieldset>
 }
 
@@ -66,6 +84,21 @@ export function HistoricalSimulator() {
   const [sort, setSort] = useState('start')
   const [pageNumber, setPageNumber] = useState(0)
   const [preferencesReady, setPreferencesReady] = useState(false)
+  const [suggestions, setSuggestions] = useState<Record<SimulationMarket, ProfitSuggestion | null>>({ WIN: null, PLACE: null })
+  const [searching, setSearching] = useState(false)
+  useEffect(() => {
+    if (!dataset) return
+    let cancelled = false
+    startTransition(() => { setSearching(true); setSuggestions({ WIN: null, PLACE: null }) })
+    async function research() {
+      const races = dataset!.races.slice(0, count)
+      const WIN = await findProfitSuggestion(races, 'WIN', settings, () => cancelled)
+      const PLACE = await findProfitSuggestion(races, 'PLACE', settings, () => cancelled)
+      if (!cancelled) startTransition(() => { setSuggestions({ WIN, PLACE }); setSearching(false) })
+    }
+    void research().catch(() => { if (!cancelled) startTransition(() => setSearching(false)) })
+    return () => { cancelled = true }
+  }, [dataset, settings, count])
   useEffect(() => {
     let saved: string | null = null
     try { saved = window.localStorage.getItem(SIMULATION_PREFERENCES_KEY) } catch {}
@@ -129,6 +162,7 @@ export function HistoricalSimulator() {
       <button type="button" title="Refresh report" aria-label="Refresh report" disabled={loading} onClick={() => setRefresh(value => value + 1)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 bg-white disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
     </div>
     {error && <p role="alert" className="border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-950">{error}{dataset ? ' Showing the last successfully loaded report.' : ''}</p>}
+    <StrategySettings preferences={{ schema: 1, filters, settings, count, sort }} onLoad={value => { setFilters(value.filters); setSettings(value.settings); setCount(value.count); setSort(value.sort); setPageNumber(0) }} />
     <div className="border-y border-slate-200 py-4"><div className="grid grid-cols-2 gap-4 md:grid-cols-5">
       <Select label="Completed races" value={count} onChange={value => { setCount(Number(value)); setPageNumber(0) }}>{[100, 250, 500, 1000].map(value => <option key={value}>{value}</option>)}</Select>
       <label className="text-xs font-medium text-slate-600">Starting bankroll per model<input aria-label="Starting bankroll per model" type="number" min="0" step="50" value={settings.startingBankroll} onChange={event => updateSetting('startingBankroll', Math.max(0, Number(event.target.value)))} className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-2 text-sm text-slate-900" /></label>
@@ -136,8 +170,9 @@ export function HistoricalSimulator() {
       <label className="text-xs font-medium text-slate-600">Flat stake ($)<input aria-label="Flat stake" type="number" min="0" step="1" disabled={settings.method !== 'flat'} value={settings.flatStake} onChange={event => updateSetting('flatStake', Math.max(0, Number(event.target.value)))} className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-2 text-sm text-slate-900 disabled:opacity-40" /></label>
       <Select label="Stake percentage" value={settings.stakePercent} onChange={value => updateSetting('stakePercent', Number(value))}>{[0.5, 1, 2, 3, 5, 10].map(value => <option key={value} value={value}>{value}%</option>)}</Select>
     </div></div>
-    <div className="grid gap-x-8 lg:grid-cols-2">{(['WIN', 'PLACE'] as const).map(market => <Filters key={market} market={market} value={filters[market]} setValue={value => updateFilter(market, value)} models={dataset?.models ?? []} venues={venues} />)}</div>
-    <p className="border-l-4 border-slate-300 pl-3 text-xs leading-relaxed text-slate-600">Recorded-price simulation, not actual TAB settlements or guaranteed executable returns. TAB quotes must be from the final 10 minutes before scheduled start and at most two minutes old when captured; they are not official closing prices. Historical reliability was not frozen and is unavailable. PLACE value is limited to unchanged fields paying three places. Each race settles before the next is replayed; overlapping races and database ingestion delays do not reserve cash. Each model has its own bankroll. No real or paper bets are placed.</p>
+    <div className="grid gap-x-8 lg:grid-cols-2">{(['WIN', 'PLACE'] as const).map(market => <Filters key={market} market={market} value={filters[market]} setValue={value => updateFilter(market, value)} models={dataset?.models ?? []} venues={venues} suggestion={suggestions[market]} searching={searching} />)}</div>
+    <p className="text-xs text-slate-600">Legacy presets track the internal policy constants, not the separate PuntersEdge consensus model. Old WIN qualification is unavailable; new observer runs freeze pre-race evidence. Time filters require a frozen evaluation or recorded TAB capture. Full-field replay needs the updated source migration and report. Suggestions refresh with report data and staking; saved strategies and real-betting drafts never update automatically.</p>
+    <p className="border-l-4 border-slate-300 pl-3 text-xs leading-relaxed text-slate-600">Recorded-price simulation, not actual TAB settlements or guaranteed executable returns. TAB quotes must be from the final 10 minutes before scheduled start and at most two minutes old when captured; they are not official closing prices. Reliability is available only from frozen pre-race observations. PLACE value is limited to unchanged fields paying three places. Each race settles before the next is replayed; overlapping races and database ingestion delays do not reserve cash. Each model has its own bankroll. No real or paper bets are placed.</p>
     <section aria-label="Simulation results" className="border-y border-slate-200 bg-white py-5">
       <div className="grid grid-cols-2 gap-4 px-4 md:grid-cols-4">{[
         ['Settled bets', String(settled)], ['Total stake', money(stake)], ['Net profit', money(profit)], ['Filtered ROI', percent(stake ? profit / stake * 100 : null)],

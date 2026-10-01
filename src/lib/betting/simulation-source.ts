@@ -3,6 +3,7 @@ import type { SimulationRace, SimulationSelection } from './historical-simulator
 import { isSimulationTabQuote } from './historical-simulator'
 import { normalizeHorseName } from '../paper-betting/fundamentals-bridge'
 import type { TabPrice } from '../paper-betting/internal-tab-odds'
+import type { SimulationEvidence } from './simulation-evidence'
 
 export interface SimulationSource {
   id: string
@@ -12,7 +13,7 @@ export interface SimulationSource {
   state: string
   number: number
   entries: Array<{ horse_id: string; position: number | null; status: string }>
-  forecasts: Array<{ id: string; model: string; predictedAt: string; createdAt: string; podium: PredictedHorse[]; field: string[] }>
+  forecasts: Array<{ id: string; model: string; predictedAt: string; createdAt: string; podium: PredictedHorse[]; allHorses?: PredictedHorse[]; evidence?: SimulationEvidence | null; field: string[] }>
 }
 
 function probability(value: number | undefined): number | null {
@@ -39,7 +40,15 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
     models.add(forecast.model)
     const matchingField = Array.isArray(forecast.field) && forecast.field.length === field.size && forecast.field.every(horseId => field.has(horseId)) && new Set(forecast.field).size === field.size
     const seen = new Set<string>()
-    for (const [index, horse] of (forecast.podium ?? []).slice(0, 3).entries()) {
+    const podium = (forecast.podium ?? []).slice(0, 3)
+    const evidence = forecast.evidence
+    const verifiedEvidence = evidence && matchingField && evidence.predictionId === forecast.id && evidence.horseId === podium[0]?.horse_id
+      && Number.isFinite(evidence.reliability) && evidence.reliability >= 0 && evidence.reliability <= 100 && typeof evidence.qualifiedWin === 'boolean'
+      && Date.parse(evidence.capturedAt) >= Date.parse(forecast.createdAt) && Date.parse(evidence.capturedAt) >= Date.parse(forecast.predictedAt)
+      && Date.parse(evidence.capturedAt) < Date.parse(source.start) ? evidence : null
+    const remaining = (forecast.allHorses ?? []).filter(horse => !podium.some(top => top.horse_id === horse.horse_id)).sort((left, right) => left.predicted_position - right.predicted_position)
+    const fullField = matchingField && forecast.allHorses?.length === field.size && new Set(forecast.allHorses.map(horse => horse.horse_id)).size === field.size && forecast.allHorses.every(horse => field.has(horse.horse_id))
+    for (const [index, horse] of [...podium, ...remaining].entries()) {
       if (!horse.horse_id || seen.has(horse.horse_id)) continue
       seen.add(horse.horse_id)
       const candidate = tabPrices.get(normalizeHorseName(horse.horse_name))
@@ -52,7 +61,9 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       selections.push({
         id: horse.horse_id, horse: horse.horse_name, model: forecast.model, rank: index + 1,
         predictedAt: forecast.predictedAt, winProbability: probability(horse.win_probability), top3Probability: probability(horse.top3_probability),
-        reliability: null,
+        reliability: verifiedEvidence?.horseId === horse.horse_id ? verifiedEvidence.reliability : null,
+        qualifiedWin: verifiedEvidence ? verifiedEvidence.horseId === horse.horse_id && verifiedEvidence.qualifiedWin : null,
+        evaluatedAt: verifiedEvidence?.capturedAt ?? null, fullField: !!fullField,
         winOdds: tabWin ?? odds(horse.win_odds_source === 'tab' ? undefined : horse.win_odds),
         placeOdds: tabPlace ?? odds(horse.place_odds_source === 'tab' ? undefined : horse.place_odds),
         winSource: tabWin !== null ? 'tab' : horse.win_odds_source ?? 'racing_com',

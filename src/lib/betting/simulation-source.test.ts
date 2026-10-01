@@ -38,3 +38,20 @@ it('excludes changed fields, dead heats, incomplete results and two-place market
   const small = { ...source, entries: source.entries.slice(0, 7), forecasts: [{ ...source.forecasts[0], field: source.forecasts[0].field.slice(0, 7) }] }
   expect(buildSimulationRace(small).selections[0]).toMatchObject({ winIssue: null, placeIssue: 'Top-three probability does not match paid places' })
 })
+
+it('includes all forecast runners only when supplied and marks complete full-field coverage', () => {
+  const allHorses = source.entries.map((entry, index) => ({ ...source.forecasts[0].podium[0], horse_id: entry.horse_id, predicted_position: index + 1 }))
+  const race = buildSimulationRace({ ...source, forecasts: [{ ...source.forecasts[0], allHorses }] })
+  expect(race.selections).toHaveLength(8)
+  expect(race.selections.every(selection => selection.fullField)).toBe(true)
+  expect(buildSimulationRace(source).selections.every(selection => !selection.fullField)).toBe(true)
+})
+
+it('accepts only matching genuinely pre-race frozen qualification evidence', () => {
+  const evidence = { predictionId: 'forecast', horseId: 'horse-0', capturedAt: '2026-09-01T00:50:00Z', reliability: 85, qualifiedWin: true }
+  const build = (override = {}) => buildSimulationRace({ ...source, forecasts: [{ ...source.forecasts[0], evidence: { ...evidence, ...override } }] }).selections[0]
+  expect(build()).toMatchObject({ reliability: 85, qualifiedWin: true, evaluatedAt: evidence.capturedAt })
+  for (const override of [{ capturedAt: source.start }, { capturedAt: '2026-08-31T00:00:00Z' }, { predictionId: 'other' }, { horseId: 'other' }]) {
+    expect(build(override)).toMatchObject({ reliability: null, qualifiedWin: null, evaluatedAt: null })
+  }
+})
