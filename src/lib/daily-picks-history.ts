@@ -1,10 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { readPages } from './supabase/read-pages'
-import type { Prediction, Race, RaceWithPrediction } from '@/lib/types'
-import { CURRENT_MODEL_VERSIONS, PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
-import { candidatesForDate, melbourneDateKey, type DailyPick, type DailyPicksFilterOptions } from '@/lib/daily-picks'
+import type { Prediction, Race } from './types'
+import { PRODUCTION_MODEL_VERSION } from './prediction-suite'
+import { candidatesForDate, DEFAULT_PICKS_MIN_PCT, DEFAULT_PICKS_SORT, melbourneDateKey, sortDailyPicks, type DailyPick } from './daily-picks'
+import type { HomePicksArchive } from './home-picks-archive'
 
 export interface HistoricalDailyPick extends DailyPick {
+  provenance: 'home-snapshot' | 'pre-race-recovery'
+  observedAt: string
+  predictionId: string
   actualPosition: number | null
   scratched: boolean
   won: boolean
@@ -16,144 +20,99 @@ export interface DailyPicksHistoryDay {
   picks: HistoricalDailyPick[]
 }
 
-export interface DailyPicksHistoryOptions extends DailyPicksFilterOptions {
-  /** How many days back (Melbourne time) to reconstruct picks for. */
+export interface DailyPicksHistoryOptions {
   days?: number
 }
 
-/**
- * Reconstructs what the daily shortlist would have shown on each past day, using the same
- * ranking logic as the live homepage but against completed races and their retrospective
- * predictions, then joins in the actual finishing result for every picked horse. There is no
- * stored record of exactly what was rendered live each day, so this is a faithful replay rather
- * than a literal historical log - it can only differ from what was actually shown if a race's
- * runners changed after the live prediction was generated (which retrospective predictions
- * already account for).
- */
-export async function loadDailyPicksHistory(
-  supabase: SupabaseClient,
-  options: DailyPicksHistoryOptions = {},
-): Promise<DailyPicksHistoryDay[]> {
-  const days = options.days ?? 14
+export async function loadDailyPicksHistory(db: SupabaseClient, options: DailyPicksHistoryOptions = {}): Promise<DailyPicksHistoryDay[]> {
   const now = new Date()
-  const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
-
+  const since = new Date(now.getTime() - (options.days ?? 7) * 86_400_000)
   const races = await readPages((after, limit) => {
-    let query = supabase.from('races').select('*, racecourses(*)').eq('status', 'completed')
+    let query = db.from('races').select('*, racecourses(*)').eq('status', 'completed')
       .gte('race_datetime', since.toISOString()).lte('race_datetime', now.toISOString()).order('id').limit(limit)
     if (after) query = query.gt('id', after)
     return query
+  }) as Race[]
+  if (!races.length) return []
+  const raceById = new Map(races.map(race => [race.id, race]))
+  const archives = await readPages((after, limit) => {
+    let query = db.from('analysis_snapshots').select('id, payload, generated_at').like('kind', 'home-picks-v1:%')
+      .gte('generated_at', new Date(since.getTime() - 2 * 86_400_000).toISOString()).lte('generated_at', now.toISOString()).order('id').limit(limit)
+    if (after) query = query.gt('id', after)
+    return query
   })
-  const typedRaces = (races ?? []) as Race[]
-  if (typedRaces.length === 0) return []
-
-  const raceIds = typedRaces.map((race) => race.id)
-
-  // A large date range can cover hundreds of races - chunk the .in() lookups so the request URL
-  // never grows large enough to trip a "Bad Request" from Postgrest/the edge proxy, AND so no
-  // single query's IN() list is large enough to risk a Postgres statement timeout on its own
-  // (confirmed live via Vercel's function logs 2026-09-10: a real `57014 canceling statement due
-  // to statement timeout` from Supabase, not just a slow page - a smaller chunk directly reduces
-  // the cost of each individual statement, not just the total wall-clock time across all of them).
-  const CHUNK_SIZE = 10
-  const chunks: string[][] = []
-  for (let offset = 0; offset < raceIds.length; offset += CHUNK_SIZE) {
-    chunks.push(raceIds.slice(offset, offset + CHUNK_SIZE))
-  }
-
-  const predictionRows: Array<{ id: string; race_id: string; model_version: string; predicted_at: string; podium: Prediction['predictions']['podium'] | null }> = []
-  const entryRows: Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }> = []
-  const CONCURRENT_CHUNK_BATCH = 1
-  for (let i = 0; i < chunks.length; i += CONCURRENT_CHUNK_BATCH) {
-    const batch = chunks.slice(i, i + CONCURRENT_CHUNK_BATCH)
-    const batchResults = await Promise.all(batch.map((chunk) => Promise.all([
-      // Only the podium (top 3) is ever read from a prediction on this page (see candidatesForDate/
-      // historyStarts) - selecting the full jsonb `predictions` payload (which can include a large
-      // all_horses array and per-horse feature_snapshots) was slow enough at this table's current
-      // size to trip a Postgres statement timeout and break this whole page (fixed 2026-09-09).
-      readPages((after, limit) => {
-        let query = supabase.from('predictions').select('id, race_id, model_version, predicted_at, podium:predictions->podium')
-          .in('race_id', chunk).in('model_version', CURRENT_MODEL_VERSIONS.map(version => `${version}-retrospective`)).order('id').limit(limit)
-        if (after) query = query.gt('id', after)
-        return query
-      }),
-      readPages((after, limit) => {
-        let query = supabase.from('race_entries').select('id, race_id, horse_id, finishing_position, status')
-          .in('race_id', chunk).order('id').limit(limit)
-        if (after) query = query.gt('id', after)
-        return query
-      }),
-    ])))
-    for (const [predictionResult, entryResult] of batchResults) {
-      predictionRows.push(...(predictionResult as typeof predictionRows))
-      entryRows.push(...entryResult)
+  const coveredDates = new Map<string, number>()
+  const selected = new Map<string, HistoricalDailyPick>()
+  for (const row of archives.sort((left, right) => left.generated_at.localeCompare(right.generated_at) || left.id.localeCompare(right.id))) {
+    const archive = row.payload as HomePicksArchive
+    if (archive.schema !== 1 || !Array.isArray(archive.picks) || !Array.isArray(archive.dateKeys)) throw new Error('Invalid home picks archive')
+    for (const dateKey of archive.dateKeys) {
+      const recordedAt = Date.parse(row.generated_at)
+      coveredDates.set(dateKey, Math.min(coveredDates.get(dateKey) ?? Infinity, recordedAt))
+    }
+    for (const pick of archive.picks) {
+      const key = `${pick.race.id}|${pick.horse.horse_id}`
+      if (!raceById.has(pick.race.id) || selected.has(key) || !(Date.parse(pick.observedAt) < Date.parse(pick.race.race_datetime))) continue
+      selected.set(key, { ...pick, actualPosition: null, scratched: false, won: false, placedTop3: false })
     }
   }
 
-  // Completed races must use retrospective predictions (built only from pre-race history) -
-  // the live predictions for the same race can be stale (e.g. still including a horse that was
-  // scratched afterwards). Mirrors the same preference used on the race detail page.
-  const modelsByRace = new Map<string, Prediction[]>()
-  predictionRows.sort((left, right) => right.predicted_at.localeCompare(left.predicted_at) || right.id.localeCompare(left.id))
-  for (const row of predictionRows) {
-    if (!row.model_version.includes('retrospective') || !row.podium?.length) continue
-    const baseVersion = row.model_version.replace('-retrospective', '')
-    if (!CURRENT_MODEL_VERSIONS.includes(baseVersion)) continue
-    const models = modelsByRace.get(row.race_id) ?? []
-    if (models.some((model) => model.model_version.replace('-retrospective', '') === baseVersion)) continue
-    // historyStarts/all_horses/confidence_scores/predicted_times are never read from a
-    // reconstructed historical pick (see PickCard/candidatesForDate) - only podium is needed here.
-    models.push({
-      id: row.id,
-      race_id: row.race_id,
-      model_version: row.model_version,
-      predicted_at: row.predicted_at,
-      predictions: { podium: row.podium, all_horses: [] },
-      confidence_scores: { overall: 0 },
-      predicted_times: {},
+  const entryRows: Array<{ race_id: string; horse_id: string; finishing_position: number | null; status: string }> = []
+  const forecasts: Array<{ id: string; race_id: string; model_version: string; predicted_at: string; created_at: string; podium: Prediction['predictions']['podium'] | null }> = []
+  const raceIds = races.map(race => race.id)
+  for (let offset = 0; offset < raceIds.length; offset += 10) {
+    const chunk = raceIds.slice(offset, offset + 10)
+    const recoveryIds = chunk.filter(id => {
+      const race = raceById.get(id)!
+      return !((coveredDates.get(melbourneDateKey(race.race_datetime)) ?? Infinity) < Date.parse(race.race_datetime))
     })
-    modelsByRace.set(row.race_id, models)
+    const [predictionRows, entries] = await Promise.all([
+      recoveryIds.length ? readPages((after, limit) => {
+        let query = db.from('predictions').select('id, race_id, model_version, predicted_at, created_at, podium:predictions->podium')
+          .in('race_id', recoveryIds).eq('model_version', PRODUCTION_MODEL_VERSION).order('id').limit(limit)
+        if (after) query = query.gt('id', after)
+        return query
+      }) : Promise.resolve([]),
+      readPages((after, limit) => {
+        let query = db.from('race_entries').select('id, race_id, horse_id, finishing_position, status').in('race_id', chunk).order('id').limit(limit)
+        if (after) query = query.gt('id', after)
+        return query
+      }),
+    ])
+    forecasts.push(...predictionRows as typeof forecasts)
+    entryRows.push(...entries)
   }
 
-  const racesWithPredictions: RaceWithPrediction[] = typedRaces.map((race) => {
-    const models = modelsByRace.get(race.id) ?? []
-    const primary = models.find((model) => model.model_version.replace('-retrospective', '') === PRODUCTION_MODEL_VERSION)
-      ?? models[0]
-      ?? null
-    return { ...race, prediction: primary, model_predictions: models }
-  })
-
-  const resultByRaceHorse = new Map<string, { finishingPosition: number | null; scratched: boolean }>()
-  for (const entry of entryRows) {
-    resultByRaceHorse.set(`${entry.race_id}|${entry.horse_id}`, {
-      finishingPosition: entry.finishing_position,
-      scratched: entry.status === 'scratched',
-    })
+  for (const forecast of forecasts.sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))) {
+    const race = raceById.get(forecast.race_id)
+    if (!race || forecast.model_version !== PRODUCTION_MODEL_VERSION || !forecast.podium?.length) continue
+    const start = Date.parse(race.race_datetime)
+    if (!(Date.parse(forecast.predicted_at) < start && Date.parse(forecast.created_at) < start)) continue
+    const prediction: Prediction = {
+      id: forecast.id, race_id: race.id, model_version: forecast.model_version, predicted_at: forecast.predicted_at,
+      predictions: { podium: forecast.podium, all_horses: [] }, confidence_scores: { overall: 0 }, predicted_times: {},
+    }
+    const [pick] = candidatesForDate([{ ...race, prediction, model_predictions: [] }], melbourneDateKey(race.race_datetime), { skipQualificationGate: true })
+    if (!pick || !Number.isFinite(pick.winProbability) || pick.winProbability < DEFAULT_PICKS_MIN_PCT / 100 || pick.winProbability > 1) continue
+    const key = `${race.id}|${pick.horse.horse_id}`
+    if (selected.has(key)) continue
+    selected.set(key, { ...pick, provenance: 'pre-race-recovery', observedAt: forecast.created_at, predictionId: forecast.id,
+      actualPosition: null, scratched: false, won: false, placedTop3: false })
   }
 
-  const racesByDate = new Map<string, RaceWithPrediction[]>()
-  for (const race of racesWithPredictions) {
-    const dateKey = melbourneDateKey(race.race_datetime)
-    const bucket = racesByDate.get(dateKey) ?? []
-    bucket.push(race)
-    racesByDate.set(dateKey, bucket)
+  const results = new Map(entryRows.map(entry => [`${entry.race_id}|${entry.horse_id}`, entry]))
+  const days = new Map<string, HistoricalDailyPick[]>()
+  for (const [key, pick] of selected) {
+    const result = results.get(key)
+    const actualPosition = result?.finishing_position ?? null
+    const scratched = result?.status === 'scratched'
+    const dateKey = melbourneDateKey(pick.race.race_datetime)
+    const picks = days.get(dateKey) ?? []
+    picks.push({ ...pick, actualPosition, scratched, won: !scratched && actualPosition === 1,
+      placedTop3: !scratched && actualPosition !== null && actualPosition >= 1 && actualPosition <= 3 })
+    days.set(dateKey, picks)
   }
-
-  const days_: DailyPicksHistoryDay[] = []
-  for (const [dateKey, racesForDate] of racesByDate) {
-    const picks = candidatesForDate(racesForDate, dateKey, options).slice(0, 3).map((pick): HistoricalDailyPick => {
-      const result = resultByRaceHorse.get(`${pick.race.id}|${pick.horse.horse_id}`)
-      const finishingPosition = result?.finishingPosition ?? null
-      return {
-        ...pick,
-        actualPosition: finishingPosition,
-        scratched: result?.scratched ?? false,
-        won: finishingPosition === 1,
-        placedTop3: finishingPosition !== null && finishingPosition <= 3,
-      }
-    })
-    if (picks.length) days_.push({ dateKey, picks })
-  }
-
-  return days_.sort((left, right) => right.dateKey.localeCompare(left.dateKey))
+  return [...days].sort(([left], [right]) => right.localeCompare(left)).map(([dateKey, picks]) => ({
+    dateKey, picks: sortDailyPicks(picks, DEFAULT_PICKS_SORT) as HistoricalDailyPick[],
+  }))
 }

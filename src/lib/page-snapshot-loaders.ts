@@ -73,9 +73,7 @@ export async function loadValidationSnapshot(db: SupabaseClient) {
 }
 
 export async function loadPicksHistorySnapshot(db: SupabaseClient) {
-  const context = await loadReliabilityContext(db, true)
-  if (!context) throw new Error('Reliability context not yet available')
-  return loadDailyPicksHistory(db, { ...context, days: 7 })
+  return loadDailyPicksHistory(db, { days: 7 })
 }
 
 export const pageLoaders = {

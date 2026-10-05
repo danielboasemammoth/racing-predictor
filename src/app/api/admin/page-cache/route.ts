@@ -17,5 +17,6 @@ export async function POST(request: Request) {
   const results = await refreshPageCache(createAdminClient(), [key as PageCacheKey])
   const success = results.every(result => result.ok)
   if (success) revalidateTag('page-snapshots', 'max')
-  return NextResponse.json({ success, message: success ? `Published ${key} snapshot` : `Kept previous ${key} snapshot; refresh failed`, results }, { status: success ? 200 : 503 })
+  const archiveFailed = results.some(result => result.code === 'HOME_ARCHIVE_FAILED')
+  return NextResponse.json({ success, message: success ? `Published ${key} snapshot` : archiveFailed ? 'Home snapshot published, but shortlist archive failed' : `Kept previous ${key} snapshot; refresh failed`, results }, { status: success ? 200 : 503 })
 }

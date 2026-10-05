@@ -24,6 +24,20 @@ Home also stores `tabRaceIds`, confirmed against TAB's public VIC-jurisdiction s
 
 ## Bootstrap and Recovery
 
+### Past Picks Provenance
+
+Past Picks previously rebuilt a reliability-ranked top three from retrospective predictions and recalculated reliability. This was not the home-page history: the home page uses saved reliability, TAB eligibility and an uncapped default list sorted by win probability with a 50% floor. A race without a retrospective forecast could disappear entirely.
+
+Successful home publications now append immutable `analysis_snapshots` rows keyed `home-picks-v1:<home-generation>`. They contain compact default-shortlist picks, their original probabilities/reliability, prediction IDs and observation times for today/tomorrow in Melbourne. Started races and retrospective forecasts are excluded. Ignored older generations and failed home publications do not produce archive rows. An archive-write failure after a successful home write reports `HOME_ARCHIVE_FAILED`; the home page has advanced but archive coverage has a gap. Publication is not proof that a particular visitor viewed that generation.
+
+History joins final results onto the first archived appearance per race/horse. It preserves scratched selections, does not cap the list at three, and does not recalculate reliability using later outcomes. Custom home URL filters and later forecast changes can differ from that first default appearance. Coverage starts at activation; enabling it after a race starts does not suppress recovery of that earlier race.
+
+For older races without archive coverage, the loader separately labels the first production forecast per race/horse to meet the 50% win floor as `Recovered pre-race forecast`. Both prediction and database creation times must precede race start. Original reliability, conservative qualification, TAB eligibility and actual home-page display remain unknown. These recovered forecasts are excluded from recorded-home-pick performance rates; no retrospective forecast or current calibration is used to fill the gap.
+
+October 3 example verified from stored data: Toowoomba R1, Thundering Soul, forecast `c012db83-b626-474d-b6ca-0c875b78395f`, predicted `2026-10-02T20:06:52.061Z`, win probability 50.289%, top-three 63.981%, finished first. The production retrospective forecast was absent. The reported original 83/100 reliability was not retained in that forecast and is not fabricated. The read-only reproducer is `npx tsx --env-file=.env.local scripts/diagnose-picks-history.ts --history`.
+
+No migration is needed. After deployment, refresh `home picks-history` with the normal CLI below. Hourly home publication then records new observations, while the existing morning maintenance schedule refreshes Past Picks. No predictions, results or financial settings are rewritten.
+
 After building the updated app, bootstrap all snapshots from the project root:
 
 ```powershell

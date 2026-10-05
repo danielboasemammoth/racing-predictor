@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPageSnapshotReader, createPageSnapshotStore, refreshPageSnapshot, type PageSnapshotStore } from './page-cache'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { recordHomePicks } from './home-picks-archive'
 
-afterEach(() => vi.restoreAllMocks())
+vi.mock('./home-picks-archive', () => ({ recordHomePicks: vi.fn() }))
+
+afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
 describe('persisted page snapshots', () => {
   it('disables automatic retries on latency-bounded snapshot reads', async () => {
@@ -41,10 +44,33 @@ describe('persisted page snapshots', () => {
 
   it('conditionally updates only older generations and never overwrites on an insert conflict', async () => {
     const query = { update: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), lt: vi.fn().mockReturnThis(),
-      select: vi.fn().mockResolvedValue({ data: [], error: null }), upsert: vi.fn().mockResolvedValue({ error: null }) }
+      select: vi.fn().mockResolvedValue({ data: [], error: null }), upsert: vi.fn().mockReturnThis() }
     const db = { from: vi.fn(() => query) } as unknown as SupabaseClient
     await createPageSnapshotStore(db).publish('home', { generatedAt: '2026-09-21T00:00:00Z', data: [] })
     expect(query.lt).toHaveBeenCalledWith('generated_at', '2026-09-21T00:00:00Z')
     expect(query.upsert).toHaveBeenCalledWith(expect.anything(), { onConflict: 'kind', ignoreDuplicates: true })
+    expect(recordHomePicks).not.toHaveBeenCalled()
+  })
+
+  it('reports archival failure distinctly when the home publication already succeeded', async () => {
+    const query = { update: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), lt: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: 'page' }], error: null }) }
+    const db = { from: vi.fn(() => query) } as unknown as SupabaseClient
+    vi.mocked(recordHomePicks).mockRejectedValueOnce(new Error('archive unavailable'))
+    await expect(createPageSnapshotStore(db).publish('home', { generatedAt: '2026-10-05T00:00:00Z', data: { races: [] } }))
+      .rejects.toMatchObject({ code: 'HOME_ARCHIVE_FAILED' })
+  })
+
+  it('archives only a successfully published home generation, never a failed publication', async () => {
+    const query = { update: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), lt: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: 'page' }], error: null }) }
+    const db = { from: vi.fn(() => query) } as unknown as SupabaseClient
+    const snapshot = { generatedAt: '2026-10-05T00:00:00Z', data: { races: [] } }
+    await createPageSnapshotStore(db).publish('home', snapshot)
+    expect(recordHomePicks).toHaveBeenCalledExactlyOnceWith(db, snapshot.data, snapshot.generatedAt)
+    vi.mocked(recordHomePicks).mockClear()
+    query.select.mockResolvedValueOnce({ data: [], error: new Error('write failed') } as never)
+    await expect(createPageSnapshotStore(db).publish('home', snapshot)).rejects.toThrow('write failed')
+    expect(recordHomePicks).not.toHaveBeenCalled()
   })
 })

@@ -55,11 +55,13 @@ function PickCard({ pick, rank }: { pick: HistoricalDailyPick; rank: number }) {
         <ResultBadge pick={pick} />
       </div>
 
-      {pick.reliability && (
+      <p className="mt-3 text-xs font-semibold text-slate-600">{pick.provenance === 'home-snapshot' ? 'Recorded home shortlist' : 'Recovered pre-race forecast'}</p>
+      {pick.observedAt && <p className="mt-1 text-xs text-slate-500">First saved: {formatDateTime(pick.observedAt)}</p>}
+      {pick.provenance === 'home-snapshot' && pick.reliability ? (
         <p className="mt-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
           Reliability {pick.reliability.score}/100 · {pick.reliability.classification}
         </p>
-      )}
+      ) : <p className="mt-2 text-xs text-slate-500">Original reliability not recorded</p>}
 
       <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3">
         <div>
@@ -86,7 +88,7 @@ export default async function PicksHistoryPage() {
   const snapshot = await readPageSnapshot<Awaited<ReturnType<typeof loadDailyPicksHistory>>>('picks-history')
   const history = snapshot?.data ?? []
 
-  const scoredPicks = history.flatMap((day) => day.picks).filter((pick) => !pick.scratched && pick.actualPosition !== null)
+  const scoredPicks = history.flatMap((day) => day.picks).filter((pick) => pick.provenance === 'home-snapshot' && !pick.scratched && pick.actualPosition !== null)
   const wins = scoredPicks.filter((pick) => pick.won).length
   const top3s = scoredPicks.filter((pick) => pick.placedTop3).length
   const winRate = scoredPicks.length ? wins / scoredPicks.length : 0
@@ -99,7 +101,7 @@ export default async function PicksHistoryPage() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Past Picks</h1>
-              <p className="text-sm text-slate-600 mt-1">How the daily conservative shortlist actually performed, once races are complete.</p>
+              <p className="text-sm text-slate-600 mt-1">Recorded conservative picks and recovered pre-race forecasts, with final results.</p>
             </div>
             <SiteNav />
           </div>
@@ -111,7 +113,7 @@ export default async function PicksHistoryPage() {
         {scoredPicks.length > 0 && (
           <div className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-white p-6 sm:grid-cols-3">
             <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">Picks with a result</p>
+              <p className="text-xs font-semibold uppercase text-slate-500">Recorded home picks with a result</p>
               <p className="mt-1 text-2xl font-bold text-slate-900">{scoredPicks.length}</p>
             </div>
             <div>
@@ -129,7 +131,7 @@ export default async function PicksHistoryPage() {
 
         {!snapshot ? null : history.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-600">
-            No completed races with predictions in the last 7 days yet.
+            No recorded home picks or qualifying pre-race forecasts for completed races in the last 7 days.
           </div>
         ) : (
           history.map((day) => (
@@ -137,7 +139,7 @@ export default async function PicksHistoryPage() {
               <h2 className="text-lg font-semibold text-slate-900">{formatDateHeading(day.dateKey)}</h2>
               <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-3">
                 {day.picks.map((pick, index) => (
-                  <PickCard key={pick.race.id} pick={pick} rank={index + 1} />
+                  <PickCard key={`${pick.race.id}:${pick.horse.horse_id}`} pick={pick} rank={index + 1} />
                 ))}
               </div>
             </section>
@@ -145,9 +147,10 @@ export default async function PicksHistoryPage() {
         )}
 
         <p className="text-xs text-slate-500">
-          Reconstructed from completed races and their pre-race (retrospective) predictions using the same ranking as the live homepage shortlist,
-          since the exact picks shown live each day aren&apos;t separately recorded. This can only differ from what was shown live if a race&apos;s
-          runners changed after the live prediction was generated.
+          Recorded home picks retain the first published appearance of each horse in the default shortlist, including its saved probabilities and reliability.
+          Coverage begins when archiving was enabled; later updates and custom home-page filters can differ. For older dates without an archive,
+          recovered forecasts retain the first genuinely pre-race prediction meeting the default 50% win floor. Their original shortlist eligibility,
+          TAB coverage and reliability are unknown, so they are not proof of home-page display and are excluded from the recorded-pick performance rates.
         </p>
       </main>
     </div>

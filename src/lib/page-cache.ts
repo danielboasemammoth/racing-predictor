@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { recordHomePicks } from './home-picks-archive'
 
 export interface PageSnapshot<Value> {
   generatedAt: string
@@ -23,9 +24,15 @@ export function createPageSnapshotStore(db: SupabaseClient): PageSnapshotStore {
       const updated = await db.from('analysis_snapshots').update(row).eq('kind', row.kind)
         .lt('generated_at', snapshot.generatedAt).select('id')
       if (updated.error) throw updated.error
+      let published = Boolean(updated.data?.length)
       if (!updated.data?.length) {
-        const inserted = await db.from('analysis_snapshots').upsert(row, { onConflict: 'kind', ignoreDuplicates: true })
+        const inserted = await db.from('analysis_snapshots').upsert(row, { onConflict: 'kind', ignoreDuplicates: true }).select('id')
         if (inserted.error) throw inserted.error
+        published = Boolean(inserted.data?.length)
+      }
+      if (key === 'home' && published) {
+        try { await recordHomePicks(db, snapshot.data, snapshot.generatedAt) }
+        catch (cause) { throw Object.assign(new Error('Home published, but shortlist archive failed', { cause }), { code: 'HOME_ARCHIVE_FAILED' }) }
       }
     },
   }
