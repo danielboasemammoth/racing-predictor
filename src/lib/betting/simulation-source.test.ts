@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { buildSimulationRace, type SimulationSource } from './simulation-source'
 import type { SimulationDecision } from './simulation-decision'
-import { simulationBetProvider, simulationCandidates } from './historical-simulator'
+import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationBetProvider, simulationCandidates } from './historical-simulator'
 
 const source: SimulationSource = {
   id: 'race', start: '2026-09-01T01:00:00Z', settledAt: '2026-09-01T02:00:00Z', venue: 'Test', state: 'VIC', number: 1,
@@ -81,4 +81,25 @@ it('keeps frozen market-specific provider codes, with no attribution guessed for
   expect(simulationBetProvider(simulationCandidates([buildSimulationRace(source)])[0])).toBe('Provider not recorded')
   const tab = buildSimulationRace(supplied, new Map([['runner 0', { win: 4, place: 2, capturedAt: '2026-09-01T00:59:00Z', quotedAt: '2026-09-01T00:58:30Z' }]]))
   expect(simulationBetProvider(simulationCandidates([tab])[0])).toBe('TAB')
+})
+
+it('requires verified matching terms for seven-runner PLACE and settles top-two rather than top-three', () => {
+  const allHorses = source.entries.slice(0, 7).map((entry, index) => ({ ...source.forecasts[0].podium[0], horse_id: entry.horse_id, horse_name: `Runner ${index}`, predicted_position: index + 1, win_probability: 1 / 7, top3_probability: 3 / 7 }))
+  const capturedAt = '2026-09-01T00:59:00Z'
+  const forecast = { ...source.forecasts[0], allHorses, podium: allHorses.slice(0, 3), field: allHorses.map(horse => horse.horse_id), evidence: { predictionId: 'forecast', horseId: 'horse-0', capturedAt, reliability: 85, qualifiedWin: true } }
+  const decision: SimulationDecision = { schema: 1, raceId: source.id, start: source.start, capturedAt, forecast,
+    prices: Object.fromEntries(allHorses.map(horse => [horse.horse_id, { win: 7, place: 4, quotedAt: capturedAt, capturedAt,
+      placeTerms: { source: 'TAB', product: 'fixed-place', paidPlaces: 2, fieldSize: 7, capturedAt } }])) }
+  const build = () => buildSimulationRace({ ...source, entries: source.entries.slice(0, 7), forecasts: [forecast], decisions: [decision] })
+  const small = build()
+  expect(small.decisionSelections!.every(selection => selection.placeTermsVerified && selection.placeIssue === null)).toBe(true)
+  expect(small.decisionSelections![0].top2Probability).toBeCloseTo(2 / 7)
+  const filter = { ...DEFAULT_SIMULATION_FILTERS, source: 'tab_decision', minTop3: 0, minEdge: -100, maxRank: 0 }
+  const result = simulateBets(simulationCandidates([small]), { WIN: { ...filter, enabled: false }, PLACE: filter }, { startingBankroll: 100, method: 'flat', flatStake: 1, stakePercent: 1 })
+  expect(result.summaries[0]).toMatchObject({ bets: 7, wins: 2, staked: 7, profit: 1 })
+  expect(result.bets.find(bet => bet.selection.position === 3)?.status).toBe('LOST')
+  decision.prices['horse-0'].placeTerms!.fieldSize = 8
+  expect(build().decisionSelections![0]).toMatchObject({ placeTermsVerified: false, placeIssue: 'Top-three probability does not match paid places' })
+  delete decision.prices['horse-0'].placeTerms
+  expect(build().decisionSelections![0].placeTermsVerified).toBe(false)
 })

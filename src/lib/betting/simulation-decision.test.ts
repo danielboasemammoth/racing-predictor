@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DailyPick } from '../daily-picks'
 import { getTabPricesForInternalRaces } from '../paper-betting/internal-tab-odds'
 import { recordSimulationDecision } from './simulation-decision'
+import { TAB_PLACE_TRIAL } from './tab-place-research'
 import { DEFAULT_SIMULATION_FILTERS, isSimulationDecisionQuote, matchesSimulationFilters, simulationCandidates, type SimulationRace } from './historical-simulator'
 
 const start = '2026-10-01T03:00:00Z'
@@ -37,6 +38,16 @@ it('freezes one forecast and current quote per race/model using insert-only conf
   expect(await recordSimulationDecision(repeat.admin, repeat.pick, new Set(['horse']), new Date(decision))).toBe(false)
   expect(repeat.query.upsert).not.toHaveBeenCalled()
   expect(getTabPricesForInternalRaces).not.toHaveBeenCalled()
+})
+
+it('freezes trial rules on new production observations without inventing paid-place evidence', async () => {
+  const { pick, admin, query } = captureFixture()
+  pick.race.prediction!.model_version = TAB_PLACE_TRIAL.model
+  expect(await recordSimulationDecision(admin, pick, new Set(['horse']), new Date(decision))).toBe(true)
+  expect(query.upsert).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({
+    tabPlaceResearch: TAB_PLACE_TRIAL,
+    prices: { horse: { win: 3, place: 2, quotedAt, capturedAt } },
+  }) }), { onConflict: 'kind', ignoreDuplicates: true })
 })
 
 it('does not freeze missing prices, future-created forecasts or changed fields', async () => {

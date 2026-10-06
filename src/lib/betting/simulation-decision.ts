@@ -6,6 +6,7 @@ import { normalizeHorseName } from '../paper-betting/fundamentals-bridge'
 import { isSimulationDecisionQuote } from './historical-simulator'
 import { isQualifiedSimulationWin } from './simulation-evidence'
 import type { SimulationSource } from './simulation-source'
+import { TAB_PLACE_TRIAL, type TabPlaceTrial } from './tab-place-research'
 
 export interface SimulationDecision {
   schema: 1
@@ -14,6 +15,7 @@ export interface SimulationDecision {
   capturedAt: string
   forecast: SimulationSource['forecasts'][number]
   prices: Record<string, TabPrice>
+  tabPlaceResearch?: TabPlaceTrial
 }
 
 export function simulationDecisionKey(raceId: string, model: string) {
@@ -54,6 +56,7 @@ export async function recordSimulationDecision(admin: SupabaseClient, pick: Dail
   }
   if (!Object.keys(prices).length) return false
   const payload: SimulationDecision = { schema: 1, raceId: race.id, start: race.race_datetime, capturedAt, prices,
+    tabPlaceResearch: prediction.model_version === TAB_PLACE_TRIAL.model ? { ...TAB_PLACE_TRIAL } : undefined,
     forecast: { id: prediction.id, model: prediction.model_version, predictedAt: prediction.predicted_at, createdAt: stored.data.created_at,
       podium: prediction.predictions.podium.map(frozenHorse), allHorses: field.map(frozenHorse), field: field.map(entry => entry.horse_id),
       evidence: { predictionId: prediction.id, horseId: horse.horse_id, capturedAt, reliability: reliability.score, qualifiedWin: isQualifiedSimulationWin(pick) } } }

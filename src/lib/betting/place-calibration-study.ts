@@ -41,6 +41,7 @@ export function buildPlaceStudyRace(
 export interface PlaceStudyRace {
   raceId: string
   startTime: string
+  paidPlaces?: 2 | 3
   runners: Array<{ horseId: string; probability: number; placed: boolean; odds: number | null }>
 }
 
@@ -62,8 +63,8 @@ export function splitPlaceStudy(races: PlaceStudyRace[]) {
   }
 }
 
-export function shrinkPlaceProbability(probability: number, fieldSize: number, strength: number) {
-  return probability * (1 - strength) + (3 / fieldSize) * strength
+export function shrinkPlaceProbability(probability: number, fieldSize: number, strength: number, paidPlaces: 2 | 3 = 3) {
+  return probability * (1 - strength) + (paidPlaces / fieldSize) * strength
 }
 
 export function fitPlaceShrinkage(trainingRaces: PlaceStudyRace[]): number {
@@ -72,7 +73,7 @@ export function fitPlaceShrinkage(trainingRaces: PlaceStudyRace[]): number {
   for (const race of trainingRaces) {
     const fieldSize = race.runners.length
     for (const runner of race.runners) {
-      const direction = 3 / fieldSize - runner.probability
+      const direction = (race.paidPlaces ?? 3) / fieldSize - runner.probability
       numerator += (Number(runner.placed) - runner.probability) * direction / fieldSize
       denominator += direction ** 2 / fieldSize
     }
@@ -90,7 +91,7 @@ export function scorePlaceStudy(races: PlaceStudyRace[], strength: number) {
   const selections: Array<{ raceId: string; probability: number; placed: boolean; odds: number }> = []
   for (const race of races) {
     const samples = race.runners.map((runner) => {
-      const probability = shrinkPlaceProbability(runner.probability, race.runners.length, strength)
+      const probability = shrinkPlaceProbability(runner.probability, race.runners.length, strength, race.paidPlaces ?? 3)
       if (runner.odds != null && Number.isFinite(runner.odds) && runner.odds > 1) {
         pricedRunners += 1
         if (probability >= PLACE_STUDY_VALUE_RULES.minProbability && runner.odds <= PLACE_STUDY_VALUE_RULES.maxOdds

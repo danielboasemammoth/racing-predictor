@@ -6,6 +6,29 @@ const filters = { WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SI
 const race: SimulationRace = { id: 'race', start: '2026-09-01T01:00:00Z', settledAt: '2026-09-01T01:10:00Z', venue: 'Test', state: 'VIC', number: 1, fieldSize: 8,
   selections: [{ id: 'horse', horse: 'Runner', model: 'model', rank: 1, predictedAt: '2026-09-01T00:00:00Z', winProbability: 0.4, top3Probability: 0.7, reliability: null, winOdds: 3, placeOdds: 2, winSource: 'racing_com', placeSource: 'racing_com', position: 2, scratched: false, winIssue: null, placeIssue: null }] }
 
+it('ranks the complete TAB market, retains joint favourites, and rejects partial or stale fields', () => {
+  const field = { ...race, selections: Array.from({ length: 8 }, (_, index) => ({ ...race.selections[0], id: String(index), rank: 8 - index,
+    fullField: true, winOdds: index < 2 ? 2 : index + 2, winSource: 'tab', placeSource: 'tab',
+    tabQuotedAt: '2026-09-01T00:55:00Z', tabCapturedAt: '2026-09-01T00:56:00Z' })) }
+  const candidates = simulationCandidates([field]).filter(bet => bet.market === 'PLACE')
+  expect(candidates.map(bet => bet.tabMarketRank)).toEqual([1, 1, 3, 4, 5, 6, 7, 8])
+  const middle = { ...filters.PLACE, maxRank: 0, minTabMarketRank: 2, maxTabMarketRank: 4 }
+  expect(candidates.filter(bet => matchesSimulationFilters(bet, middle)).map(bet => bet.selection.id)).toEqual(['2', '3'])
+  expect(simulationCandidates([{ ...field, selections: field.selections.slice(1) }]).every(bet => bet.tabMarketRank === null)).toBe(true)
+  field.selections[0].tabCapturedAt = '2026-09-01T00:56:30Z'
+  expect(simulationCandidates([field]).every(bet => bet.tabMarketRank === null)).toBe(true)
+  field.selections[0].tabCapturedAt = '2026-09-01T00:56:00Z'
+  field.selections[0].tabQuotedAt = '2026-09-01T00:30:00Z'
+  expect(simulationCandidates([field]).every(bet => bet.tabMarketRank === null)).toBe(true)
+})
+
+it('limits each model and market to its highest-value qualifying runner without using the outcome', () => {
+  const source = { ...race, selections: [...race.selections, { ...race.selections[0], id: 'better-value', top3Probability: 0.8, position: 8 }] }
+  const result = simulateBets(simulationCandidates([source]), { WIN: { ...filters.WIN, enabled: false }, PLACE: { ...filters.PLACE, onePerRace: true } }, settings)
+  expect(result.bets).toHaveLength(1)
+  expect(result.bets[0]).toMatchObject({ selection: { id: 'better-value' }, status: 'LOST', stake: 10 })
+})
+
 it.each([-2, -5, -10, -15, -20])('applies the strict negative edge threshold %s to both markets', minEdge => {
   for (const bet of simulationCandidates([race])) {
     const filter = { ...filters[bet.market], minEdge }

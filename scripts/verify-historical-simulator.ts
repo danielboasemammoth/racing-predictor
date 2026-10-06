@@ -4,6 +4,7 @@ import { chromium } from 'playwright'
 import type { SimulationRace } from '../src/lib/betting/historical-simulator'
 import { SIMULATION_PREFERENCES_KEY } from '../src/lib/betting/simulation-preferences'
 import { SAVED_STRATEGIES_KEY } from '../src/lib/betting/saved-strategies'
+import { TAB_PLACE_TRIAL } from '../src/lib/betting/tab-place-research'
 
 const baseUrl = process.argv[2] ?? 'http://localhost:3021'
 assert.ok(['localhost', '127.0.0.1'].includes(new URL(baseUrl).hostname), 'Use a local preview only')
@@ -69,6 +70,7 @@ async function main() {
     const waitForCount = (count: number) => page.getByText(`Filtered bets (${count})`, { exact: true }).waitFor()
     const results = () => page.getByRole('region', { name: 'Simulation results', exact: true }).innerText()
     await waitForCount(240)
+    await page.getByRole('region', { name: 'Prospective TAB PLACE research', exact: true }).getByText(/No eligible trial results in this window.*does not identify TAB as its source/).waitFor()
     assert.equal(await page.getByLabel('Completed races', { exact: true }).inputValue(), '500')
     assert.match(await results(), /75\.0%/)
     assert.match(await results(), /\$1,800\.00/)
@@ -285,6 +287,47 @@ async function main() {
     await blockedPage.getByRole('checkbox', { name: 'WIN', exact: true }).uncheck()
     await blockedPage.getByText('Filtered bets (120)', { exact: true }).waitFor()
     await blockedPage.close()
+    const trial: SimulationRace = { ...races[0], selections: [], tabPlaceResearch: { ...TAB_PLACE_TRIAL },
+      decisionSelections: Array.from({ length: 8 }, (_, index) => ({ ...races[0].decisionSelections![0],
+        id: `trial-${index}`, horse: `TEST Trial Runner ${index}`, model: TAB_PLACE_TRIAL.model, rank: index + 1,
+        winProbability: 1 / 8, top3Probability: 3 / 8, placeProbability: 3 / 8, placePaidPlaces: 3,
+        placeTermsVerified: true, fullField: true, winOdds: index + 2, placeOdds: 5, position: index + 1,
+        winIssue: null, placeIssue: null,
+      })) }
+    races.splice(0, races.length, trial)
+    manifest.races = [{ id: trial.id, fingerprint: 'trial-test' }]
+    manifest.models.push(TAB_PLACE_TRIAL.model)
+    await page.evaluate(key => window.localStorage.removeItem(key), SIMULATION_PREFERENCES_KEY)
+    await page.reload()
+    const trialRegion = page.getByRole('region', { name: 'Prospective TAB PLACE research', exact: true })
+    await trialRegion.getByText(/1 frozen seven\/eight-runner observations; 1 eligible/).waitFor()
+    const trialDownload = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Export prospective TAB bets', exact: true }).click()
+    const trialStream = await (await trialDownload).createReadStream()
+    assert.ok(trialStream)
+    const trialChunks: Buffer[] = []
+    for await (const chunk of trialStream) trialChunks.push(Buffer.from(chunk))
+    const trialCsv = Buffer.concat(trialChunks).toString('utf8')
+    assert.equal(trialCsv.split('\r\n').length, 4)
+    assert.match(trialCsv, /"TAB market rank"/)
+    assert.match(trialCsv, /"Paid places"/)
+    assert.match(trialCsv, /"tab-place-value-v1"/)
+    await page.getByRole('checkbox', { name: 'WIN', exact: true }).uncheck()
+    for (const [label, value] of [['PLACE odds source', 'tab_decision'], ['PLACE runner scope', '0'], ['PLACE top-three probability', '0'], ['PLACE minimum field size', '8'], ['PLACE field size', '9'], ['PLACE minimum TAB market rank', '2'], ['PLACE maximum TAB market rank', '4']]) {
+      await page.getByLabel(label, { exact: true }).selectOption(value)
+    }
+    await page.locator('fieldset').filter({ has: page.getByRole('checkbox', { name: 'PLACE', exact: true }) }).getByRole('checkbox', { name: 'One highest-value pick per race / model', exact: true }).check()
+    await waitForCount(1)
+    await page.reload()
+    await waitForCount(1)
+    assert.equal(await page.getByLabel('PLACE minimum TAB market rank', { exact: true }).inputValue(), '2')
+    assert.equal(await page.getByLabel('PLACE maximum TAB market rank', { exact: true }).inputValue(), '4')
+    for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      await trialRegion.scrollIntoViewIfNeeded()
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)
+      await trialRegion.screenshot({ path: `scripts/output/tab-place-trial-${viewport.name}.png` })
+    }
     assert.deepEqual(blockedRequests, [], 'No source-table or betting API calls are expected')
     assert.deepEqual(errors, [])
     console.log('PASS: defaults, bankroll math, local filtering, CSV, pagination ROI, desktop/mobile layout, report failures, saved preferences, persistent resets and corrupt/blocked storage. No live Supabase requests were made.')

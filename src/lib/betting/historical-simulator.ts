@@ -1,5 +1,6 @@
 import { kellyFraction } from './kelly'
 import { racingComProviderLabel } from './racing-com-odds'
+import type { TabPlaceTrial } from './tab-place-research'
 
 export type SimulationMarket = 'WIN' | 'PLACE'
 export interface SimulationSelection {
@@ -10,6 +11,10 @@ export interface SimulationSelection {
   predictedAt: string
   winProbability: number | null
   top3Probability: number | null
+  top2Probability?: number | null
+  placeProbability?: number | null
+  placePaidPlaces?: 2 | 3
+  placeTermsVerified?: boolean
   reliability: number | null
   qualifiedWin?: boolean | null
   fullField?: boolean
@@ -38,6 +43,7 @@ export interface SimulationRace {
   fieldSize: number
   selections: SimulationSelection[]
   decisionSelections?: SimulationSelection[]
+  tabPlaceResearch?: TabPlaceTrial
 }
 
 export interface SimulationDataset {
@@ -69,6 +75,9 @@ export interface SimulationFilters {
   maxMinutesToJump: number
   maxRank: number
   positiveValueOnly: boolean
+  minTabMarketRank?: number
+  maxTabMarketRank?: number
+  onePerRace?: boolean
 }
 
 export const DEFAULT_SIMULATION_FILTERS: SimulationFilters = {
@@ -76,6 +85,7 @@ export const DEFAULT_SIMULATION_FILTERS: SimulationFilters = {
   minWin: 0, minTop3: 50, model: '', rank: 0, minOdds: 0, maxOdds: 0,
   source: '', venue: '', maxField: 0, minimumFieldSize: 0, inclusiveThresholds: false,
   requireQualifiedWin: false, minMinutesToJump: 0, maxMinutesToJump: 0, maxRank: 3, positiveValueOnly: false,
+  minTabMarketRank: 0, maxTabMarketRank: 0, onePerRace: false,
 }
 
 export interface SimulationSettings {
@@ -94,6 +104,7 @@ export interface SimulationBet {
   odds: number | null
   implied: number | null
   edge: number | null
+  tabMarketRank?: number | null
   source: string
   issue: string | null
   status: 'WON' | 'LOST' | 'REFUNDED' | 'EXCLUDED' | 'NO_BANKROLL'
@@ -120,19 +131,35 @@ export function isSimulationDecisionQuote(start: string, evaluatedAt?: string | 
     && decision - quote <= 2 * 60_000
 }
 
+export function simulationTabMarketRank(race: SimulationRace, selection: SimulationSelection, source: string): number | null {
+  if (source !== 'tab' && source !== 'tab_decision') return null
+  const field = (source === 'tab_decision' ? race.decisionSelections ?? [] : race.selections).filter(runner => runner.model === selection.model)
+  if (field.length !== race.fieldSize || new Set(field.map(runner => runner.id)).size !== field.length
+    || field.some(runner => !runner.fullField || runner.scratched || runner.winSource !== source
+      || runner.winOdds === null || !Number.isFinite(runner.winOdds) || runner.winOdds <= 1
+      || Date.parse(runner.tabCapturedAt ?? '') !== Date.parse(selection.tabCapturedAt ?? '')
+      || runner.evaluatedAt !== selection.evaluatedAt
+      || !(source === 'tab_decision'
+        ? isSimulationDecisionQuote(race.start, runner.evaluatedAt, runner.tabQuotedAt, runner.tabCapturedAt)
+        : isSimulationTabQuote(race.start, runner.tabQuotedAt, runner.tabCapturedAt)))) return null
+  return selection.winOdds === null ? null : 1 + field.filter(runner => runner.winOdds! < selection.winOdds!).length
+}
+
 export function simulationCandidates(races: SimulationRace[]): SimulationBet[] {
   return races.flatMap(race => [...race.selections, ...(race.decisionSelections ?? [])].flatMap(selection => (['WIN', 'PLACE'] as const).map(market => {
-    const probability = market === 'WIN' ? selection.winProbability : selection.top3Probability
+    const probability = market === 'WIN' ? selection.winProbability : selection.placeTermsVerified ? selection.placeProbability ?? null : selection.top3Probability
     const odds = market === 'WIN' ? selection.winOdds : selection.placeOdds
     const implied = odds !== null && odds > 1 ? 1 / odds : null
     const source = market === 'WIN' ? selection.winSource : selection.placeSource
     const issue = (market === 'WIN' ? selection.winIssue : selection.placeIssue)
+      ?? (market === 'PLACE' && selection.placeTermsVerified && probability === null ? 'Missing paid-place probability' : null)
       ?? (source === 'tab_decision' && (!isSimulationDecisionQuote(race.start, selection.evaluatedAt, selection.tabQuotedAt, selection.tabCapturedAt)
         || !(Date.parse(selection.predictedAt) <= Date.parse(selection.evaluatedAt ?? ''))) ? 'TAB quote not verified at decision time' : null)
       ?? (source === 'tab' && !isSimulationTabQuote(race.start, selection.tabQuotedAt, selection.tabCapturedAt) ? 'TAB quote not verified near race start' : null)
     return {
       id: `${race.id}:${selection.id}:${selection.model}:${market}${source === 'tab_decision' ? ':decision' : ''}`, race, selection, market, probability, odds, implied,
       edge: probability !== null && implied !== null ? (probability - implied) * 100 : null,
+      tabMarketRank: simulationTabMarketRank(race, selection, source),
       source,
       issue: issue ?? (odds === null ? 'Missing recorded odds' : null),
       status: 'EXCLUDED' as const, stake: 0, returned: 0, profit: 0,
@@ -151,6 +178,8 @@ export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationF
     && (!filter.rank || selection.rank === filter.rank)
     && (filter.maxRank ? selection.rank <= filter.maxRank : selection.fullField === true)
     && (!filter.source || bet.source === filter.source)
+    && (!filter.minTabMarketRank || (bet.tabMarketRank != null && bet.tabMarketRank >= filter.minTabMarketRank))
+    && (!filter.maxTabMarketRank || (bet.tabMarketRank != null && bet.tabMarketRank <= filter.maxTabMarketRank))
     && (!filter.venue || bet.race.venue === filter.venue)
     && (!filter.maxField || bet.race.fieldSize < filter.maxField)
     && (!filter.minimumFieldSize || bet.race.fieldSize >= filter.minimumFieldSize)
@@ -170,7 +199,17 @@ export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationF
 
 export function simulateBets(candidates: SimulationBet[], filters: Record<SimulationMarket, SimulationFilters>, settings: SimulationSettings) {
   const starting = Number.isFinite(settings.startingBankroll) ? Math.max(0, Math.round(settings.startingBankroll * 100)) : 0
-  const bets = candidates.filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => ({ ...bet }))
+  const matched = candidates.filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => ({ ...bet }))
+  const winners = new Map<string, SimulationBet>()
+  const value = (bet: SimulationBet) => (bet.probability ?? 0) * (bet.odds ?? 0) - 1
+  for (const bet of matched) {
+    if (!filters[bet.market].onePerRace || bet.issue || bet.selection.scratched) continue
+    const key = `${bet.race.id}:${bet.selection.model}:${bet.market}`
+    const current = winners.get(key)
+    if (!current || value(bet) > value(current) || (value(bet) === value(current) && bet.id < current.id)) winners.set(key, bet)
+  }
+  const bets = matched.filter(bet => !filters[bet.market].onePerRace || bet.issue || bet.selection.scratched
+    || winners.get(`${bet.race.id}:${bet.selection.model}:${bet.market}`) === bet)
   const models = [...new Set(bets.map(bet => bet.selection.model))].sort()
   const summaries = models.map(model => {
     const portfolio = bets.filter(bet => bet.selection.model === model).sort((left, right) => left.race.start.localeCompare(right.race.start) || left.race.id.localeCompare(right.race.id) || left.id.localeCompare(right.id))
@@ -195,7 +234,8 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
         if (bet.issue || bet.odds === null) continue
         const stake = Math.floor(desired[index] * scale)
         if (stake <= 0) { bet.status = 'NO_BANKROLL'; continue }
-        bet.status = bet.selection.scratched ? 'REFUNDED' : (bet.selection.position !== null && bet.selection.position <= (bet.market === 'WIN' ? 1 : 3)) ? 'WON' : 'LOST'
+        const paidPlaces = bet.selection.placeTermsVerified ? bet.selection.placePaidPlaces ?? 3 : 3
+        bet.status = bet.selection.scratched ? 'REFUNDED' : (bet.selection.position !== null && bet.selection.position <= (bet.market === 'WIN' ? 1 : paidPlaces)) ? 'WON' : 'LOST'
         const returned = bet.status === 'REFUNDED' ? stake : bet.status === 'WON' ? Math.round(stake * bet.odds) : 0
         bet.stake = stake / 100
         bet.returned = returned / 100

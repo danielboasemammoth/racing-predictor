@@ -5,6 +5,7 @@ import { normalizeHorseName } from '../paper-betting/fundamentals-bridge'
 import type { TabPrice } from '../paper-betting/internal-tab-odds'
 import type { SimulationEvidence } from './simulation-evidence'
 import type { SimulationDecision } from './simulation-decision'
+import { harvillePlaceProbabilities } from './harville'
 
 export interface SimulationSource {
   id: string
@@ -50,6 +51,10 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       && Date.parse(evidence.capturedAt) < Date.parse(source.start) ? evidence : null
     const remaining = (forecast.allHorses ?? []).filter(horse => !podium.some(top => top.horse_id === horse.horse_id)).sort((left, right) => left.predicted_position - right.predicted_position)
     const fullField = matchingField && forecast.allHorses?.length === field.size && new Set(forecast.allHorses.map(horse => horse.horse_id)).size === field.size && forecast.allHorses.every(horse => field.has(horse.horse_id))
+    const winField = (forecast.allHorses ?? []).map(horse => probability(horse.win_probability))
+    const winSum = winField.reduce<number>((total, value) => total + (value ?? 0), 0)
+    const top2 = fullField && winField.every(value => value !== null) && Math.abs(winSum - 1) < 0.001
+      ? harvillePlaceProbabilities(winField.map(value => value! / winSum), 2) : []
     for (const [index, horse] of [...podium, ...remaining].entries()) {
       if (!horse.horse_id || seen.has(horse.horse_id)) continue
       seen.add(horse.horse_id)
@@ -63,6 +68,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       selections.push({
         id: horse.horse_id, horse: horse.horse_name, model: forecast.model, rank: index + 1,
         predictedAt: forecast.predictedAt, winProbability: probability(horse.win_probability), top3Probability: probability(horse.top3_probability),
+        top2Probability: top2[forecast.allHorses?.findIndex(runner => runner.horse_id === horse.horse_id) ?? -1] ?? null,
         reliability: verifiedEvidence?.horseId === horse.horse_id ? verifiedEvidence.reliability : null,
         qualifiedWin: verifiedEvidence ? verifiedEvidence.horseId === horse.horse_id && verifiedEvidence.qualifiedWin : null,
         evaluatedAt: verifiedEvidence?.capturedAt ?? null, fullField: !!fullField,
@@ -81,6 +87,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
   }
   const decisionSelections: SimulationSelection[] = []
   const decisionModels = new Set<string>()
+  let tabPlaceResearch: SimulationRace['tabPlaceResearch']
   for (const decision of source.decisions ?? []) {
     const forecast = decision.forecast
     if (decision.schema !== 1 || decision.raceId !== source.id || Date.parse(decision.start) !== Date.parse(source.start)
@@ -89,17 +96,27 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       || !(Date.parse(forecast.createdAt) <= Date.parse(decision.capturedAt))
       || !(Date.parse(forecast.predictedAt) <= Date.parse(decision.capturedAt))) continue
     decisionModels.add(forecast.model)
+    if (decision.tabPlaceResearch?.model === forecast.model) tabPlaceResearch = decision.tabPlaceResearch
     const frozen = buildSimulationRace({ ...source, forecasts: [forecast], decisions: undefined })
     for (const selection of frozen.selections) {
       const price = decision.prices?.[selection.id]
       const valid = price && isSimulationDecisionQuote(source.start, decision.capturedAt, price.quotedAt, price.capturedAt)
+      const terms = price?.placeTerms
+      const verifiedTerms = !!(valid && terms && terms.source === 'TAB' && terms.product === 'fixed-place'
+        && [2, 3].includes(terms.paidPlaces) && terms.fieldSize === field.size && terms.capturedAt === price.capturedAt)
+      const placeProbability = verifiedTerms ? terms!.paidPlaces === 2 ? selection.top2Probability : selection.top3Probability : undefined
+      const placeIssue = verifiedTerms ? selection.winIssue
+        ?? (placeProbability == null ? 'Missing paid-place probability' : null)
+        ?? (Array.from({ length: terms!.paidPlaces }, (_, index) => index + 1).some(position => !places.includes(position)) ? 'Incomplete place results' : null)
+        : selection.placeIssue
       decisionSelections.push({ ...selection, evaluatedAt: decision.capturedAt,
+        placeProbability, placePaidPlaces: verifiedTerms ? terms!.paidPlaces : undefined, placeTermsVerified: verifiedTerms,
         winOdds: valid ? odds(price.win) : null, placeOdds: valid ? odds(price.place) : null,
         winSource: 'tab_decision', placeSource: 'tab_decision', tabQuotedAt: price?.quotedAt ?? null, tabCapturedAt: price?.capturedAt ?? null,
         winProvider: 'TAB', placeProvider: 'TAB',
         winIssue: selection.winIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null),
-        placeIssue: selection.placeIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null) })
+        placeIssue: placeIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null) })
     }
   }
-  return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections, decisionSelections }
+  return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections, decisionSelections, tabPlaceResearch }
 }

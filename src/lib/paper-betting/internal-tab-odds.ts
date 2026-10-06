@@ -14,6 +14,7 @@ export interface TabPrice {
   place?: number
   capturedAt: string
   quotedAt?: string
+  placeTerms?: { source: 'TAB'; product: 'fixed-place'; paidPlaces: 2 | 3; fieldSize: number; capturedAt: string }
 }
 
 /**
