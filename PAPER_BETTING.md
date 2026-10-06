@@ -56,6 +56,22 @@ TAB-specific calibration is separated by paid-place count and requires 150 verif
 
 ## Simulation Rules
 
+### Past Picks And Candidate Inspection
+
+Past Picks is a prediction history, not a betting ledger. It retains the first archived home-shortlist appearance, or the first qualifying pre-race forecast for older uncovered dates (explicitly labelled recovered). The simulator instead uses the latest eligible pre-race forecast per model, or a separate frozen TAB decision when that source is selected. A historical winner can therefore have different probabilities here and fail the selected edge, probability, source or evidence requirements.
+
+Each history card links to the matching race/horse in the simulator's **All candidates** view. This read-only view includes filtered-out candidates and evidence exclusions across the entire published report, with forecast timestamps and reasons from the same predicates that select simulated bets. Horse/venue search and Melbourne-date filtering affect only the table. Races outside the chosen strategy window are labelled; races outside the published report are reported as unavailable, never reconstructed with substitute odds. One-pick-per-race omissions are distinguished from filter failures. Winners, losers and ambiguous results remain inspectable.
+
+The default **Simulated bets** view, saved strategy settings, portfolio totals and filtered-bet CSV remain unchanged. Inspection does not replay the original history forecast, relax eligibility, place bets or add excluded winners to profit. Source labels still distinguish Racing.com, TAB near-start and TAB decision-time prices.
+
+October 6 diagnosis of Monday October 5: all eight recovered history picks were present within the newest 100 report races. All eight latest production-model WIN candidates failed the default positive-edge requirement; some also failed the top-three probability floor. Vantaa changed from 63.49% WIN in the retained history forecast to 40.54% in the latest forecast, versus 47.62% break-even at the recorded Racing.com price of $2.10. Mainstay additionally had ambiguous/dead-heat result evidence. Six winners and two losses in the history are not proof of six eligible TAB bets or realised betting profit.
+
+Read-only comparison, using the current production model and public report (omit `--date` for the latest history day):
+
+```powershell
+npx tsx --env-file=.env.local scripts/diagnose-picks-history.ts --compare-simulator --date=2026-10-05
+```
+
 ### Racing.com Provider Attribution
 
 The simulator table and CSV include an `Odds provider` field. New predictions retain the exact provider code separately for WIN and PLACE alongside the selected price. Racing.com prices have always been the maximum recorded quote per market across the feed, not prices from a single bookmaker; ties now retain the first matching provider. This change does not alter odds, probabilities, filters or returns.

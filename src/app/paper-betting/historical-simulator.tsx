@@ -2,8 +2,9 @@
 
 import { startTransition, useDeferredValue, useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { ChevronLeft, ChevronRight, Download, History, RefreshCw, RotateCcw, TrendingUp } from 'lucide-react'
-import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationCandidates, simulationBetProvider, type SimulationBet, type SimulationDataset, type SimulationFilters, type SimulationMarket, type SimulationSettings } from '@/lib/betting/historical-simulator'
+import { ChevronLeft, ChevronRight, Download, History, RefreshCw, RotateCcw, TrendingUp, X } from 'lucide-react'
+import { DEFAULT_SIMULATION_FILTERS, simulateBets, simulationCandidates, simulationBetProvider, simulationExclusionReasons, type SimulationBet, type SimulationDataset, type SimulationFilters, type SimulationMarket, type SimulationSettings } from '@/lib/betting/historical-simulator'
+import { melbourneDateKey } from '@/lib/daily-picks'
 import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '@/lib/betting/simulation-report'
 import { DEFAULT_SIMULATION_SETTINGS, readSimulationPreferences, SIMULATION_PREFERENCES_KEY } from '@/lib/betting/simulation-preferences'
 import { StrategySettings } from './strategy-settings'
@@ -89,6 +90,10 @@ export function HistoricalSimulator() {
   const [count, setCount] = useState(500)
   const [sort, setSort] = useState('start')
   const [pageNumber, setPageNumber] = useState(0)
+  const [inspectAll, setInspectAll] = useState(false)
+  const [search, setSearch] = useState('')
+  const [raceDate, setRaceDate] = useState('')
+  const [inspectedRace, setInspectedRace] = useState('')
   const [preferencesReady, setPreferencesReady] = useState(false)
   const [suggestions, setSuggestions] = useState<Record<SimulationMarket, ProfitSuggestion | null>>({ WIN: null, PLACE: null })
   const [searching, setSearching] = useState(false)
@@ -109,7 +114,13 @@ export function HistoricalSimulator() {
     let saved: string | null = null
     try { saved = window.localStorage.getItem(SIMULATION_PREFERENCES_KEY) } catch {}
     const preferences = readSimulationPreferences(saved)
+    const query = new URLSearchParams(window.location.search)
     startTransition(() => {
+      if (query.has('race')) {
+        setInspectedRace(query.get('race') ?? '')
+        setSearch(query.get('horse') ?? '')
+        setInspectAll(true)
+      }
       setFilters(preferences.filters)
       setSettings(preferences.settings)
       setCount(preferences.count)
@@ -152,7 +163,17 @@ export function HistoricalSimulator() {
   const races = (dataset?.races ?? []).slice(0, deferred.count)
   const candidates = simulationCandidates(races)
   const result = simulateBets(candidates, deferred.filters, deferred.settings)
-  const displayed = result.bets.filter(bet => bet.status !== 'EXCLUDED').sort((left, right) => sort === 'profit' ? right.profit - left.profit || left.id.localeCompare(right.id) : sort === 'edge' ? (right.edge ?? -Infinity) - (left.edge ?? -Infinity) || left.id.localeCompare(right.id) : right.race.start.localeCompare(left.race.start) || left.id.localeCompare(right.id))
+  const filteredBets = result.bets.filter(bet => bet.status !== 'EXCLUDED')
+  const selectedBets = new Map(result.bets.map(bet => [bet.id, bet]))
+  const selectedRaces = new Set(races.map(race => race.id))
+  const tableSearch = useDeferredValue(search.trim().toLowerCase())
+  const tableRaces = (dataset?.races ?? []).filter(race => (!inspectedRace || race.id === inspectedRace)
+    && (!raceDate || melbourneDateKey(race.start) === raceDate))
+  const tableRaceIds = new Set(tableRaces.map(race => race.id))
+  const tableCandidates = inspectAll ? simulationCandidates(tableRaces).map(bet => selectedBets.get(bet.id) ?? bet) : filteredBets
+  const displayed = tableCandidates.filter(bet => tableRaceIds.has(bet.race.id)
+    && (!tableSearch || `${bet.selection.horse} ${bet.race.venue} ${bet.race.id}`.toLowerCase().includes(tableSearch)))
+    .sort((left, right) => sort === 'profit' ? right.profit - left.profit || left.id.localeCompare(right.id) : sort === 'edge' ? (right.edge ?? -Infinity) - (left.edge ?? -Infinity) || left.id.localeCompare(right.id) : right.race.start.localeCompare(left.race.start) || left.id.localeCompare(right.id))
   const totalPages = Math.max(1, Math.ceil(displayed.length / 50))
   const currentPage = Math.min(pageNumber, totalPages - 1)
   const visible = displayed.slice(currentPage * 50, (currentPage + 1) * 50)
@@ -189,11 +210,20 @@ export function HistoricalSimulator() {
     </section>
     <section aria-label="Model comparison" className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm"><caption className="mb-3 text-left font-semibold">Model portfolios</caption><thead className="border-b text-xs text-slate-500"><tr>{['Model', 'Bets', 'Races', 'Hit rate', 'Profit', 'ROI', 'Bankroll', 'Max drawdown'].map(label => <th key={label} className="px-3 py-2">{label}</th>)}</tr></thead><tbody>{result.summaries.map(summary => <tr key={summary.model} className="border-b border-slate-200 tabular-nums"><th className="px-3 py-3 font-medium">{summary.model}</th><td className="px-3">{summary.bets}</td><td className="px-3">{summary.races}</td><td className="px-3">{percent(summary.bets ? summary.wins / summary.bets * 100 : null)}</td><td className={`px-3 ${summary.profit < 0 ? 'text-red-700' : 'text-teal-800'}`}>{money(summary.profit)}</td><td className="px-3">{percent(summary.roi)}</td><td className="px-3">{money(summary.bankroll)}</td><td className="px-3">{percent(summary.maxDrawdown)}</td></tr>)}</tbody></table></section>
     <TabPlaceResearch races={dataset?.races ?? []} onExport={exportBets} />
-    <section aria-label="Filtered bets">
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><h3 className="font-semibold">Filtered bets ({displayed.length})</h3><div className="flex items-end gap-3"><Select label="Sort results" value={sort} onChange={value => { setSort(value); setPageNumber(0) }}><option value="start">Race time: newest</option><option value="profit">Profit: highest</option><option value="edge">Edge: highest</option></Select><button type="button" title="Export all filtered bets" aria-label="Export all filtered bets" disabled={!displayed.length} onClick={() => exportBets(displayed)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 bg-white disabled:opacity-40"><Download size={16} /></button></div></div>
-      {!displayed.length ? <p className="border-y border-slate-200 py-8 text-center text-sm text-slate-600">{dataset ? 'No eligible bets match the current filters.' : 'Historical bets will appear after a successful report publication.'}</p> : <div className="overflow-x-auto" tabIndex={0} aria-label="Bet results table"><table className="w-full min-w-[1760px] text-left text-xs"><thead className="border-y border-slate-200 bg-slate-100"><tr>{['Race / start', 'Model / rank', 'Horse', 'Market', 'Win %', 'Top 3 %', 'Reliability', 'Implied %', 'Edge pts', 'Odds / source', 'Finish', 'Result', 'Stake', 'Return', 'Profit', 'Odds provider'].map(label => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead><tbody>{visible.map(bet => <tr key={bet.id} className="border-b border-slate-200 bg-white tabular-nums hover:bg-slate-50">
+    <section id="candidate-bets" aria-label="Filtered bets">
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div role="tablist" aria-label="Bet table view" className="flex border-b border-slate-300">{[false, true].map(all => <button key={String(all)} type="button" role="tab" aria-selected={inspectAll === all} onClick={() => { setInspectAll(all); setPageNumber(0) }} className={`border-b-2 px-3 py-2 text-sm ${inspectAll === all ? 'border-teal-700 font-semibold text-teal-800' : 'border-transparent text-slate-600'}`}>{all ? 'All candidates' : 'Simulated bets'}</button>)}</div>
+        <label className="min-w-0 flex-1 basis-48 text-xs font-medium text-slate-600">Horse or venue<input type="search" aria-label="Search candidates" value={search} onChange={event => { setSearch(event.target.value); setPageNumber(0) }} className="mt-1 h-9 w-full min-w-0 rounded border border-slate-300 bg-white px-2 text-sm" /></label>
+        <label className="text-xs font-medium text-slate-600">Race date (Melbourne)<input type="date" aria-label="Candidate race date" value={raceDate} onChange={event => { setRaceDate(event.target.value); setPageNumber(0) }} className="mt-1 block h-9 max-w-full rounded border border-slate-300 bg-white px-2 text-sm" /></label>
+        <button type="button" aria-label="Clear candidate search" title="Clear candidate search" onClick={() => { setSearch(''); setRaceDate(''); setInspectedRace(''); setPageNumber(0) }} className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-slate-300"><X size={16} /></button>
+      </div>
+      {inspectedRace && <p role="status" className="mb-3 text-xs text-slate-600">History race: {dataset?.races.find(race => race.id === inspectedRace)?.venue ?? inspectedRace}. {dataset && !dataset.races.some(race => race.id === inspectedRace) && 'Outside the published report window; no historical odds have been substituted.'}</p>}
+      {inspectAll && <p className="mb-3 border-l-4 border-amber-500 bg-amber-50 p-3 text-xs text-amber-950">All recorded candidates in the published report, including filtered-out and excluded runners. Past Picks retains the first recorded/recovered qualifying forecast; this report uses the latest pre-race forecast or a separate frozen TAB decision. Probabilities can differ. Excluded candidates are not bets and add nothing to profit. Table search does not change portfolio totals or the filtered-bet export.</p>}
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><h3 className="font-semibold">{inspectAll ? 'All candidates' : 'Filtered bets'} ({displayed.length})</h3><div className="flex items-end gap-3"><Select label="Sort results" value={sort} onChange={value => { setSort(value); setPageNumber(0) }}><option value="start">Race time: newest</option><option value="profit">Profit: highest</option><option value="edge">Edge: highest</option></Select><button type="button" title="Export all filtered bets" aria-label="Export all filtered bets" disabled={!filteredBets.length} onClick={() => exportBets(filteredBets)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 bg-white disabled:opacity-40"><Download size={16} /></button></div></div>
+      {!displayed.length ? <p className="border-y border-slate-200 py-8 text-center text-sm text-slate-600">{dataset ? inspectAll ? 'No recorded candidates match this search. Missing forecasts and races outside the published window are not reconstructed.' : 'No eligible bets match the current filters or table search.' : 'Historical bets will appear after a successful report publication.'}</p> : <div className="overflow-x-auto" tabIndex={0} aria-label="Bet results table"><table className="w-full min-w-[1760px] text-left text-xs"><thead className="border-y border-slate-200 bg-slate-100"><tr>{['Race / start', 'Model / rank', 'Horse', 'Market', 'Win %', 'Top 3 %', 'Reliability', 'Implied %', 'Edge pts', 'Odds / source', 'Finish', 'Result', 'Stake', 'Return', 'Profit', 'Odds provider', ...(inspectAll ? ['Forecast / exclusion reasons'] : [])].map(label => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead><tbody>{visible.map(bet => <tr key={bet.id} className="border-b border-slate-200 bg-white tabular-nums hover:bg-slate-50">
         <td className="px-3 py-3"><Link href={`/races/${bet.race.id}`} prefetch={false} className="font-semibold text-teal-800">{bet.race.venue} R{bet.race.number}</Link><p className="mt-1 text-slate-500">{date(bet.race.start)}</p></td><td className="px-3">{bet.selection.model}<p className="text-slate-500">Rank {bet.selection.rank}</p></td><td className="px-3 font-medium" title={`Forecast: ${date(bet.selection.predictedAt)}`}>{bet.selection.horse}</td><td className={`px-3 font-semibold ${bet.market === 'PLACE' ? 'text-teal-800' : 'text-amber-800'}`}>{bet.market}</td><td className="px-3">{percent(bet.selection.winProbability === null ? null : bet.selection.winProbability * 100)}</td><td className="px-3">{percent(bet.selection.top3Probability === null ? null : bet.selection.top3Probability * 100)}</td><td className="px-3">{bet.selection.reliability ?? '-'}</td><td className="px-3">{percent(bet.implied === null ? null : bet.implied * 100)}</td><td className="px-3">{bet.edge?.toFixed(1) ?? '-'}</td><td className="px-3">{bet.odds?.toFixed(2) ?? '-'}<p className="text-slate-500">{bet.source === 'tab_decision' ? 'TAB decision' : bet.source === 'tab' ? 'TAB near-start' : 'Racing.com'}</p>{bet.source === 'tab_decision' && bet.selection.evaluatedAt && <p className="text-slate-500">{date(bet.selection.evaluatedAt)}</p>}</td><td className="px-3">{bet.selection.scratched ? 'SCR' : bet.selection.position ?? '-'}</td><td className="max-w-48 px-3"><span className={bet.status === 'WON' ? 'text-teal-800' : bet.status === 'LOST' ? 'text-red-700' : 'text-slate-600'}>{bet.status.replaceAll('_', ' ')}</span>{bet.issue && <p className="mt-1 text-slate-500">{bet.issue}</p>}</td><td className="px-3">{money(bet.stake)}</td><td className="px-3">{money(bet.returned)}</td><td className={`px-3 ${bet.profit < 0 ? 'text-red-700' : 'text-teal-800'}`}>{money(bet.profit)}</td>
         <td className="min-w-40 max-w-48 break-words px-3">{simulationBetProvider(bet)}</td>
+        {inspectAll && <td className="min-w-64 max-w-80 px-3 py-3"><p>Forecast: {date(bet.selection.predictedAt)}</p>{[...(!selectedRaces.has(bet.race.id) ? ['Outside selected simulation race window'] : []), ...simulationExclusionReasons(bet, deferred.filters[bet.market], selectedBets.has(bet.id) || !selectedRaces.has(bet.race.id))].map(reason => <p key={reason} className="mt-1 text-amber-900">{reason}</p>)}</td>}
       </tr>)}</tbody></table></div>}
       <div className="mt-3 flex items-center justify-end gap-3 text-xs"><button type="button" title="Previous page" aria-label="Previous page" disabled={currentPage === 0} onClick={() => setPageNumber(currentPage - 1)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 disabled:opacity-40"><ChevronLeft size={16} /></button><span>Page {currentPage + 1} of {totalPages}</span><button type="button" title="Next page" aria-label="Next page" disabled={currentPage + 1 >= totalPages} onClick={() => setPageNumber(currentPage + 1)} className="flex h-9 w-9 items-center justify-center rounded border border-slate-300 disabled:opacity-40"><ChevronRight size={16} /></button></div>
     </section>

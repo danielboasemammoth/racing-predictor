@@ -78,6 +78,9 @@ function PickCard({ pick, rank }: { pick: HistoricalDailyPick; rank: number }) {
       <Link href={`/races/${pick.race.id}`} className="mt-3 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900">
         Review race details →
       </Link>
+      <Link href={`/paper-betting?${new URLSearchParams({ race: pick.race.id, horse: pick.horse.horse_name })}#candidate-bets`} prefetch={false} className="mt-3 block text-sm font-semibold text-teal-700 hover:text-teal-900">
+        Inspect paper-betting candidates
+      </Link>
     </article>
   )
 }

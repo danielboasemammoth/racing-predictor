@@ -167,34 +167,47 @@ export function simulationCandidates(races: SimulationRace[]): SimulationBet[] {
   })))
 }
 
-export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationFilters): boolean {
+export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationFilters, reasons?: string[]): boolean {
   const selection = bet.selection
   const passes = (value: number | null, threshold: number) => value !== null && (filter.inclusiveThresholds ? value >= threshold : value > threshold)
+  const check = (accepted: boolean, reason: string) => {
+    if (!accepted) reasons?.push(reason)
+    return accepted || reasons !== undefined
+  }
   const evaluatedAt = selection.evaluatedAt ?? (bet.source === 'tab' ? selection.tabCapturedAt : null)
   const minutesToJump = (Date.parse(bet.race.start) - Date.parse(evaluatedAt ?? '')) / 60_000
-  return filter.enabled
-    && (bet.source !== 'tab_decision' || filter.source === 'tab_decision')
-    && (!filter.model || selection.model === filter.model)
-    && (!filter.rank || selection.rank === filter.rank)
-    && (filter.maxRank ? selection.rank <= filter.maxRank : selection.fullField === true)
-    && (!filter.source || bet.source === filter.source)
-    && (!filter.minTabMarketRank || (bet.tabMarketRank != null && bet.tabMarketRank >= filter.minTabMarketRank))
-    && (!filter.maxTabMarketRank || (bet.tabMarketRank != null && bet.tabMarketRank <= filter.maxTabMarketRank))
-    && (!filter.venue || bet.race.venue === filter.venue)
-    && (!filter.maxField || bet.race.fieldSize < filter.maxField)
-    && (!filter.minimumFieldSize || bet.race.fieldSize >= filter.minimumFieldSize)
-    && (!filter.requireQualifiedWin || selection.qualifiedWin === true)
-    && (!filter.positiveValueOnly || (bet.probability !== null && bet.probability > 0 && bet.probability < 1 && bet.odds !== null && bet.odds > 1 && bet.probability * bet.odds > 1))
-    && (!filter.minMinutesToJump || (Number.isFinite(minutesToJump) && minutesToJump >= filter.minMinutesToJump))
-    && (!filter.maxMinutesToJump || (Number.isFinite(minutesToJump) && minutesToJump <= filter.maxMinutesToJump))
-    && (!filter.minReliability || (selection.reliability !== null && selection.reliability >= filter.minReliability))
-    && (filter.minEdge === -100 || passes(bet.edge, filter.minEdge))
-    && (!filter.minTop3 || passes(selection.top3Probability === null ? null : selection.top3Probability * 100, filter.minTop3))
-    && (!filter.minWin || passes(selection.winProbability === null ? null : selection.winProbability * 100, filter.minWin))
-    && (!filter.minImplied || (bet.implied !== null && bet.implied * 100 >= filter.minImplied))
-    && (filter.maxImplied === 100 || (bet.implied !== null && bet.implied * 100 <= filter.maxImplied))
-    && (!filter.minOdds || (bet.odds !== null && bet.odds >= filter.minOdds))
-    && (!filter.maxOdds || (bet.odds !== null && bet.odds <= filter.maxOdds))
+  return check(filter.enabled, 'Market disabled')
+    && check(bet.source !== 'tab_decision' || filter.source === 'tab_decision', 'Decision-time source not selected')
+    && check(!filter.model || selection.model === filter.model, 'Different model selected')
+    && check(!filter.rank || selection.rank === filter.rank, 'Model rank filter')
+    && check(filter.maxRank ? selection.rank <= filter.maxRank : selection.fullField === true, 'Runner scope filter')
+    && check(!filter.source || bet.source === filter.source, 'Different odds source selected')
+    && check(!filter.minTabMarketRank || (bet.tabMarketRank != null && bet.tabMarketRank >= filter.minTabMarketRank), 'TAB minimum market rank not met or unknown')
+    && check(!filter.maxTabMarketRank || (bet.tabMarketRank != null && bet.tabMarketRank <= filter.maxTabMarketRank), 'TAB maximum market rank not met or unknown')
+    && check(!filter.venue || bet.race.venue === filter.venue, 'Different venue selected')
+    && check(!filter.maxField || bet.race.fieldSize < filter.maxField, 'Maximum field size filter')
+    && check(!filter.minimumFieldSize || bet.race.fieldSize >= filter.minimumFieldSize, 'Minimum field size filter')
+    && check(!filter.requireQualifiedWin || selection.qualifiedWin === true, 'WIN qualification not verified')
+    && check(!filter.positiveValueOnly || (bet.probability !== null && bet.probability > 0 && bet.probability < 1 && bet.odds !== null && bet.odds > 1 && bet.probability * bet.odds > 1), 'Positive expected value not established')
+    && check(!filter.minMinutesToJump || (Number.isFinite(minutesToJump) && minutesToJump >= filter.minMinutesToJump), 'Minimum decision window not met or unknown')
+    && check(!filter.maxMinutesToJump || (Number.isFinite(minutesToJump) && minutesToJump <= filter.maxMinutesToJump), 'Maximum decision window not met or unknown')
+    && check(!filter.minReliability || (selection.reliability !== null && selection.reliability >= filter.minReliability), 'Reliability below minimum or not recorded')
+    && check(filter.minEdge === -100 || passes(bet.edge, filter.minEdge), 'Edge below selected threshold or unavailable')
+    && check(!filter.minTop3 || passes(selection.top3Probability === null ? null : selection.top3Probability * 100, filter.minTop3), 'Top-three probability below selected threshold or unavailable')
+    && check(!filter.minWin || passes(selection.winProbability === null ? null : selection.winProbability * 100, filter.minWin), 'WIN probability below selected threshold or unavailable')
+    && check(!filter.minImplied || (bet.implied !== null && bet.implied * 100 >= filter.minImplied), 'Minimum implied probability not met or unknown')
+    && check(filter.maxImplied === 100 || (bet.implied !== null && bet.implied * 100 <= filter.maxImplied), 'Maximum implied probability not met or unknown')
+    && check(!filter.minOdds || (bet.odds !== null && bet.odds >= filter.minOdds), 'Minimum odds not met or unknown')
+    && check(!filter.maxOdds || (bet.odds !== null && bet.odds <= filter.maxOdds), 'Maximum odds not met or unknown')
+    && !reasons?.length
+}
+
+export function simulationExclusionReasons(bet: SimulationBet, filter: SimulationFilters, selected: boolean): string[] {
+  const reasons: string[] = []
+  matchesSimulationFilters(bet, filter, reasons)
+  if (bet.issue) reasons.push(bet.issue)
+  if (!selected && !reasons.length && filter.onePerRace) reasons.push('Another runner selected by the one-pick-per-race rule')
+  return reasons
 }
 
 export function simulateBets(candidates: SimulationBet[], filters: Record<SimulationMarket, SimulationFilters>, settings: SimulationSettings) {

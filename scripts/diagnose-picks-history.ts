@@ -1,10 +1,32 @@
 import { createClient } from '@supabase/supabase-js'
 import { loadDailyPicksHistory } from '../src/lib/daily-picks-history'
 import type { PredictedHorse } from '../src/lib/types'
+import { PRODUCTION_MODEL_VERSION } from '../src/lib/prediction-suite'
+import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '../src/lib/betting/simulation-report'
+import { DEFAULT_SIMULATION_FILTERS, matchesSimulationFilters, simulationCandidates, simulationExclusionReasons } from '../src/lib/betting/historical-simulator'
 
 async function main() {
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
   const horseName = process.argv.slice(2).find(value => !value.startsWith('--')) ?? 'Thundering Soul'
+  if (process.argv.includes('--compare-simulator')) {
+    const history = await loadDailyPicksHistory(db)
+    const baseUrl = simulationReportBaseUrl()
+    const manifest = await readSimulationManifest(baseUrl)
+    if (!manifest) throw new Error('Simulator report unavailable')
+    const report = await readSimulationChunks(baseUrl, manifest)
+    const dateKey = process.argv.find(value => value.startsWith('--date='))?.slice('--date='.length) ?? history[0]?.dateKey
+    const picks = history.find(day => day.dateKey === dateKey)?.picks ?? []
+    console.log(JSON.stringify({ dateKey, generatedAt: report.generatedAt, picks: picks.map(pick => {
+      const race = report.races.find(race => race.id === pick.race.id)
+      const bets = simulationCandidates(race ? [race] : []).filter(bet => bet.selection.id === pick.horse.horse_id && bet.selection.model === PRODUCTION_MODEL_VERSION)
+      return { horse: pick.horse.horse_name, raceId: pick.race.id, predictionId: pick.predictionId, historyWin: pick.winProbability,
+        result: pick.actualPosition, provenance: pick.provenance, reportIndex: report.races.findIndex(race => race.id === pick.race.id),
+        bets: bets.map(bet => ({ market: bet.market, forecast: bet.selection.predictedAt, win: bet.selection.winProbability,
+          top3: bet.selection.top3Probability, odds: bet.odds, source: bet.source, edge: bet.edge, issue: bet.issue,
+          defaultMatch: matchesSimulationFilters(bet, DEFAULT_SIMULATION_FILTERS), reasons: simulationExclusionReasons(bet, DEFAULT_SIMULATION_FILTERS, false) })) }
+    }) }, null, 2))
+    return
+  }
   if (process.argv.includes('--history')) {
     const history = await loadDailyPicksHistory(db)
     const matches = history.flatMap(day => day.picks).filter(pick => pick.horse.horse_name.toLowerCase() === horseName.toLowerCase())

@@ -1,10 +1,24 @@
 import { expect, it } from 'vitest'
-import { DEFAULT_SIMULATION_FILTERS, matchesSimulationFilters, simulateBets, simulationCandidates, type SimulationRace, type SimulationSettings } from './historical-simulator'
+import { DEFAULT_SIMULATION_FILTERS, matchesSimulationFilters, simulateBets, simulationCandidates, simulationExclusionReasons, type SimulationRace, type SimulationSettings } from './historical-simulator'
 
 const settings: SimulationSettings = { startingBankroll: 100, method: 'flat', flatStake: 10, stakePercent: 1 }
 const filters = { WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SIMULATION_FILTERS } }
 const race: SimulationRace = { id: 'race', start: '2026-09-01T01:00:00Z', settledAt: '2026-09-01T01:10:00Z', venue: 'Test', state: 'VIC', number: 1, fieldSize: 8,
   selections: [{ id: 'horse', horse: 'Runner', model: 'model', rank: 1, predictedAt: '2026-09-01T00:00:00Z', winProbability: 0.4, top3Probability: 0.7, reliability: null, winOdds: 3, placeOdds: 2, winSource: 'racing_com', placeSource: 'racing_com', position: 2, scratched: false, winIssue: null, placeIssue: null }] }
+
+it('explains hidden winners without adding them to the simulated portfolio', () => {
+  const source = { ...race, selections: [{ ...race.selections[0], horse: 'Vantaa', winProbability: 0.40545, winOdds: 2.1, position: 1 }] }
+  const candidates = simulationCandidates([source])
+  const result = simulateBets(candidates, filters, settings)
+  const winner = candidates[0]
+  expect(result.bets.some(bet => bet.id === winner.id)).toBe(false)
+  expect(simulationExclusionReasons(winner, filters.WIN, false)).toEqual(['Edge below selected threshold or unavailable'])
+  expect(simulationExclusionReasons({ ...winner, issue: 'Ambiguous or dead-heat result', selection: { ...winner.selection, top3Probability: 0.3 } }, filters.WIN, false)).toEqual([
+    'Edge below selected threshold or unavailable', 'Top-three probability below selected threshold or unavailable', 'Ambiguous or dead-heat result',
+  ])
+  expect(winner.stake).toBe(0)
+  expect(simulationExclusionReasons({ ...winner, edge: 10 }, { ...filters.WIN, onePerRace: true }, false)).toEqual(['Another runner selected by the one-pick-per-race rule'])
+})
 
 it('ranks the complete TAB market, retains joint favourites, and rejects partial or stale fields', () => {
   const field = { ...race, selections: Array.from({ length: 8 }, (_, index) => ({ ...race.selections[0], id: String(index), rank: 8 - index,
