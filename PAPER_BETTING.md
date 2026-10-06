@@ -58,6 +58,12 @@ TAB-specific calibration is separated by paid-place count and requires 150 verif
 
 ### Past Picks And Candidate Inspection
 
+The independent **WIN forecast** and **PLACE forecast** selectors now include **Same earlier forecast as History**. The default remains latest/TAB decision. History mode uses only the horses retained by the published Past Picks snapshot, their exact original prediction IDs, and the WIN/top-three probabilities shown there. It does not select all runners from that earlier forecast or search for the most profitable historical timestamp. Forecast choice is retained in working drafts and saved profiles.
+
+History prices come from that original prediction's recorded WIN/PLACE quotes, with their original provider labels. Later TAB near-start or decision-time prices are not substituted. Timestamp-free TAB prices embedded in old predictions remain unverified and excluded; selecting TAB-only odds can therefore produce zero History bets. This is a recorded-price historical simulation, not proof of an executable TAB offer. All other filters and staking rules still apply, including missing qualification/reliability, changed fields, unsupported PLACE terms, missing results and dead heats. Both losing and winning retained picks are replayed.
+
+The scheduled report publisher reads the existing History page snapshot and retrieves original predictions by ID in batches of at most ten. No new live page queries, historical scan, schema migration or full-report pricing rebuild is required. A changed History snapshot invalidates affected report races even when race fingerprints have not changed. The page reports the snapshot timestamp and replayable/retained pick counts; missing original forecasts are not replaced. Coverage is limited to that History snapshot and the published simulator race window. CSV exports include forecast basis, prediction ID, History provenance and first-saved timestamp. Recovered forecasts remain distinct from verified archived home picks.
+
 Past Picks is a prediction history, not a betting ledger. It retains the first archived home-shortlist appearance, or the first qualifying pre-race forecast for older uncovered dates (explicitly labelled recovered). The simulator instead uses the latest eligible pre-race forecast per model, or a separate frozen TAB decision when that source is selected. A historical winner can therefore have different probabilities here and fail the selected edge, probability, source or evidence requirements.
 
 Each history card links to the matching race/horse in the simulator's **All candidates** view. This read-only view includes filtered-out candidates and evidence exclusions across the entire published report, with forecast timestamps and reasons from the same predicates that select simulated bets. Horse/venue search and Melbourne-date filtering affect only the table. Races outside the chosen strategy window are labelled; races outside the published report are reported as unavailable, never reconstructed with substitute odds. One-pick-per-race omissions are distinguished from filter failures. Winners, losers and ambiguous results remain inspectable.
@@ -69,7 +75,7 @@ October 6 diagnosis of Monday October 5: all eight recovered history picks were 
 Read-only comparison, using the current production model and public report (omit `--date` for the latest history day):
 
 ```powershell
-npx tsx --env-file=.env.local scripts/diagnose-picks-history.ts --compare-simulator --date=2026-10-05
+npx tsx --env-file=.env.local scripts/diagnose-picks-history.ts --compare-simulator --date=2026-10-05 --verify-history
 ```
 
 ### Racing.com Provider Attribution

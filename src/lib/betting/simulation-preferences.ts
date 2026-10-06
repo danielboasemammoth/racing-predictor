@@ -32,6 +32,7 @@ function filters(value: unknown): SimulationFilters {
   const defaults = DEFAULT_SIMULATION_FILTERS
   const probabilities = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
   return {
+    forecast: option<'latest' | 'history'>(saved.forecast, 'latest', ['latest', 'history']),
     enabled: typeof saved.enabled === 'boolean' ? saved.enabled : defaults.enabled,
     minReliability: option(saved.minReliability, defaults.minReliability, probabilities),
     minEdge: option(saved.minEdge, defaults.minEdge, [-100, -20, -15, -10, -5, -2, 0, 2, 5, 10, 15, 20]),

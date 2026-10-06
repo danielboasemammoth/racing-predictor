@@ -103,3 +103,24 @@ it('requires verified matching terms for seven-runner PLACE and settles top-two 
   delete decision.prices['horse-0'].placeTerms
   expect(build().decisionSelections![0].placeTermsVerified).toBe(false)
 })
+
+it('replays only retained History picks with their earlier probabilities and prices, without changing defaults', () => {
+  const early = { ...source.forecasts[0], id: 'early', predictedAt: '2026-08-31T23:00:00Z', createdAt: '2026-08-31T23:01:00Z',
+    podium: source.forecasts[0].podium.map(horse => ({ ...horse, win_probability: 0.63, win_odds: 2 })) }
+  const history: SimulationSource['history'] = [{ forecast: early, horseId: 'horse-0', winProbability: 0.63, top3Probability: 0.8,
+    observedAt: early.createdAt, provenance: 'pre-race-recovery' }]
+  const race = buildSimulationRace({ ...source, history }, new Map([['runner 0', { win: 8, capturedAt: '2026-09-01T00:59:00Z', quotedAt: '2026-09-01T00:58:30Z' }]]))
+  expect(race.historySelections).toHaveLength(1)
+  expect(race.historySelections![0]).toMatchObject({ predictionId: 'early', winProbability: 0.63, top3Probability: 0.8, winOdds: 2, winSource: 'racing_com', reliability: null })
+  const candidates = simulationCandidates([race])
+  const settings = { startingBankroll: 100, method: 'flat' as const, flatStake: 10, stakePercent: 1 }
+  const filters = { WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SIMULATION_FILTERS, enabled: false } }
+  expect(simulateBets(candidates, filters, settings).bets.every(bet => bet.selection.forecastBasis !== 'history')).toBe(true)
+  const result = simulateBets(candidates, { ...filters, WIN: { ...filters.WIN, forecast: 'history' } }, settings)
+  expect(result.bets).toHaveLength(1)
+  expect(result.bets[0]).toMatchObject({ odds: 2, status: 'WON', profit: 10, selection: { predictionId: 'early' } })
+  expect(simulateBets(candidates, { ...filters, WIN: { ...filters.WIN, forecast: 'history', source: 'tab' } }, settings).bets).toHaveLength(0)
+  const deadHeat = buildSimulationRace({ ...source, history, entries: source.entries.map(entry => ({ ...entry, position: 1 })) })
+  expect(deadHeat.historySelections![0].winIssue).toContain('dead-heat')
+  expect(buildSimulationRace({ ...source, history: [{ ...history[0], observedAt: source.start }] }).historySelections).toEqual([])
+})

@@ -17,6 +17,14 @@ export interface SimulationSource {
   entries: Array<{ horse_id: string; position: number | null; status: string }>
   forecasts: Array<{ id: string; model: string; predictedAt: string; createdAt: string; podium: PredictedHorse[]; allHorses?: PredictedHorse[]; evidence?: SimulationEvidence | null; field: string[] }>
   decisions?: SimulationDecision[]
+  history?: Array<{
+    forecast: SimulationSource['forecasts'][number]
+    horseId: string
+    winProbability: number
+    top3Probability: number
+    observedAt: string
+    provenance: 'home-snapshot' | 'pre-race-recovery'
+  }>
 }
 
 function probability(value: number | undefined): number | null {
@@ -97,7 +105,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       || !(Date.parse(forecast.predictedAt) <= Date.parse(decision.capturedAt))) continue
     decisionModels.add(forecast.model)
     if (decision.tabPlaceResearch?.model === forecast.model) tabPlaceResearch = decision.tabPlaceResearch
-    const frozen = buildSimulationRace({ ...source, forecasts: [forecast], decisions: undefined })
+    const frozen = buildSimulationRace({ ...source, forecasts: [forecast], decisions: undefined, history: undefined })
     for (const selection of frozen.selections) {
       const price = decision.prices?.[selection.id]
       const valid = price && isSimulationDecisionQuote(source.start, decision.capturedAt, price.quotedAt, price.capturedAt)
@@ -118,5 +126,19 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
         placeIssue: placeIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null) })
     }
   }
-  return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections, decisionSelections, tabPlaceResearch }
+  const historySelections: SimulationSelection[] = []
+  const historyHorses = new Set<string>()
+  for (const pick of source.history ?? []) {
+    if (historyHorses.has(pick.horseId) || !(Date.parse(pick.observedAt) < Date.parse(source.start))
+      || !(Date.parse(pick.observedAt) >= Date.parse(pick.forecast.createdAt))
+      || !(Date.parse(pick.observedAt) >= Date.parse(pick.forecast.predictedAt))) continue
+    const frozen = buildSimulationRace({ ...source, forecasts: [pick.forecast], decisions: undefined, history: undefined })
+    const selection = frozen.selections.find(selection => selection.id === pick.horseId)
+    if (!selection) continue
+    historyHorses.add(pick.horseId)
+    historySelections.push({ ...selection, forecastBasis: 'history', predictionId: pick.forecast.id,
+      winProbability: probability(pick.winProbability), top3Probability: probability(pick.top3Probability),
+      historyProvenance: pick.provenance, historyObservedAt: pick.observedAt })
+  }
+  return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections, decisionSelections, historySelections, tabPlaceResearch }
 }

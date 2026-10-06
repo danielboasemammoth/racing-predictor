@@ -7,6 +7,8 @@ export interface SimulationManifest {
   schema: 1
   pricingVersion?: number
   generatedAt: string
+  historyGeneratedAt?: string | null
+  historyPickCount?: number
   models: string[]
   chunks: string[]
   races: Array<{ id: string; fingerprint: string }>
@@ -41,5 +43,6 @@ export async function readSimulationChunks(baseUrl: string, manifest: Simulation
     races.push(...batch.flat())
   }
   if (races.length !== manifest.races.length || races.some((race, index) => race.id !== manifest.races[index].id)) throw new Error('Incomplete simulation report')
-  return { schema: 1, generatedAt: manifest.generatedAt, models: manifest.models, races }
+  return { schema: 1, generatedAt: manifest.generatedAt, models: manifest.models, races,
+    historyGeneratedAt: manifest.historyGeneratedAt, historyPickCount: manifest.historyPickCount }
 }

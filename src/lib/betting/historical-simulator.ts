@@ -9,6 +9,10 @@ export interface SimulationSelection {
   model: string
   rank: number
   predictedAt: string
+  forecastBasis?: 'history'
+  predictionId?: string
+  historyProvenance?: 'home-snapshot' | 'pre-race-recovery'
+  historyObservedAt?: string
   winProbability: number | null
   top3Probability: number | null
   top2Probability?: number | null
@@ -43,17 +47,21 @@ export interface SimulationRace {
   fieldSize: number
   selections: SimulationSelection[]
   decisionSelections?: SimulationSelection[]
+  historySelections?: SimulationSelection[]
   tabPlaceResearch?: TabPlaceTrial
 }
 
 export interface SimulationDataset {
   schema: 1
   generatedAt: string
+  historyGeneratedAt?: string | null
+  historyPickCount?: number
   races: SimulationRace[]
   models: string[]
 }
 
 export interface SimulationFilters {
+  forecast?: 'latest' | 'history'
   enabled: boolean
   minReliability: number
   minEdge: number
@@ -81,6 +89,7 @@ export interface SimulationFilters {
 }
 
 export const DEFAULT_SIMULATION_FILTERS: SimulationFilters = {
+  forecast: 'latest',
   enabled: true, minReliability: 0, minEdge: 0, minImplied: 0, maxImplied: 100,
   minWin: 0, minTop3: 50, model: '', rank: 0, minOdds: 0, maxOdds: 0,
   source: '', venue: '', maxField: 0, minimumFieldSize: 0, inclusiveThresholds: false,
@@ -146,7 +155,7 @@ export function simulationTabMarketRank(race: SimulationRace, selection: Simulat
 }
 
 export function simulationCandidates(races: SimulationRace[]): SimulationBet[] {
-  return races.flatMap(race => [...race.selections, ...(race.decisionSelections ?? [])].flatMap(selection => (['WIN', 'PLACE'] as const).map(market => {
+  return races.flatMap(race => [...race.selections, ...(race.decisionSelections ?? []), ...(race.historySelections ?? [])].flatMap(selection => (['WIN', 'PLACE'] as const).map(market => {
     const probability = market === 'WIN' ? selection.winProbability : selection.placeTermsVerified ? selection.placeProbability ?? null : selection.top3Probability
     const odds = market === 'WIN' ? selection.winOdds : selection.placeOdds
     const implied = odds !== null && odds > 1 ? 1 / odds : null
@@ -157,7 +166,7 @@ export function simulationCandidates(races: SimulationRace[]): SimulationBet[] {
         || !(Date.parse(selection.predictedAt) <= Date.parse(selection.evaluatedAt ?? ''))) ? 'TAB quote not verified at decision time' : null)
       ?? (source === 'tab' && !isSimulationTabQuote(race.start, selection.tabQuotedAt, selection.tabCapturedAt) ? 'TAB quote not verified near race start' : null)
     return {
-      id: `${race.id}:${selection.id}:${selection.model}:${market}${source === 'tab_decision' ? ':decision' : ''}`, race, selection, market, probability, odds, implied,
+      id: `${race.id}:${selection.id}:${selection.model}:${market}${source === 'tab_decision' ? ':decision' : ''}${selection.forecastBasis === 'history' ? ':history' : ''}`, race, selection, market, probability, odds, implied,
       edge: probability !== null && implied !== null ? (probability - implied) * 100 : null,
       tabMarketRank: simulationTabMarketRank(race, selection, source),
       source,
@@ -177,6 +186,7 @@ export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationF
   const evaluatedAt = selection.evaluatedAt ?? (bet.source === 'tab' ? selection.tabCapturedAt : null)
   const minutesToJump = (Date.parse(bet.race.start) - Date.parse(evaluatedAt ?? '')) / 60_000
   return check(filter.enabled, 'Market disabled')
+    && check((selection.forecastBasis === 'history') === (filter.forecast === 'history'), 'Different forecast basis selected')
     && check(bet.source !== 'tab_decision' || filter.source === 'tab_decision', 'Decision-time source not selected')
     && check(!filter.model || selection.model === filter.model, 'Different model selected')
     && check(!filter.rank || selection.rank === filter.rank, 'Model rank filter')

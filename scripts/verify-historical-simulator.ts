@@ -39,6 +39,7 @@ races[0].decisionSelections = [{ ...races[0].selections[0], winOdds: 5, placeOdd
   tabQuotedAt: new Date(Date.parse(races[0].start) - 31 * 60_000).toISOString() }]
 const manifest = {
   schema: 1, generatedAt: '2026-09-26T00:00:00Z', models,
+  historyGeneratedAt: null as string | null, historyPickCount: 0,
   chunks: [`simulator/v1/${'a'.repeat(64)}.json`],
   races: races.map(race => ({ id: race.id, fingerprint: 'test' })),
 }
@@ -332,6 +333,44 @@ async function main() {
     await historyLinkPage.getByText(/History race: not-published.*Outside the published report window/).waitFor()
     await historyLinkPage.getByText('All candidates (0)', { exact: true }).waitFor()
     await historyLinkPage.close()
+    races[0].historySelections = races[0].selections.slice(0, 3).map((selection, index) => ({ ...selection,
+      forecastBasis: 'history', predictionId: `history-${index}`, historyProvenance: 'pre-race-recovery',
+      historyObservedAt: '2026-09-19T00:00:00Z', winProbability: 0.63, top3Probability: 0.8,
+      winOdds: 2, placeOdds: 1.5, winSource: 'racing_com', placeSource: 'racing_com',
+    }))
+    manifest.historyGeneratedAt = '2026-09-26T00:00:00Z'
+    manifest.historyPickCount = 3
+    await page.evaluate(key => window.localStorage.removeItem(key), SIMULATION_PREFERENCES_KEY)
+    await page.reload()
+    await waitForCount(240)
+    await page.getByLabel('WIN forecast', { exact: true }).selectOption('history')
+    await page.getByRole('checkbox', { name: 'PLACE', exact: true }).uncheck()
+    await waitForCount(2)
+    await page.getByText(/3 of 3 retained picks have a replayable original forecast/).waitFor()
+    await candidatesRegion.getByText('History (recovered)', { exact: false }).first().waitFor()
+    assert.equal(await candidatesRegion.getByRole('cell', { name: '63.0%', exact: true }).count(), 2)
+    assert.equal(await candidatesRegion.getByRole('cell', { name: 'WON', exact: true }).count(), 1)
+    assert.equal(await candidatesRegion.getByRole('cell', { name: 'LOST', exact: true }).count(), 1)
+    const historyDownload = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Export all filtered bets', exact: true }).click()
+    const historyStream = await (await historyDownload).createReadStream()
+    assert.ok(historyStream)
+    const historyChunks: Buffer[] = []
+    for await (const chunk of historyStream) historyChunks.push(Buffer.from(chunk))
+    const historyCsv = Buffer.concat(historyChunks).toString('utf8')
+    assert.match(historyCsv, /"Forecast basis","Prediction ID","History provenance"/)
+    assert.match(historyCsv, /"history","history-0","pre-race-recovery"/)
+    assert.doesNotMatch(historyCsv, /"EXCLUDED"/)
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('tab')
+    await waitForCount(0)
+    await page.getByLabel('WIN odds source', { exact: true }).selectOption('')
+    await waitForCount(2)
+    await page.reload()
+    await waitForCount(2)
+    assert.equal(await page.getByLabel('WIN forecast', { exact: true }).inputValue(), 'history')
+    assert.equal(await page.getByLabel('PLACE forecast', { exact: true }).inputValue(), 'latest')
+    await page.getByLabel('WIN forecast', { exact: true }).selectOption('latest')
+    await waitForCount(120)
     const trial: SimulationRace = { ...races[0], selections: [], tabPlaceResearch: { ...TAB_PLACE_TRIAL },
       decisionSelections: Array.from({ length: 8 }, (_, index) => ({ ...races[0].decisionSelections![0],
         id: `trial-${index}`, horse: `TEST Trial Runner ${index}`, model: TAB_PLACE_TRIAL.model, rank: index + 1,

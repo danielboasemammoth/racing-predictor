@@ -6,6 +6,8 @@ import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl, 
 import type { SimulationRace } from './historical-simulator'
 import { getTabPricesForInternalRaces } from '../paper-betting/internal-tab-odds'
 import { simulationDecisionKey, type SimulationDecision } from './simulation-decision'
+import type { DailyPicksHistoryDay } from '../daily-picks-history'
+import type { PredictedHorse } from '../types'
 
 export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200_000) {
   const token = randomUUID()
@@ -25,9 +27,21 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
     const fingerprints = new Map(previous?.races.map(race => [race.id, race.fingerprint]))
     const races = new Map<string, SimulationRace>(oldData?.races.map(race => [race.id, race]))
     const sameModels = JSON.stringify(previous?.models) === JSON.stringify(CURRENT_MODEL_VERSIONS)
+    stage = 'Reading retained History picks'
+    const historySnapshot = await db.from('analysis_snapshots').select('payload, generated_at')
+      .eq('kind', 'page-cache-v1:picks-history').abortSignal(AbortSignal.timeout(30000)).retry(false).maybeSingle()
+    if (historySnapshot.error) throw historySnapshot.error
+    const historyDays = (historySnapshot.data?.payload ?? []) as DailyPicksHistoryDay[]
+    if (!Array.isArray(historyDays) || historyDays.some(day => !Array.isArray(day.picks))) throw new Error('Invalid History snapshot')
+    const historyGeneratedAt = historySnapshot.data?.generated_at ?? null
+    const historyChanged = (previous?.historyGeneratedAt ?? null) !== historyGeneratedAt
+    const raceIds = new Set(refs.map(race => race.id))
+    const historyPicks = historyDays.flatMap(day => day.picks).filter(pick => raceIds.has(pick.race.id))
+    const historyRaceIds = new Set(historyPicks.map(pick => pick.race.id))
     const recentCutoff = Date.now() - 24 * 60 * 60_000
-    const changed = refs.filter(race => !sameModels || previous?.pricingVersion !== SIMULATION_PRICING_VERSION || !races.has(race.id) || fingerprints.get(race.id) !== race.fingerprint || Date.parse(races.get(race.id)!.start) >= recentCutoff)
-    if (previous && changed.length === 0 && JSON.stringify(previous.races) === JSON.stringify(refs)) return { skipped: true, reason: 'No source changes' }
+    const changed = refs.filter(race => !sameModels || previous?.pricingVersion !== SIMULATION_PRICING_VERSION || !races.has(race.id) || fingerprints.get(race.id) !== race.fingerprint || Date.parse(races.get(race.id)!.start) >= recentCutoff
+      || (historyChanged && (historyRaceIds.has(race.id) || !!races.get(race.id)?.historySelections?.length)))
+    if (previous && !historyChanged && changed.length === 0 && JSON.stringify(previous.races) === JSON.stringify(refs)) return { skipped: true, reason: 'No source changes' }
     for (let offset = 0; offset < changed.length; offset += 10) {
       if (Date.now() > deadline) throw new Error('Simulation refresh deadline exceeded')
       const batch = changed.slice(offset, offset + 10)
@@ -43,13 +57,36 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
         .in('kind', sources.flatMap(source => CURRENT_MODEL_VERSIONS.map(model => simulationDecisionKey(source.id, model))))
         .abortSignal(AbortSignal.timeout(30000)).retry(false)
       if (decisions.error) throw decisions.error
+      stage = `Reading original History forecasts ${offset + 1}-${offset + batch.length} of ${changed.length}`
+      const batchPicks = historyPicks.filter(pick => batch.some(race => race.id === pick.race.id))
+      const historyForecasts = new Map<string, { race_id: string; forecast: SimulationSource['forecasts'][number] }>()
+      const predictionIds = [...new Set(batchPicks.map(pick => pick.predictionId))]
+      for (let predictionOffset = 0; predictionOffset < predictionIds.length; predictionOffset += 10) {
+        if (Date.now() > deadline) throw new Error('Simulation refresh deadline exceeded')
+        const rows = await db.from('predictions')
+          .select('id, race_id, model_version, predicted_at, created_at, podium:predictions->podium, allHorses:predictions->all_horses')
+          .in('id', predictionIds.slice(predictionOffset, predictionOffset + 10)).abortSignal(AbortSignal.timeout(30000)).retry(false)
+        if (rows.error) throw rows.error
+        for (const row of rows.data ?? []) {
+          const podium = Array.isArray(row.podium) ? row.podium as unknown as PredictedHorse[] : []
+          const allHorses = Array.isArray(row.allHorses) ? row.allHorses as unknown as PredictedHorse[] : []
+          historyForecasts.set(row.id, { race_id: row.race_id, forecast: { id: row.id, model: row.model_version,
+            predictedAt: row.predicted_at, createdAt: row.created_at, podium, allHorses, field: allHorses.map(horse => horse.horse_id) } })
+        }
+      }
       for (const source of sources) {
         const observations = (decisions.data ?? []).filter(row => {
           const payload = row.payload as SimulationDecision
           return payload?.raceId === source.id && payload.forecast && row.kind === simulationDecisionKey(source.id, payload.forecast.model)
             && Date.parse(row.generated_at) === Date.parse(payload.capturedAt)
         }).map(row => row.payload as SimulationDecision)
-        races.set(source.id, buildSimulationRace({ ...source, decisions: observations }, prices.get(source.id)))
+        const history = batchPicks.filter(pick => pick.race.id === source.id).flatMap(pick => {
+          const retained = historyForecasts.get(pick.predictionId)
+          if (!retained || retained.race_id !== source.id || Date.parse(pick.race.race_datetime) !== Date.parse(source.start)) return []
+          return [{ forecast: retained.forecast, horseId: pick.horse.horse_id, winProbability: pick.winProbability,
+            top3Probability: pick.top3Probability, observedAt: pick.observedAt, provenance: pick.provenance }]
+        })
+        races.set(source.id, buildSimulationRace({ ...source, decisions: observations, history }, prices.get(source.id)))
       }
     }
     const bucket = db.storage.from(SIMULATION_REPORT_BUCKET)
@@ -75,7 +112,7 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
     stage = 'Verifying report lease'
     const lease = await db.from('reporting_job_leases').select('token').eq('name', 'historical-simulator').eq('token', token).gt('expires_at', new Date().toISOString()).maybeSingle()
     if (lease.error || !lease.data || Date.now() > deadline) throw new Error('Simulation lease or deadline expired')
-    const manifest: SimulationManifest = { schema: 1, pricingVersion: SIMULATION_PRICING_VERSION, generatedAt: new Date().toISOString(), models: [...CURRENT_MODEL_VERSIONS], chunks, races: refs }
+    const manifest: SimulationManifest = { schema: 1, pricingVersion: SIMULATION_PRICING_VERSION, generatedAt: new Date().toISOString(), models: [...CURRENT_MODEL_VERSIONS], chunks, races: refs, historyGeneratedAt, historyPickCount: historyPicks.length }
     stage = 'Publishing report manifest'
     const published = await bucket.upload(SIMULATION_MANIFEST_PATH, JSON.stringify(manifest), { contentType: 'application/json', cacheControl: '60', upsert: true })
     if (published.error) throw published.error
