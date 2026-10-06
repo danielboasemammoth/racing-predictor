@@ -57,19 +57,29 @@ export async function getUpcomingRaces(supabase: SupabaseClient): Promise<RaceWi
   const modelsByRace = new Map<string, Prediction[]>()
   for (let batch = 0; batch < typedRaces.length; batch += 20) {
     const raceIds = typedRaces.slice(batch, batch + 20).map(race => race.id)
+    const latest = new Map<string, Pick<Prediction, 'id' | 'race_id' | 'model_version' | 'predicted_at'>>()
     for (let offset = 0; ; offset += 1000) {
-      const { data, error } = await supabase.from('predictions').select('*')
+      const { data, error } = await supabase.from('predictions').select('id, race_id, model_version, predicted_at')
         .in('race_id', raceIds).in('model_version', CURRENT_MODEL_VERSIONS)
         .order('predicted_at', { ascending: false }).order('id', { ascending: false })
         .range(offset, offset + 999)
       if (error) throw error
-      const predictions = (data ?? []) as Prediction[]
+      const predictions = (data ?? []) as Array<Pick<Prediction, 'id' | 'race_id' | 'model_version' | 'predicted_at'>>
       for (const prediction of predictions) {
+        const key = `${prediction.race_id}:${prediction.model_version}`
+        if (!latest.has(key)) latest.set(key, prediction)
+      }
+      if (predictions.length < 1000 || latest.size === raceIds.length * CURRENT_MODEL_VERSIONS.length) break
+    }
+    const selectedIds = [...latest.values()].map(prediction => prediction.id)
+    for (let offset = 0; offset < selectedIds.length; offset += 20) {
+      const { data, error } = await supabase.from('predictions').select('*').in('id', selectedIds.slice(offset, offset + 20))
+      if (error) throw error
+      for (const prediction of (data ?? []) as Prediction[]) {
         const models = modelsByRace.get(prediction.race_id) ?? []
-        if (!models.some(model => model.model_version === prediction.model_version)) models.push(prediction)
+        models.push(prediction)
         modelsByRace.set(prediction.race_id, models)
       }
-      if (predictions.length < 1000 || raceIds.every(id => modelsByRace.get(id)?.length === CURRENT_MODEL_VERSIONS.length)) break
     }
   }
 

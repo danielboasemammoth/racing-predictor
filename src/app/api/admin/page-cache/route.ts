@@ -18,5 +18,6 @@ export async function POST(request: Request) {
   const success = results.every(result => result.ok)
   if (success) revalidateTag('page-snapshots', 'max')
   const archiveFailed = results.some(result => result.code === 'HOME_ARCHIVE_FAILED')
-  return NextResponse.json({ success, message: success ? `Published ${key} snapshot` : archiveFailed ? 'Home snapshot published, but shortlist archive failed' : `Kept previous ${key} snapshot; refresh failed`, results }, { status: success ? 200 : 503 })
+  const mirrorFailed = results.some(result => result.code === 'HOME_MIRROR_FAILED')
+  return NextResponse.json({ success, message: success ? `Published ${key} snapshot` : archiveFailed ? 'Home snapshot published, but shortlist archive failed' : mirrorFailed ? 'Home snapshot published, but public mirror failed' : `Kept previous ${key} snapshot; refresh failed`, results }, { status: success ? 200 : 503 })
 }

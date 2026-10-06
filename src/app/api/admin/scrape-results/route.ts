@@ -12,14 +12,16 @@ function melbourneDate() {
   }).format(new Date())
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   if (!await hasAdminSession()) {
     return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 })
   }
 
   try {
+    const body = await request.json().catch(() => ({}))
+    const recent = body && typeof body === 'object' && body.mode === 'recent'
     const summary = await ingestRacingCom(createAdminClient(), melbourneDate(), {
-      daysBack: 7,
+      daysBack: recent ? 1 : 7,
       daysForward: 0,
     })
     return NextResponse.json({

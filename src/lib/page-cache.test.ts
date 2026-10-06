@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPageSnapshotReader, createPageSnapshotStore, refreshPageSnapshot, type PageSnapshotStore } from './page-cache'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { recordHomePicks } from './home-picks-archive'
+import { publishHomeMirror } from './home-snapshot-mirror'
 
 vi.mock('./home-picks-archive', () => ({ recordHomePicks: vi.fn() }))
+vi.mock('./home-snapshot-mirror', () => ({ publishHomeMirror: vi.fn() }))
 
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
@@ -68,6 +70,7 @@ describe('persisted page snapshots', () => {
     const snapshot = { generatedAt: '2026-10-05T00:00:00Z', data: { races: [] } }
     await createPageSnapshotStore(db).publish('home', snapshot)
     expect(recordHomePicks).toHaveBeenCalledExactlyOnceWith(db, snapshot.data, snapshot.generatedAt)
+    expect(publishHomeMirror).toHaveBeenCalledExactlyOnceWith(db, snapshot)
     vi.mocked(recordHomePicks).mockClear()
     query.select.mockResolvedValueOnce({ data: [], error: new Error('write failed') } as never)
     await expect(createPageSnapshotStore(db).publish('home', snapshot)).rejects.toThrow('write failed')

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { recordHomePicks } from './home-picks-archive'
+import { publishHomeMirror } from './home-snapshot-mirror'
 
 export interface PageSnapshot<Value> {
   generatedAt: string
@@ -31,8 +32,11 @@ export function createPageSnapshotStore(db: SupabaseClient): PageSnapshotStore {
         published = Boolean(inserted.data?.length)
       }
       if (key === 'home' && published) {
-        try { await recordHomePicks(db, snapshot.data, snapshot.generatedAt) }
-        catch (cause) { throw Object.assign(new Error('Home published, but shortlist archive failed', { cause }), { code: 'HOME_ARCHIVE_FAILED' }) }
+        const [archive, mirror] = await Promise.allSettled([
+          recordHomePicks(db, snapshot.data, snapshot.generatedAt), publishHomeMirror(db, snapshot),
+        ])
+        if (archive.status === 'rejected') throw Object.assign(new Error('Home published, but shortlist archive failed', { cause: archive.reason }), { code: 'HOME_ARCHIVE_FAILED' })
+        if (mirror.status === 'rejected') throw Object.assign(new Error('Home published, but public mirror failed', { cause: mirror.reason }), { code: 'HOME_MIRROR_FAILED' })
       }
     },
   }

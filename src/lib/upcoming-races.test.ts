@@ -13,12 +13,17 @@ function mockDatabase(raceCount: number, historyCopies = 1) {
     lt: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue({ data: races, error: null }),
   }
   const requests: Array<{ ids: string[]; start: number }> = []
+  const payloadRequests: string[][] = []
   const from = vi.fn((table: string) => {
     if (table === 'races') return raceQuery
     let ids: string[] = []
     const query = {
       select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(),
       in: vi.fn((field: string, values: string[]) => {
+        if (field === 'id') {
+          payloadRequests.push(values)
+          return Promise.resolve({ data: predictions.filter(prediction => values.includes(prediction.id)), error: null })
+        }
         if (field === 'race_id') ids = values
         return query
       }),
@@ -29,7 +34,7 @@ function mockDatabase(raceCount: number, historyCopies = 1) {
     }
     return query
   })
-  return { db: { from } as unknown as SupabaseClient, requests }
+  return { db: { from } as unknown as SupabaseClient, requests, payloadRequests }
 }
 
 describe('upcoming race model coverage', () => {
@@ -44,11 +49,13 @@ describe('upcoming race model coverage', () => {
   })
 
   it('pages through repeated snapshots within a batch and keeps the newest model per race', async () => {
-    const { db, requests } = mockDatabase(20, 20)
+    const { db, requests, payloadRequests } = mockDatabase(20, 20)
     const races = await getUpcomingRaces(db)
     expect(requests.map(request => request.start)).toEqual([0, 1000, 2000])
     expect(races.every(race => race.model_predictions?.length === CURRENT_MODEL_VERSIONS.length)).toBe(true)
     expect(races.every(race => race.prediction?.predicted_at === 'snapshot-19')).toBe(true)
+    expect(payloadRequests.flat()).toHaveLength(20 * CURRENT_MODEL_VERSIONS.length)
+    expect(payloadRequests.every(ids => ids.length <= 20)).toBe(true)
   })
 
   it('does not query predictions when no races are scheduled', async () => {

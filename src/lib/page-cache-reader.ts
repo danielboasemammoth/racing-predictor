@@ -2,8 +2,13 @@ import 'server-only'
 import { createClient } from '@supabase/supabase-js'
 import { unstable_cache } from 'next/cache'
 import { createPageSnapshotReader, createPageSnapshotStore } from './page-cache'
+import { readHomeMirror } from './home-snapshot-mirror'
 
 const cachedSnapshot = unstable_cache(async (key: string) => {
+  if (key === 'home') {
+    try { return await readHomeMirror() }
+    catch { console.error('Home public mirror unavailable; checking database snapshot') }
+  }
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: (url, options) => fetch(url, {

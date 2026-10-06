@@ -119,7 +119,8 @@ try {
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape" -Label "Sync Upcoming Races" -WebSession $webSession
 
-    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape-results" -Label "Sync Results" -WebSession $webSession
+    $resultsMode = if ($runMaintenance) { 'all' } else { 'recent' }
+    Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/scrape-results" -Mode $resultsMode -Label "Sync Results" -WebSession $webSession
 
     Invoke-Step -BaseUrl $baseUrl -Path "/api/admin/predict" -Mode "all" -Label "Generate Predictions" -WebSession $webSession
 
