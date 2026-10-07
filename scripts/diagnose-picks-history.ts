@@ -3,7 +3,8 @@ import { loadDailyPicksHistory, type DailyPicksHistoryDay } from '../src/lib/dai
 import type { PredictedHorse } from '../src/lib/types'
 import { PRODUCTION_MODEL_VERSION } from '../src/lib/prediction-suite'
 import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl } from '../src/lib/betting/simulation-report'
-import { DEFAULT_SIMULATION_FILTERS, matchesSimulationFilters, simulationCandidates, simulationExclusionReasons } from '../src/lib/betting/historical-simulator'
+import { DEFAULT_SIMULATION_FILTERS, matchesSimulationFilters, simulateBets, simulationCandidates, simulationExclusionReasons } from '../src/lib/betting/historical-simulator'
+import { picksHistoryPreset } from '../src/lib/betting/simulation-presets'
 
 async function main() {
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -16,6 +17,30 @@ async function main() {
     const manifest = await readSimulationManifest(baseUrl)
     if (!manifest) throw new Error('Simulator report unavailable')
     const report = await readSimulationChunks(baseUrl, manifest)
+    if (process.argv.includes('--audit-exclusions')) {
+      const preset = picksHistoryPreset()
+      const replay = simulateBets(simulationCandidates(report.races), preset.filters, preset.settings)
+      const picks = history.flatMap(day => day.picks).map(pick => {
+        const race = report.races.find(race => race.id === pick.race.id)
+        const bet = simulationCandidates(race ? [race] : []).find(bet => bet.market === 'WIN'
+          && bet.selection.forecastBasis === 'history' && bet.selection.id === pick.horse.horse_id)
+        return { horse: pick.horse.horse_name, raceId: pick.race.id, historyPosition: pick.actualPosition,
+          replayPosition: bet?.selection.position, odds: bet?.odds, issue: bet ? bet.issue : 'Missing replay', scratched: bet?.selection.scratched }
+      })
+      const ambiguousIds = [...new Set(picks.filter(pick => pick.issue === 'Ambiguous or dead-heat result').map(pick => pick.raceId))]
+      const results = ambiguousIds.length ? await db.from('race_entries')
+        .select('race_id, finishing_position, status, horses(name)').in('race_id', ambiguousIds).retry(false) : { data: [], error: null }
+      if (results.error) throw results.error
+      console.log(JSON.stringify({ generatedAt: report.generatedAt, total: picks.length,
+        exactReplay: { summaries: replay.summaries, bets: replay.bets.map(bet => ({ horse: bet.selection.horse,
+          status: bet.status, stake: bet.stake, returned: bet.returned, issue: bet.issue, payoutWarning: bet.payoutWarning })) },
+        issues: picks.reduce<Record<string, number>>((counts, pick) => {
+          const reason = pick.issue ?? (pick.scratched ? 'Refunded' : 'Eligible')
+          counts[reason] = (counts[reason] ?? 0) + 1
+          return counts
+        }, {}), excluded: picks.filter(pick => pick.issue), ambiguousRaceResults: results.data }, null, 2))
+      return
+    }
     const dateKey = process.argv.find(value => value.startsWith('--date='))?.slice('--date='.length) ?? history[0]?.dateKey
     const picks = history.find(day => day.dateKey === dateKey)?.picks ?? []
     if (process.argv.includes('--verify-history')) {

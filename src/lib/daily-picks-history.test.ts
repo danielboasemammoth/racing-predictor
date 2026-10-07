@@ -47,13 +47,14 @@ it('recovers the original qualifying pre-race horse without requiring a retrospe
 
 it('keeps frozen homepage scores instead of reranking against later predictions and retains scratched picks', async () => {
   const pick = { race, horse, winProbability: 0.5, top3Probability: 0.64, reliability: { score: 83 },
-    predictionId: 'original', provenance: 'home-snapshot', observedAt: '2026-10-03T00:00:00Z' }
+    predictionId: 'original', provenance: 'home-snapshot', observedAt: '2026-10-03T00:00:00Z',
+    tabPrice: { win: 2, place: 1.2, capturedAt: '2026-10-02T23:59:30Z', quotedAt: '2026-10-02T23:59:20Z' }, tabPriceStatus: 'captured' }
   const archive = { id: 'archive', generated_at: pick.observedAt, payload: { schema: 1, dateKeys: ['2026-10-03'], picks: [pick] } }
-  const later = { ...archive, id: 'later', generated_at: '2026-10-03T02:00:00Z', payload: { ...archive.payload, picks: [{ ...pick, winProbability: 0.9 }] } }
+  const later = { ...archive, id: 'later', generated_at: '2026-10-03T02:00:00Z', payload: { ...archive.payload, picks: [{ ...pick, winProbability: 0.9, tabPrice: { ...pick.tabPrice, win: 9 } }] } }
   const { db } = database([forecast], [archive, later], 'scratched')
   const history = await loadDailyPicksHistory(db)
   expect(history[0].picks).toHaveLength(1)
-  expect(history[0].picks[0]).toMatchObject({ winProbability: 0.5, top3Probability: 0.64, reliability: { score: 83 }, scratched: true, won: false, placedTop3: false })
+  expect(history[0].picks[0]).toMatchObject({ winProbability: 0.5, top3Probability: 0.64, reliability: { score: 83 }, scratched: true, won: false, placedTop3: false, tabPrice: pick.tabPrice, tabPriceStatus: 'captured' })
 })
 
 it('does not fill an archived empty shortlist with reconstructed picks', async () => {

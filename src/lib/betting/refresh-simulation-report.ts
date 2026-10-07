@@ -84,7 +84,8 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
           const retained = historyForecasts.get(pick.predictionId)
           if (!retained || retained.race_id !== source.id || Date.parse(pick.race.race_datetime) !== Date.parse(source.start)) return []
           return [{ forecast: retained.forecast, horseId: pick.horse.horse_id, winProbability: pick.winProbability,
-            top3Probability: pick.top3Probability, observedAt: pick.observedAt, provenance: pick.provenance }]
+            top3Probability: pick.top3Probability, observedAt: pick.observedAt, provenance: pick.provenance,
+            tabPrice: pick.tabPrice, tabPriceStatus: pick.tabPriceStatus }]
         })
         races.set(source.id, buildSimulationRace({ ...source, decisions: observations, history }, prices.get(source.id)))
       }

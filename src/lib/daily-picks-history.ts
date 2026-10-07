@@ -3,12 +3,14 @@ import { readPages } from './supabase/read-pages'
 import type { Prediction, Race } from './types'
 import { PRODUCTION_MODEL_VERSION } from './prediction-suite'
 import { candidatesForDate, DEFAULT_PICKS_MIN_PCT, DEFAULT_PICKS_SORT, melbourneDateKey, sortDailyPicks, type DailyPick } from './daily-picks'
-import type { HomePicksArchive } from './home-picks-archive'
+import type { HomePicksArchive, RecordedHomePick } from './home-picks-archive'
 
 export interface HistoricalDailyPick extends DailyPick {
   provenance: 'home-snapshot' | 'pre-race-recovery'
   observedAt: string
   predictionId: string
+  tabPrice?: RecordedHomePick['tabPrice']
+  tabPriceStatus?: RecordedHomePick['tabPriceStatus']
   actualPosition: number | null
   scratched: boolean
   won: boolean

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findMatchingInternalRace, normalizeHorseName, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
-import { isSimulationDecisionQuote, isSimulationTabQuote } from '@/lib/betting/historical-simulator'
+import { isSimulationDecisionQuote, isSimulationSelectionQuote, isSimulationTabQuote } from '@/lib/betting/historical-simulator'
 
 export interface InternalRaceRef {
   id: string
@@ -37,10 +37,12 @@ export async function getTabPricesForInternalRaces(
   races: InternalRaceRef[],
   nearStartOnly = false,
   decisionAt?: string,
+  timing: 'decision' | 'selection' = 'decision',
 ): Promise<Map<string, Map<string, TabPrice>>> {
   const result = new Map<string, Map<string, TabPrice>>()
   const strict = nearStartOnly || decisionAt !== undefined
   if (decisionAt !== undefined && (!Number.isFinite(Date.parse(decisionAt)) || nearStartOnly)) throw new Error('Invalid decision-time TAB lookup')
+  if (timing === 'selection' && decisionAt === undefined) throw new Error('Selection-time TAB lookup requires a timestamp')
   if (races.length === 0) return result
   if (strict && races.length > 20) throw new Error('Verified TAB lookup is limited to 20 races')
 
@@ -117,7 +119,7 @@ export async function getTabPricesForInternalRaces(
     const age = row.tab_age_seconds
     const quotedAt = typeof age === 'number' && Number.isFinite(age) && age >= 0 && age <= 120 && Number.isFinite(Date.parse(row.captured_at)) ? new Date(Date.parse(row.captured_at) - age * 1000).toISOString() : null
     if (nearStartOnly && !isSimulationTabQuote(startByRunner.get(runnerId) ?? '', quotedAt, row.captured_at)) continue
-    if (decisionAt && !isSimulationDecisionQuote(startByRunner.get(runnerId) ?? '', decisionAt, quotedAt, row.captured_at)) continue
+    if (decisionAt && !(timing === 'selection' ? isSimulationSelectionQuote : isSimulationDecisionQuote)(startByRunner.get(runnerId) ?? '', decisionAt, quotedAt, row.captured_at)) continue
     if (!latestSnapshotByRunnerId.has(runnerId)) {
       latestSnapshotByRunnerId.set(runnerId, row)
     }

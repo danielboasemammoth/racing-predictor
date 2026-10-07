@@ -1,11 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { candidatesForDate, DEFAULT_PICKS_MIN_PCT, DEFAULT_PICKS_SORT, filterDailyPicksByThreshold, melbourneDateKey, sortDailyPicks, type DailyPick } from './daily-picks'
 import type { HomeSnapshot } from './page-snapshot-loaders'
+import { getTabPricesForInternalRaces, type TabPrice } from './paper-betting/internal-tab-odds'
+import { normalizeHorseName } from './paper-betting/fundamentals-bridge'
 
 export interface RecordedHomePick extends DailyPick {
   provenance: 'home-snapshot'
   observedAt: string
   predictionId: string
+  tabPrice?: TabPrice | null
+  tabPriceStatus?: 'captured' | 'unavailable' | 'lookup-failed'
 }
 
 export interface HomePicksArchive {
@@ -38,6 +42,23 @@ export function homePicksArchive(snapshot: HomeSnapshot, snapshotAt: string, obs
 export async function recordHomePicks(db: SupabaseClient, data: unknown, snapshotAt: string) {
   if (!data || typeof data !== 'object' || !('races' in data) || !Array.isArray(data.races)) return
   const payload = homePicksArchive(data as HomeSnapshot, snapshotAt)
+  const races = [...new Map(payload.picks.map(pick => [pick.race.id, {
+    id: pick.race.id, racecourseName: pick.race.racecourses?.name ?? '',
+    raceNumber: pick.race.race_number, raceDatetime: pick.race.race_datetime,
+  }])).values()]
+  for (let offset = 0; offset < races.length; offset += 20) {
+    const batch = races.slice(offset, offset + 20)
+    const picks = payload.picks.filter(pick => batch.some(race => race.id === pick.race.id))
+    try {
+      const prices = await getTabPricesForInternalRaces(db, batch, false, payload.observedAt, 'selection')
+      for (const pick of picks) {
+        pick.tabPrice = prices.get(pick.race.id)?.get(normalizeHorseName(pick.horse.horse_name)) ?? null
+        pick.tabPriceStatus = pick.tabPrice ? 'captured' : 'unavailable'
+      }
+    } catch {
+      for (const pick of picks) { pick.tabPrice = null; pick.tabPriceStatus = 'lookup-failed' }
+    }
+  }
   const { error } = await db.from('analysis_snapshots').upsert({
     kind: `home-picks-v1:${snapshotAt}`, generated_at: payload.observedAt, payload,
   }, { onConflict: 'kind', ignoreDuplicates: true })

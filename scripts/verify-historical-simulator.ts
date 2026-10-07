@@ -51,8 +51,20 @@ async function main() {
     let reportRequests = 0
     let reportStatus = 200
     const blockedRequests: string[] = []
+    const batchRequests: Array<{ jurisdiction: string; preferences: { settings: { flatStake: number } } }> = []
+    let batchError = false
     await context.route('**/*', async route => {
       const url = new URL(route.request().url())
+      if (process.argv.includes('--tab-batch') && url.pathname === '/api/paper-betting/tab-batch') {
+        batchRequests.push(route.request().postDataJSON())
+        const latest = batchRequests.at(-1)!
+        return route.fulfill({ status: batchError ? 503 : 200, contentType: 'application/json', body: JSON.stringify(batchError ? { message: 'TEST TAB unavailable' } : {
+          generatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 120_000).toISOString(), jurisdiction: latest.jurisdiction,
+          text: 'MR-01-WP-00010.0-00000.0/4/', total: 10,
+          rows: [{ race: 'TEST Flemington R1', start: new Date(Date.now() + 600_000).toISOString(), horse: 'TEST Runner', runner: 4, market: 'WIN', model: 'test-alpha', stake: 10, line: 'MR-01-WP-00010.0-00000.0/4/' }],
+          excluded: [{ race: 'TEST R2', horse: 'TEST Scratched', reason: 'Runner scratched or betting closed' }], warnings: [],
+        }) })
+      }
       if (url.pathname.includes('/storage/v1/object/public/racing-reports/')) {
         reportRequests++
         return route.fulfill({ status: reportStatus, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(url.pathname.endsWith('manifest.json') ? manifest : races) })
@@ -71,6 +83,124 @@ async function main() {
     const waitForCount = (count: number) => page.getByText(`Filtered bets (${count})`, { exact: true }).waitFor()
     const results = () => page.getByRole('region', { name: 'Simulation results', exact: true }).innerText()
     await waitForCount(240)
+    if (process.argv.includes('--tab-batch')) {
+      const batch = page.getByRole('region', { name: 'TAB Tote batch', exact: true })
+      const generate = batch.getByRole('button', { name: 'Generate batch', exact: true })
+      const text = page.getByLabel('TAB batch text', { exact: true })
+      await text.waitFor({ state: 'visible' })
+      assert.equal(await text.inputValue(), '')
+      assert.equal(await text.getAttribute('placeholder'), 'No jurisdiction selected.')
+      assert.equal(await generate.isDisabled(), true)
+      await page.getByLabel('TAB account jurisdiction', { exact: true }).selectOption('VIC')
+      await batch.getByRole('status').filter({ hasText: 'Ready. No batch generated yet.' }).waitFor()
+      await generate.click()
+      await batch.getByRole('status').filter({ hasText: '1 bet lines / $10.00 combined stake / VIC' }).waitFor()
+      assert.equal(batchRequests[0].jurisdiction, 'VIC')
+      assert.equal(batchRequests[0].preferences.settings.flatStake, 10)
+      assert.equal(await text.inputValue(), 'MR-01-WP-00010.0-00000.0/4/')
+      await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+      await batch.getByRole('button', { name: 'Copy TAB batch text', exact: true }).click()
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'MR-01-WP-00010.0-00000.0/4/')
+      await page.getByLabel('Flat stake', { exact: true }).fill('5')
+      await batch.getByRole('status').filter({ hasText: 'configuration changed' }).first().waitFor()
+      assert.equal(await text.inputValue(), '')
+      assert.equal(await batch.getByRole('button', { name: 'Copy TAB batch text', exact: true }).isDisabled(), true)
+      await page.getByLabel('TAB account jurisdiction', { exact: true }).selectOption('NSW')
+      await generate.click()
+      await batch.getByRole('status').filter({ hasText: '/ NSW' }).waitFor()
+      assert.equal(batchRequests.at(-1)!.preferences.settings.flatStake, 5)
+      for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
+        await page.setViewportSize(viewport)
+        await batch.scrollIntoViewIfNeeded()
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)
+        await mkdir('scripts/output', { recursive: true })
+        await page.screenshot({ path: `scripts/output/tab-batch-${viewport.name}.png` })
+      }
+      await page.clock.install()
+      await page.clock.fastForward(121_000)
+      await batch.getByRole('status').filter({ hasText: 'Preview expired' }).first().waitFor()
+      assert.equal(await text.inputValue(), '')
+      assert.equal(await batch.getByRole('button', { name: 'Copy TAB batch text', exact: true }).isDisabled(), true)
+      batchError = true
+      await generate.click()
+      await batch.getByRole('alert').filter({ hasText: 'TEST TAB unavailable' }).waitFor()
+      await text.waitFor({ state: 'visible' })
+      assert.equal(await text.inputValue(), '')
+      assert.equal(await text.getAttribute('placeholder'), 'Batch generation failed. See the error below.')
+      assert.equal(await batch.getByRole('button', { name: 'Copy TAB batch text', exact: true }).isDisabled(), true)
+      assert.deepEqual(errors, [])
+      console.log('TAB batch browser checks passed: jurisdiction, configuration, generation, clipboard, invalidation, failure handling and desktop/mobile layout. No bets submitted.')
+      return
+    }
+    if (process.argv.includes('--tab-settlement')) {
+      for (const view of ['All candidates', 'Simulated bets']) {
+        await page.getByRole('tab', { name: view, exact: true }).click()
+        for (const label of ['TAB WIN', 'TAB PLACE', 'TAB quote timing']) await page.getByRole('columnheader', { name: label, exact: true }).waitFor()
+      }
+      const observedAt = new Date(Date.parse(races[0].start) - 45 * 60_000).toISOString()
+      const tabPrice = { win: 2.5, place: 1.5, capturedAt: new Date(Date.parse(observedAt) - 30_000).toISOString(), quotedAt: new Date(Date.parse(observedAt) - 40_000).toISOString() }
+      races[0].historySelections = [1, 2, 4].map((position, index) => ({ ...races[0].selections[0], id: `tab-history-${index}`, horse: `TEST TAB ${index}`,
+        forecastBasis: 'history', historyObservedAt: observedAt, historyProvenance: 'home-snapshot', predictionId: `history-${index}`, position,
+        tabPrice: index === 1 ? undefined : tabPrice, tabPriceStatus: index === 1 ? undefined : 'captured', tabPriceBasis: 'selection' }))
+      manifest.generatedAt = '2026-10-07T00:00:00Z'
+      manifest.historyGeneratedAt = manifest.generatedAt
+      manifest.historyPickCount = 3
+      await page.getByRole('button', { name: 'Refresh report', exact: true }).click()
+      await page.getByRole('button', { name: 'Picks History preset', exact: true }).click()
+      await waitForCount(3)
+      const priceRequests = reportRequests
+      await page.getByLabel('WIN settlement odds', { exact: true }).selectOption('tab')
+      await page.getByRole('region', { name: 'Simulation results', exact: true }).getByText('$5.00', { exact: true }).waitFor()
+      assert.match(await results(), /25\.0%/)
+      assert.match(await results(), /1 excluded/)
+      assert.equal(await page.getByLabel('WIN settlement odds', { exact: true }).isDisabled(), false)
+      assert.equal(await page.getByLabel('WIN edge', { exact: true }).isDisabled(), true)
+      const table = page.getByRole('region', { name: 'Filtered bets', exact: true })
+      await table.getByText('TAB WIN quote unavailable at selection time', { exact: true }).waitFor()
+      await table.getByText('Not recorded', { exact: true }).waitFor()
+      assert.equal(await table.getByRole('cell', { name: '2.50', exact: true }).count(), 2)
+      assert.equal(await table.getByRole('cell', { name: '1.50', exact: true }).count(), 2)
+      const downloadPromise = page.waitForEvent('download')
+      await page.getByRole('button', { name: 'Export all filtered bets', exact: true }).click()
+      const stream = await (await downloadPromise).createReadStream()
+      assert.ok(stream)
+      const chunks: Buffer[] = []
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+      const csv = Buffer.concat(chunks).toString('utf8')
+      assert.equal(csv.split('\r\n').length, 4)
+      assert.match(csv, /"TAB WIN odds","TAB PLACE odds","TAB quote basis","TAB quote status"/)
+      assert.match(csv, /"tab_selection","TAB","2.5"/)
+      assert.match(csv, /"EXCLUDED"/)
+      assert.ok(csv.includes(tabPrice.quotedAt))
+      await page.getByRole('checkbox', { name: 'PLACE', exact: true }).check()
+      await waitForCount(6)
+      await page.getByRole('region', { name: 'Simulation results', exact: true }).getByText('$15.00', { exact: true }).waitFor()
+      await page.getByLabel('PLACE settlement odds', { exact: true }).selectOption('tab')
+      await page.getByRole('region', { name: 'Simulation results', exact: true }).getByText('$0.00', { exact: true }).waitFor()
+      assert.match(await results(), /2 excluded/)
+      assert.equal(reportRequests, priceRequests, 'TAB settlement must recalculate locally')
+      await page.reload()
+      await waitForCount(6)
+      for (const market of ['WIN', 'PLACE']) assert.equal(await page.getByLabel(`${market} settlement odds`, { exact: true }).inputValue(), 'tab')
+      for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
+        await page.setViewportSize(viewport)
+        await page.getByRole('region', { name: 'Simulation results', exact: true }).scrollIntoViewIfNeeded()
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, `${viewport.name} TAB settlement overflow`)
+        await mkdir('scripts/output', { recursive: true })
+        await page.screenshot({ path: `scripts/output/simulator-tab-results-${viewport.name}.png` })
+        await page.getByRole('tab', { name: 'All candidates', exact: true }).click()
+        await page.getByLabel('Search candidates', { exact: true }).fill('TEST TAB')
+        await page.getByText('All candidates (6)', { exact: true }).waitFor()
+        await page.getByLabel('Bet results table', { exact: true }).evaluate(element => { element.scrollLeft = element.scrollWidth })
+        await page.getByRole('columnheader', { name: 'TAB WIN', exact: true }).scrollIntoViewIfNeeded()
+        await page.screenshot({ path: `scripts/output/simulator-tab-quotes-${viewport.name}.png` })
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)
+        await page.getByRole('tab', { name: 'Simulated bets', exact: true }).click()
+      }
+      assert.deepEqual(errors, [])
+      console.log('TAB settlement browser checks passed: both markets, exact-time quotes, missing-price exclusions, ROI, CSV, persistence and desktop/mobile layout. Fixtures only; no database writes.')
+      return
+    }
     await page.getByRole('region', { name: 'Prospective TAB PLACE research', exact: true }).getByText(/No eligible trial results in this window.*does not identify TAB as its source/).waitFor()
     assert.equal(await page.getByLabel('Completed races', { exact: true }).inputValue(), '500')
     assert.match(await results(), /75\.0%/)

@@ -36,3 +36,15 @@ it('uses the latest fresh quote available at the decision, not a later or better
   }
   expect((await getTabPricesForInternalRaces(fixture([capture('2026-09-01T00:29:30Z', 0, 3)], true), races, false, '2026-09-01T00:30:00Z')).size).toBe(0)
 })
+
+it('freezes quotes at early selection time without borrowing later prices or relaxing freshness', async () => {
+  const selectedAt = '2026-08-31T20:00:00Z'
+  const snapshots = [capture('2026-09-01T00:59:00Z', 0, 99), capture('2026-08-31T19:59:30Z', 20, 3)]
+  expect((await getTabPricesForInternalRaces(fixture(snapshots), races, false, selectedAt, 'selection')).get('internal')?.get('horse'))
+    .toMatchObject({ win: 3, place: 2, capturedAt: '2026-08-31T19:59:30Z', quotedAt: '2026-08-31T19:59:10.000Z' })
+  expect((await getTabPricesForInternalRaces(fixture(snapshots), races, false, selectedAt)).size).toBe(0)
+  for (const snapshot of [capture('2026-08-31T19:57:00Z', 0, 4), capture('2026-08-31T19:59:30Z', null, 4), capture('2026-08-31T20:00:01Z', 0, 4)]) {
+    expect((await getTabPricesForInternalRaces(fixture([snapshot]), races, false, selectedAt, 'selection')).size).toBe(0)
+  }
+  expect((await getTabPricesForInternalRaces(fixture([capture('2026-09-01T01:00:00Z', 0, 3)]), races, false, races[0].raceDatetime, 'selection')).size).toBe(0)
+})

@@ -2,7 +2,7 @@ import type { SimulationDataset, SimulationRace } from './historical-simulator'
 
 export const SIMULATION_REPORT_BUCKET = 'racing-reports'
 export const SIMULATION_MANIFEST_PATH = 'simulator/v1/manifest.json'
-export const SIMULATION_PRICING_VERSION = 4
+export const SIMULATION_PRICING_VERSION = 6
 export interface SimulationManifest {
   schema: 1
   pricingVersion?: number

@@ -1,6 +1,6 @@
 import type { PredictedHorse } from '../types'
 import type { SimulationRace, SimulationSelection } from './historical-simulator'
-import { isSimulationDecisionQuote, isSimulationTabQuote } from './historical-simulator'
+import { isSimulationDecisionQuote, isSimulationSelectionQuote, isSimulationTabQuote } from './historical-simulator'
 import { normalizeHorseName } from '../paper-betting/fundamentals-bridge'
 import type { TabPrice } from '../paper-betting/internal-tab-odds'
 import type { SimulationEvidence } from './simulation-evidence'
@@ -24,6 +24,8 @@ export interface SimulationSource {
     top3Probability: number
     observedAt: string
     provenance: 'home-snapshot' | 'pre-race-recovery'
+    tabPrice?: SimulationSelection['tabPrice']
+    tabPriceStatus?: SimulationSelection['tabPriceStatus']
   }>
 }
 
@@ -41,6 +43,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
   const finishers = active.filter(entry => entry.position !== null && entry.position > 0)
   const places = finishers.map(entry => entry.position)
   const ambiguous = new Set(places).size !== places.length
+  const ambiguousWin = places.filter(position => position === 1).length > 1
   const missingResults = !places.includes(1) || active.some(entry => entry.status !== 'did_not_finish' && (entry.position === null || entry.position < 1))
   const selections: SimulationSelection[] = []
   const models = new Set<string>()
@@ -71,7 +74,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       const tabWin = odds(tab?.win)
       const tabPlace = odds(tab?.place)
       const entry = source.entries.find(item => item.horse_id === horse.horse_id)
-      const issue = !entry ? 'Runner missing from results' : ambiguous ? 'Ambiguous or dead-heat result'
+      const issue = !entry ? 'Runner missing from results' : ambiguousWin ? 'Ambiguous or dead-heat result'
         : missingResults ? 'Incomplete results' : !matchingField ? 'Changed field; deductions unverified' : null
       selections.push({
         id: horse.horse_id, horse: horse.horse_name, model: forecast.model, rank: index + 1,
@@ -87,9 +90,10 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
         winProvider: tabWin !== null ? 'TAB' : horse.win_odds_provider ?? null,
         placeProvider: tabPlace !== null ? 'TAB' : horse.place_odds_provider ?? null,
         tabQuotedAt: tab?.quotedAt ?? null, tabCapturedAt: tab?.capturedAt ?? null,
+        tabPrice: tab ?? null, tabPriceBasis: 'near-start', tabPriceStatus: tab ? 'captured' : 'unavailable',
         position: entry?.position ?? null, scratched: entry?.status === 'scratched',
         winIssue: entry?.status === 'scratched' ? null : issue,
-        placeIssue: entry?.status === 'scratched' ? null : issue ?? (active.length < 8 ? 'Top-three probability does not match paid places' : !places.includes(2) || !places.includes(3) ? 'Incomplete place results' : null),
+        placeIssue: entry?.status === 'scratched' ? null : (ambiguous ? 'Ambiguous or dead-heat result' : issue) ?? (active.length < 8 ? 'Top-three probability does not match paid places' : !places.includes(2) || !places.includes(3) ? 'Incomplete place results' : null),
       })
     }
   }
@@ -113,7 +117,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
       const verifiedTerms = !!(valid && terms && terms.source === 'TAB' && terms.product === 'fixed-place'
         && [2, 3].includes(terms.paidPlaces) && terms.fieldSize === field.size && terms.capturedAt === price.capturedAt)
       const placeProbability = verifiedTerms ? terms!.paidPlaces === 2 ? selection.top2Probability : selection.top3Probability : undefined
-      const placeIssue = verifiedTerms ? selection.winIssue
+      const placeIssue = verifiedTerms ? (ambiguous ? 'Ambiguous or dead-heat result' : selection.winIssue)
         ?? (placeProbability == null ? 'Missing paid-place probability' : null)
         ?? (Array.from({ length: terms!.paidPlaces }, (_, index) => index + 1).some(position => !places.includes(position)) ? 'Incomplete place results' : null)
         : selection.placeIssue
@@ -122,6 +126,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
         winOdds: valid ? odds(price.win) : null, placeOdds: valid ? odds(price.place) : null,
         winSource: 'tab_decision', placeSource: 'tab_decision', tabQuotedAt: price?.quotedAt ?? null, tabCapturedAt: price?.capturedAt ?? null,
         winProvider: 'TAB', placeProvider: 'TAB',
+        tabPrice: valid ? price : null, tabPriceBasis: 'decision', tabPriceStatus: valid ? 'captured' : 'unavailable',
         winIssue: selection.winIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null),
         placeIssue: placeIssue ?? (!valid ? 'Missing or stale TAB decision quote' : null) })
     }
@@ -136,7 +141,9 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
     const selection = frozen.selections.find(selection => selection.id === pick.horseId)
     if (!selection) continue
     historyHorses.add(pick.horseId)
+    const tabPrice = pick.tabPrice && isSimulationSelectionQuote(source.start, pick.observedAt, pick.tabPrice.quotedAt, pick.tabPrice.capturedAt) ? pick.tabPrice : null
     historySelections.push({ ...selection, forecastBasis: 'history', predictionId: pick.forecast.id,
+      tabPrice, tabPriceBasis: 'selection', tabPriceStatus: tabPrice ? 'captured' : pick.tabPriceStatus === 'captured' ? 'unavailable' : pick.tabPriceStatus,
       winProbability: probability(pick.winProbability), top3Probability: probability(pick.top3Probability),
       historyProvenance: pick.provenance, historyObservedAt: pick.observedAt })
   }

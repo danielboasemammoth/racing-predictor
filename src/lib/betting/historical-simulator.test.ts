@@ -7,6 +7,65 @@ const filters = { WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SI
 const race: SimulationRace = { id: 'race', start: '2026-09-01T01:00:00Z', settledAt: '2026-09-01T01:10:00Z', venue: 'Test', state: 'VIC', number: 1, fieldSize: 8,
   selections: [{ id: 'horse', horse: 'Runner', model: 'model', rank: 1, predictedAt: '2026-09-01T00:00:00Z', winProbability: 0.4, top3Probability: 0.7, reliability: null, winOdds: 3, placeOdds: 2, winSource: 'racing_com', placeSource: 'racing_com', position: 2, scratched: false, winIssue: null, placeIssue: null }] }
 
+const tabHistory = { ...race, selections: [], historySelections: [{ ...race.selections[0], forecastBasis: 'history' as const,
+  historyObservedAt: '2026-09-01T00:01:00Z', position: 1,
+  tabPrice: { win: 2.5, place: 1.5, quotedAt: '2026-09-01T00:00:20Z', capturedAt: '2026-09-01T00:00:30Z' } }] }
+
+it('settles exact picks at frozen TAB prices and recomputes net profit and ROI without changing recorded prices', () => {
+  const preset = picksHistoryPreset()
+  const candidates = simulationCandidates([tabHistory])
+  const recorded = simulateBets(candidates, preset.filters, settings)
+  const tabFilters = { ...preset.filters, WIN: { ...preset.filters.WIN, settlementOdds: 'tab' as const } }
+  const tab = simulateBets(candidates, tabFilters, settings)
+  expect(recorded.summaries[0]).toMatchObject({ profit: 20, roi: 200 })
+  expect(tab.summaries[0]).toMatchObject({ bets: 1, staked: 10, profit: 15, roi: 150, bankroll: 115 })
+  expect(tab.bets[0]).toMatchObject({ source: 'tab_selection', odds: 2.5, implied: 0.4, stake: 10, returned: 25, status: 'WON' })
+  expect(candidates[0]).toMatchObject({ source: 'racing_com', odds: 3, stake: 0 })
+})
+
+it('selects TAB settlement independently for PLACE while retaining the WIN pricing choice', () => {
+  const preset = picksHistoryPreset()
+  const result = simulateBets(simulationCandidates([tabHistory]), { WIN: preset.filters.WIN,
+    PLACE: { ...preset.filters.WIN, settlementOdds: 'tab' } }, settings)
+  expect(result.bets.find(bet => bet.market === 'WIN')).toMatchObject({ odds: 3, returned: 30 })
+  expect(result.bets.find(bet => bet.market === 'PLACE')).toMatchObject({ odds: 1.5, returned: 15 })
+  expect(result.summaries[0]).toMatchObject({ profit: 25, roi: 125 })
+})
+
+it('never substitutes later, stale, missing or invalid TAB quotes in exact-history settlement', () => {
+  const preset = picksHistoryPreset()
+  for (const tabPrice of [undefined, { win: 99, capturedAt: '2026-09-01T00:02:00Z', quotedAt: '2026-09-01T00:00:30Z' },
+    { win: 99, capturedAt: '2026-09-01T00:00:00Z', quotedAt: '2026-08-31T23:55:00Z' },
+    { win: 1, capturedAt: '2026-09-01T00:00:30Z', quotedAt: '2026-09-01T00:00:20Z' }]) {
+    const candidates = simulationCandidates([{ ...tabHistory, historySelections: [{ ...tabHistory.historySelections[0], tabPrice }] }])
+    const result = simulateBets(candidates, { ...preset.filters, WIN: { ...preset.filters.WIN, settlementOdds: 'tab' } }, settings)
+    expect(result.bets[0]).toMatchObject({ status: 'EXCLUDED', odds: null, issue: 'TAB WIN quote unavailable at selection time', stake: 0 })
+    expect(result.summaries[0]).toMatchObject({ profit: 0, roi: null, excluded: 1 })
+  }
+})
+
+it('retains losses, refunds and deduction warnings when exact selections use TAB settlement', () => {
+  const preset = picksHistoryPreset()
+  const tabFilters = { ...preset.filters, WIN: { ...preset.filters.WIN, settlementOdds: 'tab' as const } }
+  for (const position of [1, 2]) {
+    const candidates = simulationCandidates([{ ...tabHistory, historySelections: [{ ...tabHistory.historySelections[0], position, winIssue: 'Changed field; deductions unverified' }] }])
+    expect(simulateBets(candidates, tabFilters, settings).bets[0]).toMatchObject({ status: position === 1 ? 'WON' : 'LOST', profit: position === 1 ? 15 : -10,
+      payoutWarning: position === 1 ? 'Estimated at original odds; scratching deductions unavailable' : undefined })
+  }
+  const scratched = simulationCandidates([{ ...tabHistory, historySelections: [{ ...tabHistory.historySelections[0], scratched: true }] }])
+  expect(simulateBets(scratched, tabFilters, settings).bets[0]).toMatchObject({ status: 'REFUNDED', returned: 10, profit: 0 })
+})
+
+it('uses TAB prices for Kelly sizing and custom edge filters', () => {
+  const candidates = simulationCandidates([{ ...tabHistory, historySelections: [{ ...tabHistory.historySelections[0], winProbability: 0.5 }] }])
+  const preset = picksHistoryPreset()
+  const tabFilters = { ...preset.filters, WIN: { ...preset.filters.WIN, settlementOdds: 'tab' as const } }
+  expect(simulateBets(candidates, tabFilters, { ...settings, method: 'kelly-0.10' }).bets[0].stake).toBe(1.66)
+  const custom = { ...tabFilters, WIN: { ...tabFilters.WIN, forecast: 'history' as const, minEdge: 15 } }
+  expect(simulateBets(candidates, custom, settings).bets).toHaveLength(0)
+  expect(simulateBets(candidates, { ...custom, WIN: { ...custom.WIN, settlementOdds: 'recorded' } }, settings).bets).toHaveLength(1)
+})
+
 it('explains hidden winners without adding them to the simulated portfolio', () => {
   const source = { ...race, selections: [{ ...race.selections[0], horse: 'Vantaa', winProbability: 0.40545, winOdds: 2.1, position: 1 }] }
   const candidates = simulationCandidates([source])
@@ -196,4 +255,42 @@ it('reserves selection-time stakes until recorded settlement without borrowing f
     ['first', 10, 'WON'], ['overlap', 0, 'NO_BANKROLL'], ['after-settlement', 10, 'WON'],
   ])
   expect(result.summaries[0]).toMatchObject({ bankroll: 50, profit: 40, unfunded: 1, maxDrawdown: 0 })
+})
+
+it('keeps exact-history bets after field changes and marks only winning payouts as unadjusted estimates', () => {
+  const source: SimulationRace = { ...race, historySelections: [1, 5].map(position => ({
+    ...race.selections[0], id: `horse-${position}`, position, forecastBasis: 'history',
+    historyObservedAt: '2026-09-01T00:10:00Z', winIssue: 'Changed field; deductions unverified',
+  })) }
+  const candidates = simulationCandidates([source])
+  const result = simulateBets(candidates, picksHistoryPreset().filters, settings)
+  expect(result.bets[0]).toMatchObject({ status: 'WON', stake: 10, returned: 30, profit: 20, issue: null,
+    payoutWarning: 'Estimated at original odds; scratching deductions unavailable' })
+  expect(result.bets[1]).toMatchObject({ status: 'LOST', stake: 10, returned: 0, profit: -10, issue: null })
+  expect(result.bets[1].payoutWarning).toBeUndefined()
+  expect(result.summaries[0]).toMatchObject({ bets: 2, wins: 1, excluded: 0, estimatedReturns: 1, bankroll: 110 })
+  expect(candidates.find(bet => bet.selection.forecastBasis === 'history' && bet.market === 'WIN')?.issue).toBe('Changed field; deductions unverified')
+  const custom = picksHistoryPreset().filters
+  custom.WIN.forecast = 'history'
+  expect(simulateBets(candidates, custom, settings).summaries[0].excluded).toBe(2)
+})
+
+it('refunds a scratched exact-history selection even without its price, instead of excluding it', () => {
+  const source: SimulationRace = { ...race, historySelections: [{ ...race.selections[0], forecastBasis: 'history',
+    historyObservedAt: '2026-09-01T00:10:00Z', position: null, scratched: true, winOdds: null }] }
+  const result = simulateBets(simulationCandidates([source]), picksHistoryPreset().filters, settings)
+  expect(result.bets[0]).toMatchObject({ status: 'REFUNDED', stake: 10, returned: 10, profit: 0, issue: null })
+  expect(result.summaries[0]).toMatchObject({ bets: 0, refunded: 1, excluded: 0, bankroll: 100 })
+})
+
+it('does not invent a finish, price or PLACE terms when removing the post-bet field gate', () => {
+  const selection = { ...race.selections[0], forecastBasis: 'history' as const, historyObservedAt: '2026-09-01T00:10:00Z',
+    winIssue: 'Changed field; deductions unverified', placeIssue: 'Changed field; deductions unverified' }
+  const preset = picksHistoryPreset()
+  preset.filters.PLACE.enabled = true
+  const result = simulateBets(simulationCandidates([{ ...race, fieldSize: 7, historySelections: [selection] }]), preset.filters, settings)
+  expect(result.bets.find(bet => bet.market === 'PLACE')).toMatchObject({ status: 'EXCLUDED', issue: 'Paid-place terms unavailable after field change' })
+  for (const override of [{ position: null }, { winOdds: null }]) {
+    expect(simulateBets(simulationCandidates([{ ...race, historySelections: [{ ...selection, ...override }] }]), picksHistoryPreset().filters, settings).bets[0].status).toBe('EXCLUDED')
+  }
 })

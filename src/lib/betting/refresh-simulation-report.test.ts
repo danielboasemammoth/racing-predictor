@@ -97,7 +97,8 @@ it('rebuilds a retained History pick by its original ID, including losers and wi
   const { db, upload, history, rpc } = fixture()
   const allHorses = Array.from({ length: 8 }, (_, index) => ({ horse_id: `horse-${index}`, horse_name: `Runner ${index}`, predicted_position: index + 1, confidence: 0.6, win_probability: 0.63, top3_probability: 0.8, win_odds: 2, place_odds: 1.5 }))
   const forecast = { id: 'early', race_id: source.id, model_version: CURRENT_MODEL_VERSIONS[0], predicted_at: '2025-12-31T22:00:00Z', created_at: '2025-12-31T22:01:00Z', podium: allHorses.slice(0, 3), allHorses }
-  const pick = { race: { id: source.id, race_datetime: source.start }, horse: { horse_id: 'horse-1' }, predictionId: 'early', winProbability: 0.63, top3Probability: 0.8, observedAt: forecast.created_at, provenance: 'pre-race-recovery' }
+  const tabPrice = { win: 2.4, place: 1.3, quotedAt: '2025-12-31T22:00:20Z', capturedAt: '2025-12-31T22:00:30Z' }
+  const pick = { race: { id: source.id, race_datetime: source.start }, horse: { horse_id: 'horse-1' }, predictionId: 'early', winProbability: 0.63, top3Probability: 0.8, observedAt: forecast.created_at, provenance: 'home-snapshot', tabPrice, tabPriceStatus: 'captured' }
   history.maybeSingle.mockResolvedValue({ data: { generated_at: '2026-01-02T00:00:00Z', payload: [{ dateKey: '2026-01-01', picks: [pick, { ...pick, predictionId: 'missing', horse: { horse_id: 'horse-2' } }] }] }, error: null })
   const predictions = { select: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), abortSignal: vi.fn().mockReturnThis(), retry: vi.fn().mockResolvedValue({ data: [forecast], error: null }) }
   const originalFrom = vi.mocked(db.from).getMockImplementation()!
@@ -108,7 +109,7 @@ it('rebuilds a retained History pick by its original ID, including losers and wi
   expect(predictions.in).toHaveBeenCalledWith('id', ['early', 'missing'])
   const published = JSON.parse(upload.mock.calls[0][1])[0]
   expect(published.historySelections).toHaveLength(1)
-  expect(published.historySelections[0]).toMatchObject({ id: 'horse-1', predictionId: 'early', position: 2, winProbability: 0.63, winOdds: 2, winSource: 'racing_com' })
+  expect(published.historySelections[0]).toMatchObject({ id: 'horse-1', predictionId: 'early', position: 2, winProbability: 0.63, winOdds: 2, winSource: 'racing_com', tabPrice, tabPriceBasis: 'selection', tabPriceStatus: 'captured' })
   expect(JSON.parse(upload.mock.calls.at(-1)![1]).historyPickCount).toBe(2)
 })
 

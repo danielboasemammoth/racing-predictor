@@ -49,6 +49,21 @@ it('includes all forecast runners only when supplied and marks complete full-fie
   expect(buildSimulationRace(source).selections.every(selection => !selection.fullField)).toBe(true)
 })
 
+it('does not reject an outright WIN because other runners tied for third', () => {
+  const entries = source.entries.map((entry, index) => ({ ...entry, position: index === 3 ? 3 : entry.position }))
+  const race = buildSimulationRace({ ...source, entries })
+  expect(race.selections[0]).toMatchObject({ position: 1, winIssue: null, placeIssue: 'Ambiguous or dead-heat result' })
+  const changed = buildSimulationRace({ ...source, entries, forecasts: [{ ...source.forecasts[0], field: [] }] })
+  expect(changed.selections[0].winIssue).toBe('Changed field; deductions unverified')
+  const capturedAt = '2026-09-01T00:59:00Z'
+  const decision: SimulationDecision = { schema: 1, raceId: source.id, start: source.start, capturedAt,
+    forecast: { ...source.forecasts[0], evidence: { predictionId: 'forecast', horseId: 'horse-0', capturedAt, reliability: 85, qualifiedWin: true } },
+    prices: { 'horse-0': { win: 3, place: 2, quotedAt: capturedAt, capturedAt,
+      placeTerms: { source: 'TAB', product: 'fixed-place', paidPlaces: 3, fieldSize: 8, capturedAt } } } }
+  expect(buildSimulationRace({ ...source, entries, decisions: [decision] }).decisionSelections![0])
+    .toMatchObject({ winIssue: null, placeIssue: 'Ambiguous or dead-heat result', placeTermsVerified: true })
+})
+
 it('accepts only matching genuinely pre-race frozen qualification evidence', () => {
   const evidence = { predictionId: 'forecast', horseId: 'horse-0', capturedAt: '2026-09-01T00:50:00Z', reliability: 85, qualifiedWin: true }
   const build = (override = {}) => buildSimulationRace({ ...source, forecasts: [{ ...source.forecasts[0], evidence: { ...evidence, ...override } }] }).selections[0]
@@ -123,4 +138,17 @@ it('replays only retained History picks with their earlier probabilities and pri
   const deadHeat = buildSimulationRace({ ...source, history, entries: source.entries.map(entry => ({ ...entry, position: 1 })) })
   expect(deadHeat.historySelections![0].winIssue).toContain('dead-heat')
   expect(buildSimulationRace({ ...source, history: [{ ...history[0], observedAt: source.start }] }).historySelections).toEqual([])
+})
+
+it('retains only selection-time TAB quotes for History, separately from original settlement prices', () => {
+  const tabPrice = { win: 2.4, place: 1.3, capturedAt: '2026-09-01T00:00:30Z', quotedAt: '2026-09-01T00:00:20Z' }
+  const pick = { forecast: source.forecasts[0], horseId: 'horse-0', winProbability: 0.6, top3Probability: 0.8,
+    observedAt: '2026-09-01T00:01:00Z', provenance: 'home-snapshot' as const, tabPrice, tabPriceStatus: 'captured' as const }
+  const later = new Map([['runner 0', { ...tabPrice, win: 99, capturedAt: '2026-09-01T00:59:00Z', quotedAt: '2026-09-01T00:58:30Z' }]])
+  const race = buildSimulationRace({ ...source, history: [pick] }, later)
+  expect(race.selections[0].tabPrice?.win).toBe(99)
+  expect(race.historySelections![0]).toMatchObject({ winOdds: 3, placeOdds: 2, tabPrice, tabPriceBasis: 'selection' })
+  expect(buildSimulationRace({ ...source, history: [{ ...pick, tabPrice: undefined, tabPriceStatus: undefined }] }, later).historySelections![0].tabPrice).toBeNull()
+  expect(buildSimulationRace({ ...source, history: [{ ...pick, tabPrice: later.get('runner 0') }] }, later).historySelections![0])
+    .toMatchObject({ tabPrice: null, tabPriceStatus: 'unavailable' })
 })

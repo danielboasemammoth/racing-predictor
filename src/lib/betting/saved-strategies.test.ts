@@ -18,3 +18,17 @@ it('rejects corrupt settings rather than silently changing a saved betting strat
   expect(readSavedStrategies(JSON.stringify([{ ...saved[0], preferences: { schema: 1 } }]))).toEqual([])
   expect(() => saveStrategy([], ' ', readSimulationPreferences(null))).toThrow()
 })
+
+it('round-trips per-market TAB settlement without changing legacy strategies or accepting invalid modes', () => {
+  const preferences = readSimulationPreferences(null)
+  const legacy = saveStrategy([], 'Legacy', preferences)
+  expect(readSavedStrategies(JSON.stringify(legacy))).toEqual(legacy)
+  preferences.filters.WIN.settlementOdds = 'tab'
+  preferences.filters.PLACE.settlementOdds = 'recorded'
+  const saved = saveStrategy(legacy, 'TAB win', preferences)
+  expect(readSavedStrategies(JSON.stringify(saved))).toEqual(saved)
+  expect(readSimulationPreferences(JSON.stringify(preferences)).filters.WIN.settlementOdds).toBe('tab')
+  const invalid = structuredClone(saved)
+  Object.assign(invalid[0].preferences.filters.WIN, { settlementOdds: 'unknown' })
+  expect(readSavedStrategies(JSON.stringify(invalid)).map(strategy => strategy.name)).toEqual(['Legacy'])
+})
