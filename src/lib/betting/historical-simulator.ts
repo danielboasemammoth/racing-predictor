@@ -61,7 +61,7 @@ export interface SimulationDataset {
 }
 
 export interface SimulationFilters {
-  forecast?: 'latest' | 'history'
+  forecast?: 'latest' | 'history' | 'picks-history'
   enabled: boolean
   minReliability: number
   minEdge: number
@@ -106,6 +106,7 @@ export interface SimulationSettings {
 
 export interface SimulationBet {
   id: string
+  placedAt?: string
   race: SimulationRace
   selection: SimulationSelection
   market: SimulationMarket
@@ -183,6 +184,13 @@ export function matchesSimulationFilters(bet: SimulationBet, filter: SimulationF
     if (!accepted) reasons?.push(reason)
     return accepted || reasons !== undefined
   }
+  if (filter.forecast === 'picks-history') {
+    return check(filter.enabled, 'Market disabled')
+      && check(selection.forecastBasis === 'history', 'Not a retained Picks History selection')
+      && check(Date.parse(selection.historyObservedAt ?? '') >= Date.parse(selection.predictedAt)
+        && Date.parse(selection.historyObservedAt ?? '') < Date.parse(bet.race.start), 'Missing pre-race selection timestamp')
+      && !reasons?.length
+  }
   const evaluatedAt = selection.evaluatedAt ?? (bet.source === 'tab' ? selection.tabCapturedAt : null)
   const minutesToJump = (Date.parse(bet.race.start) - Date.parse(evaluatedAt ?? '')) / 60_000
   return check(filter.enabled, 'Market disabled')
@@ -222,26 +230,46 @@ export function simulationExclusionReasons(bet: SimulationBet, filter: Simulatio
 
 export function simulateBets(candidates: SimulationBet[], filters: Record<SimulationMarket, SimulationFilters>, settings: SimulationSettings) {
   const starting = Number.isFinite(settings.startingBankroll) ? Math.max(0, Math.round(settings.startingBankroll * 100)) : 0
-  const matched = candidates.filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => ({ ...bet }))
+  const selectionTiming = Object.values(filters).some(filter => filter.enabled && filter.forecast === 'picks-history')
+  const matched = candidates.filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => ({ ...bet,
+    placedAt: filters[bet.market].forecast === 'picks-history' ? bet.selection.historyObservedAt : bet.race.start,
+  }))
+  const onePerRace = (bet: SimulationBet) => filters[bet.market].forecast !== 'picks-history' && filters[bet.market].onePerRace
   const winners = new Map<string, SimulationBet>()
   const value = (bet: SimulationBet) => (bet.probability ?? 0) * (bet.odds ?? 0) - 1
   for (const bet of matched) {
-    if (!filters[bet.market].onePerRace || bet.issue || bet.selection.scratched) continue
+    if (!onePerRace(bet) || bet.issue || bet.selection.scratched) continue
     const key = `${bet.race.id}:${bet.selection.model}:${bet.market}`
     const current = winners.get(key)
     if (!current || value(bet) > value(current) || (value(bet) === value(current) && bet.id < current.id)) winners.set(key, bet)
   }
-  const bets = matched.filter(bet => !filters[bet.market].onePerRace || bet.issue || bet.selection.scratched
+  const bets = matched.filter(bet => !onePerRace(bet) || bet.issue || bet.selection.scratched
     || winners.get(`${bet.race.id}:${bet.selection.model}:${bet.market}`) === bet)
   const models = [...new Set(bets.map(bet => bet.selection.model))].sort()
   const summaries = models.map(model => {
-    const portfolio = bets.filter(bet => bet.selection.model === model).sort((left, right) => left.race.start.localeCompare(right.race.start) || left.race.id.localeCompare(right.race.id) || left.id.localeCompare(right.id))
+    const portfolio = bets.filter(bet => bet.selection.model === model).sort((left, right) =>
+      (selectionTiming ? left.placedAt! : left.race.start).localeCompare(selectionTiming ? right.placedAt! : right.race.start) || left.race.id.localeCompare(right.race.id) || left.id.localeCompare(right.id))
     let cash = starting
     let peak = starting
     let maxDrawdown = 0
+    let equity = starting
+    const pending: Array<{ at: number; stake: number; returned: number }> = []
+    const settle = (through: number) => {
+      pending.sort((left, right) => left.at - right.at)
+      while (pending.length && pending[0].at <= through) {
+        const payment = pending.shift()!
+        cash += payment.returned
+        equity += payment.returned - payment.stake
+        peak = Math.max(peak, equity)
+        maxDrawdown = Math.max(maxDrawdown, peak > 0 ? (peak - equity) / peak : 0)
+      }
+    }
     for (let offset = 0; offset < portfolio.length;) {
+      if (selectionTiming) settle(Date.parse(portfolio[offset].placedAt!))
       let end = offset + 1
-      while (end < portfolio.length && portfolio[end].race.id === portfolio[offset].race.id) end++
+      while (end < portfolio.length && (selectionTiming
+        ? Date.parse(portfolio[end].placedAt!) === Date.parse(portfolio[offset].placedAt!)
+        : portfolio[end].race.id === portfolio[offset].race.id)) end++
       const group = portfolio.slice(offset, end)
       const desired = group.map(bet => {
         if (bet.issue || bet.odds === null) return 0
@@ -264,13 +292,19 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
         bet.returned = returned / 100
         bet.profit = (returned - stake) / 100
         cash -= stake
-        raceReturns += returned
+        if (selectionTiming) {
+          const settledAt = Date.parse(bet.race.settledAt ?? '')
+          pending.push({ at: settledAt > Date.parse(bet.race.start) ? settledAt : Infinity, stake, returned })
+        } else raceReturns += returned
       }
-      cash += raceReturns
-      peak = Math.max(peak, cash)
-      maxDrawdown = Math.max(maxDrawdown, peak > 0 ? (peak - cash) / peak : 0)
+      if (!selectionTiming) {
+        cash += raceReturns
+        peak = Math.max(peak, cash)
+        maxDrawdown = Math.max(maxDrawdown, peak > 0 ? (peak - cash) / peak : 0)
+      }
       offset = end
     }
+    if (selectionTiming) settle(Infinity)
     const decided = portfolio.filter(bet => bet.status === 'WON' || bet.status === 'LOST')
     const staked = decided.reduce((total, bet) => total + Math.round(bet.stake * 100), 0) / 100
     const profit = decided.reduce((total, bet) => total + Math.round(bet.profit * 100), 0) / 100

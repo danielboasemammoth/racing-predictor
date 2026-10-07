@@ -19,6 +19,9 @@ beforeAll(async () => {
     create table public.analysis_snapshots(kind text unique, payload jsonb, generated_at timestamptz);
   `)
   await db.exec(readFileSync(resolve('supabase/migrate-historical-simulator.sql'), 'utf8'))
+  await db.exec('alter role service_role bypassrls')
+  await db.exec(readFileSync(resolve('supabase/migrate-betting-strategies.sql'), 'utf8'))
+  await db.exec(readFileSync(resolve('supabase/migrate-betting-strategies.sql'), 'utf8'))
   await db.query('insert into public.racecourses values ($1, $2, $3)', [courseId, 'Test', 'VIC'])
   await db.query("insert into public.races values ($1, $2, 1, '2026-01-01T01:00:00Z', 'completed', '2026-01-01T02:00:00Z')", [raceId, courseId])
   await db.query("insert into public.race_entries values ($1, $2, 1, 'finished', '2026-01-01T02:00:00Z')", [raceId, horseId])
@@ -33,6 +36,27 @@ beforeAll(async () => {
   }
 }, 30000)
 afterAll(async () => { await db.close() })
+
+it('allows shared strategy reads but restricts all mutations to service role', async () => {
+  await db.exec('set role service_role')
+  try {
+    await db.query('insert into public.betting_strategies(name, preferences) values ($1, $2)', ['Shared', JSON.stringify({ schema: 1 })])
+    await db.query('update public.betting_strategies set preferences = $1 where name = $2', [JSON.stringify({ schema: 1, count: 1000 }), 'Shared'])
+  } finally { await db.exec('reset role') }
+  for (const role of ['anon', 'authenticated']) {
+    await db.exec(`set role ${role}`)
+    try {
+      expect((await db.query<{ name: string }>('select name from public.betting_strategies')).rows).toEqual([{ name: 'Shared' }])
+      await expect(db.query("insert into public.betting_strategies(name, preferences) values ('Bad', '{\"schema\":1}')")).rejects.toThrow('permission denied')
+      await expect(db.query("update public.betting_strategies set name = 'Bad'")).rejects.toThrow('permission denied')
+      await expect(db.query('delete from public.betting_strategies')).rejects.toThrow('permission denied')
+    } finally { await db.exec('reset role') }
+  }
+  await db.exec('set role service_role')
+  try { await db.query("delete from public.betting_strategies where name = 'Shared'") }
+  finally { await db.exec('reset role') }
+  expect((await db.query('select * from public.betting_strategies')).rows).toEqual([])
+})
 
 it('selects only the latest actually-created pre-race forecast', async () => {
   const result = await db.query<{ source: { forecasts: Array<{ id: string; model: string }> } }>('select public.simulation_race_sources($1, $2) as source', [[raceId], ['model', 'model-retrospective']])

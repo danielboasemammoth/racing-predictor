@@ -1,6 +1,13 @@
 import { PRODUCTION_MODEL_VERSION } from '../prediction-suite'
 import { DEFAULT_THRESHOLDS } from './recommendation-engine'
 import { DEFAULT_SIMULATION_FILTERS, type SimulationFilters, type SimulationMarket } from './historical-simulator'
+import { readSimulationPreferences, type SimulationPreferences } from './simulation-preferences'
+
+export function picksHistoryPreset(): SimulationPreferences {
+  const preferences = readSimulationPreferences(null)
+  const filter: SimulationFilters = { ...DEFAULT_SIMULATION_FILTERS, forecast: 'picks-history', minEdge: -100, minTop3: 0 }
+  return { ...preferences, count: 1000, filters: { WIN: { ...filter }, PLACE: { ...filter, enabled: false } } }
+}
 
 export const MIN_RELIABILITY_FOR_AUTO_BET = 80
 export const MIN_PLACE_PROBABILITY_FOR_AUTO_BET = 0.6

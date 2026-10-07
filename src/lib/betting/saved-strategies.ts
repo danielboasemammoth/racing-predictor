@@ -1,6 +1,13 @@
 import { readSimulationPreferences, type SimulationPreferences } from './simulation-preferences'
 
 export const SAVED_STRATEGIES_KEY = 'racing-saved-strategies-v1'
+export async function loadSavedStrategies(): Promise<{ strategies: SavedStrategy[]; canEdit: boolean }> {
+  const response = await fetch('/api/betting-strategies', { cache: 'no-store' })
+  const body = await response.json()
+  if (!response.ok) throw new Error(body.message ?? 'Could not load saved strategies.')
+  return { strategies: Array.isArray(body.strategies) ? body.strategies.flatMap((entry: unknown) => readSavedStrategies(JSON.stringify([entry]))) : [], canEdit: body.canEdit === true }
+}
+
 export interface SavedStrategy {
   schema: 1
   name: string

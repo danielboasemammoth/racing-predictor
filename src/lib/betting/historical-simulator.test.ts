@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import { DEFAULT_SIMULATION_FILTERS, matchesSimulationFilters, simulateBets, simulationCandidates, simulationExclusionReasons, type SimulationRace, type SimulationSettings } from './historical-simulator'
+import { picksHistoryPreset } from './simulation-presets'
 
 const settings: SimulationSettings = { startingBankroll: 100, method: 'flat', flatStake: 10, stakePercent: 1 }
 const filters = { WIN: { ...DEFAULT_SIMULATION_FILTERS }, PLACE: { ...DEFAULT_SIMULATION_FILTERS } }
@@ -164,4 +165,35 @@ it('rounds decimal flat stakes to cents instead of truncating floating-point err
   const result = simulateBets(simulationCandidates([race]), filters, { ...settings, startingBankroll: 50, flatStake: 1.15 })
   expect(result.bets.map(bet => bet.stake)).toEqual([1.15, 1.15])
   expect(result.summaries[0]).toMatchObject({ staked: 2.3, profit: 0, bankroll: 50 })
+})
+
+it('matches every retained history horse, not later forecasts or extra selection gates', () => {
+  const source: SimulationRace = { ...race, historySelections: [
+    { ...race.selections[0], forecastBasis: 'history', historyObservedAt: '2026-09-01T00:10:00Z', historyProvenance: 'home-snapshot', winOdds: 1.5, rank: 4 },
+    { ...race.selections[0], id: 'recovered', forecastBasis: 'history', historyObservedAt: '2026-09-01T00:20:00Z', historyProvenance: 'pre-race-recovery', winOdds: null },
+  ] }
+  const preset = picksHistoryPreset()
+  preset.filters.WIN = { ...preset.filters.WIN, onePerRace: true, model: 'different', minReliability: 90, minWin: 90, source: 'tab_decision' }
+  const result = simulateBets(simulationCandidates([source]), preset.filters, settings)
+  expect(result.bets.map(bet => bet.selection.id)).toEqual(['horse', 'recovered'])
+  expect(result.bets[0]).toMatchObject({ odds: 1.5, stake: 10, placedAt: '2026-09-01T00:10:00Z' })
+  expect(result.bets[1]).toMatchObject({ status: 'EXCLUDED', issue: 'Missing recorded odds' })
+  expect(matchesSimulationFilters({ ...result.bets[0], selection: { ...source.historySelections![0], historyObservedAt: race.start } }, preset.filters.WIN)).toBe(false)
+})
+
+it('reserves selection-time stakes until recorded settlement without borrowing future winnings', () => {
+  const makeRace = (id: string, observedAt: string, start: string, settledAt: string | null): SimulationRace => ({
+    ...race, id, start, settledAt,
+    historySelections: [{ ...race.selections[0], forecastBasis: 'history', historyObservedAt: observedAt, position: 1 }],
+  })
+  const races = [
+    makeRace('first', '2026-09-01T00:10:00Z', race.start, race.settledAt),
+    makeRace('overlap', '2026-09-01T00:20:00Z', '2026-09-01T02:00:00Z', null),
+    makeRace('after-settlement', '2026-09-01T01:15:00Z', '2026-09-01T03:00:00Z', '2026-09-01T03:10:00Z'),
+  ]
+  const result = simulateBets(simulationCandidates(races), picksHistoryPreset().filters, { ...settings, startingBankroll: 10 })
+  expect(result.bets.map(bet => [bet.race.id, bet.stake, bet.status])).toEqual([
+    ['first', 10, 'WON'], ['overlap', 0, 'NO_BANKROLL'], ['after-settlement', 10, 'WON'],
+  ])
+  expect(result.summaries[0]).toMatchObject({ bankroll: 50, profit: 40, unfunded: 1, maxDrawdown: 0 })
 })
