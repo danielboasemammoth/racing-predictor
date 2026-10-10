@@ -34,10 +34,24 @@ function mockDatabase(raceCount: number, historyCopies = 1) {
     }
     return query
   })
-  return { db: { from } as unknown as SupabaseClient, requests, payloadRequests }
+  return { db: { from } as unknown as SupabaseClient, requests, payloadRequests, raceQuery }
 }
 
 describe('upcoming race model coverage', () => {
+  it('includes elapsed start times only for schedule reconciliation, preserving the default betting window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-10T05:05:00Z'))
+    try {
+      const { db, raceQuery } = mockDatabase(0)
+      await getUpcomingRaces(db, { includeElapsedToday: true })
+      expect(raceQuery.gte).toHaveBeenLastCalledWith('race_datetime', '2026-10-09T13:00:00.000Z')
+      await getUpcomingRaces(db)
+      expect(raceQuery.gte).toHaveBeenLastCalledWith('race_datetime', '2026-10-10T05:05:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('loads all seven models across 180 races rather than truncating at 1000 predictions', async () => {
     const { db, requests } = mockDatabase(180)
     const races = await getUpcomingRaces(db)

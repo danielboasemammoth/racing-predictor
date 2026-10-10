@@ -7,14 +7,14 @@ import { loadHomeSnapshot } from '@/lib/page-snapshot-loaders'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getUpcomingRaces } from '@/lib/upcoming-races'
 import { loadReliabilityContext } from '@/lib/reliability-context'
-import { getTabRaceIds } from '@/lib/tab-races'
+import { getTabScheduledRaces } from '@/lib/tab-races'
 import type { RaceWithPrediction } from '@/lib/types'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
 vi.mock('@/lib/page-cache-reader', () => ({ readPageSnapshot: vi.fn() }))
 vi.mock('@/lib/upcoming-races', () => ({ getUpcomingRaces: vi.fn() }))
 vi.mock('@/lib/reliability-context', () => ({ loadReliabilityContext: vi.fn() }))
-vi.mock('@/lib/tab-races', () => ({ getTabRaceIds: vi.fn() }))
+vi.mock('@/lib/tab-races', () => ({ getTabScheduledRaces: vi.fn() }))
 vi.mock('@/components/site-nav', () => ({ SiteNav: () => null }))
 vi.mock('@/components/paper-bet-button', () => ({ PaperBetButton: () => null }))
 vi.mock('@/components/picks-sort-filter', () => ({ PicksSortFilter: () => null }))
@@ -36,7 +36,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-09-17T00:00:00Z'))
   vi.stubGlobal('React', React)
   vi.mocked(getUpcomingRaces).mockResolvedValue([fixture()])
-  vi.mocked(getTabRaceIds).mockResolvedValue(['race'])
+  vi.mocked(getTabScheduledRaces).mockImplementation(async races => races.filter(race => race.id === 'race'))
   vi.mocked(loadReliabilityContext).mockResolvedValue({
     calibration: { overallBaseline: 0.18, probability: [], gap: [], agreement: [], rawRateRange: { min: 0.1, max: 0.3 } }, history: [],
   })
@@ -49,6 +49,21 @@ afterEach(() => {
 })
 
 describe('homepage pick availability', () => {
+  it('keeps delayed Eagle Farm races until the revised TAB start, then expires them', async () => {
+    vi.setSystemTime(new Date('2026-10-10T05:05:00Z'))
+    const race = { ...fixture(), race_number: 6, race_datetime: '2026-10-10T04:43:00Z' }
+    vi.mocked(getUpcomingRaces).mockResolvedValue([race])
+    vi.mocked(getTabScheduledRaces).mockResolvedValue([{ ...race, race_datetime: '2026-10-10T05:20:00Z' }])
+    const snapshot = await loadHomeSnapshot({} as SupabaseClient)
+    expect(getUpcomingRaces).toHaveBeenCalledWith({}, { includeElapsedToday: true })
+    expect(snapshot.races[0].race_datetime).toBe('2026-10-10T05:20:00Z')
+    expect(snapshot.tabRaceIds).toEqual(['race'])
+    const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))
+    expect(html).toContain('/races/race')
+    vi.setSystemTime(new Date('2026-10-10T05:20:00Z'))
+    expect((await loadHomeSnapshot({} as SupabaseClient)).races).toEqual([])
+  })
+
   it('renders a clear cold-cache state without a live database fallback', async () => {
     vi.mocked(readPageSnapshot).mockResolvedValue(null)
     const html = renderToStaticMarkup(await Home({ searchParams: Promise.resolve({}) }))

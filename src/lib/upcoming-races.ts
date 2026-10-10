@@ -26,7 +26,7 @@ function melbourneMidnightUtc(dateKey: string, reference: Date) {
  * prediction plus every other current model version's prediction for comparison. Shared by the
  * home page and the reliability auto-bet pipeline so both see identical candidates.
  */
-export async function getUpcomingRaces(supabase: SupabaseClient): Promise<RaceWithPrediction[]> {
+export async function getUpcomingRaces(supabase: SupabaseClient, options: { includeElapsedToday?: boolean } = {}): Promise<RaceWithPrediction[]> {
   // National racing volume can exceed a simple row cap, so bound the window to "through tomorrow"
   // (Melbourne time) instead, with a high safety-net limit rather than an arbitrary small count.
   const now = new Date()
@@ -38,12 +38,14 @@ export async function getUpcomingRaces(supabase: SupabaseClient): Promise<RaceWi
     day: '2-digit',
   }).format(dayAfterTomorrow)
   const endOfTomorrow = melbourneMidnightUtc(dayAfterTomorrowKey, now)
+  const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now)
+  const start = options.includeElapsedToday ? melbourneMidnightUtc(todayKey, now) : now
 
   const { data: races, error: racesError } = await supabase
     .from('races')
     .select('*, racecourses(*)')
     .eq('status', 'upcoming')
-    .gte('race_datetime', now.toISOString())
+    .gte('race_datetime', start.toISOString())
     .lt('race_datetime', endOfTomorrow.toISOString())
     .order('race_datetime', { ascending: true })
     .limit(300)

@@ -11,7 +11,7 @@ import type { Prediction, RaceWithPrediction } from './types'
 import { loadResultsSnapshot } from './results-snapshot'
 import { loadAccuracySnapshot } from './accuracy-snapshot'
 import { loadAnalyticsSnapshot } from './analytics-snapshot'
-import { getTabRaceIds } from './tab-races'
+import { getTabScheduledRaces } from './tab-races'
 
 function compactPrediction(prediction: Prediction, primary: boolean): Prediction {
   const payload = prediction.predictions
@@ -29,10 +29,10 @@ function compactPrediction(prediction: Prediction, primary: boolean): Prediction
 }
 
 export async function loadHomeSnapshot(db: SupabaseClient) {
-  const upcomingRaces = await getUpcomingRaces(db)
-  const tabRaceIds = await getTabRaceIds(upcomingRaces)
-  const tabRaces = new Set(tabRaceIds)
-  const races = upcomingRaces.filter(race => tabRaces.has(race.id))
+  const upcomingRaces = await getUpcomingRaces(db, { includeElapsedToday: true })
+  const scheduledRaces = await getTabScheduledRaces(upcomingRaces)
+  const races = currentSnapshotRaces(scheduledRaces, new Date(), scheduledRaces.map(race => race.id))
+  const tabRaceIds = races.map(race => race.id)
   const context = await loadReliabilityContext(db, true)
   const reliabilityByRace: Record<string, ReliabilityResult | null> = {}
   for (const day of new Set(races.map(race => melbourneDateKey(race.race_datetime)))) {
