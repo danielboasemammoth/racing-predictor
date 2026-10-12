@@ -11,6 +11,7 @@ import { findMatchingInternalRace, buildFundamentalsProbabilityMap, type Interna
 import { computeGreyhoundFundamentalsProbabilities, type GreyhoundDogInput } from '@/lib/paper-betting/greyhound-fundamentals'
 import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
+import { recordPaperBonusClaim } from '@/lib/betting/bonus-back'
 
 /** The current Champion model version (see prediction-suite.ts) - the fundamentals side of the horse blend. */
 const HORSE_FUNDAMENTALS_MODEL_VERSION = PRODUCTION_MODEL_VERSION
@@ -424,6 +425,7 @@ export interface PlaceBetInput {
   modelProbability: number
   modelVersion: string
   policyVersion?: string
+  oddsSource?: 'tab' | 'recorded'
   edgePoints: number | null
   expectedValue: number | null
   confidenceLevel: string | null
@@ -460,12 +462,18 @@ export async function placeBet(admin: SupabaseClient, input: PlaceBetInput): Pro
       minutes_to_jump_at_placement: input.minutesToJumpAtPlacement,
       idempotency_key: input.idempotencyKey,
     })
-    .select('id')
+    .select('id, placed_at')
     .single()
 
   if (error) {
     if (error.code === '23505') return { placed: false, reason: 'duplicate' } // unique_violation on idempotency_key
     throw new Error(`Failed to place paper bet: ${error.message}`)
+  }
+  try {
+    await recordPaperBonusClaim(admin, { accountId: input.accountId, betId: data.id, raceId: input.raceId,
+      runnerId: input.runnerId, market: input.betType, source: input.source, oddsSource: input.oddsSource, stake: input.stake, placedAt: data.placed_at })
+  } catch {
+    console.error('Paper bet saved without confirmed bonus-back coverage', { betId: data.id })
   }
   return { placed: true, betId: data.id as string }
 }

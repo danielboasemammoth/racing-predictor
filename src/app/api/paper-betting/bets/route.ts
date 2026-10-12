@@ -50,6 +50,7 @@ export async function POST(request: Request) {
     source?: 'puntersedge' | 'internal'
     betType?: 'WIN' | 'PLACE'
     tabDecimalOdds?: number
+    oddsSource?: 'tab' | 'recorded'
     modelProbability?: number
     modelVersion?: string
     edgePoints?: number | null
@@ -62,7 +63,8 @@ export async function POST(request: Request) {
   if (!body?.raceId || !body.runnerId || !body.runnerName || !body.category || !body.tabDecimalOdds || body.modelProbability == null || !body.modelVersion) {
     return NextResponse.json({ success: false, message: 'Missing required bet fields' }, { status: 400 })
   }
-  if (body.tabDecimalOdds <= 1) {
+  if (!Number.isFinite(body.tabDecimalOdds) || body.tabDecimalOdds <= 1 || !Number.isFinite(body.modelProbability) || body.modelProbability < 0 || body.modelProbability > 1
+    || (body.stakeOverride !== undefined && (!Number.isFinite(body.stakeOverride) || body.stakeOverride <= 0))) {
     return NextResponse.json({ success: false, message: 'Invalid TAB price' }, { status: 400 })
   }
   const betType = body.betType === 'PLACE' ? 'PLACE' : 'WIN'
@@ -89,6 +91,7 @@ export async function POST(request: Request) {
     betType,
     stake,
     tabDecimalOdds: body.tabDecimalOdds,
+    oddsSource: body.oddsSource === 'tab' ? 'tab' : 'recorded',
     modelProbability: body.modelProbability,
     modelVersion: body.modelVersion,
     edgePoints: body.edgePoints ?? null,

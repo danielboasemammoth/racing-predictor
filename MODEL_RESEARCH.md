@@ -19,6 +19,8 @@ MODEL_PROMOTION.md).
 | `walk-forward-backtest.ts` **(new)** | Rolling month-by-month walk-forward vs market-favourite/random/average-rating baselines | rolling, growing history | See findings below |
 | `train-place-model.ts` **(new)** | Does an independently-trained PLACE classifier beat the Harville-derived place probability? | 60/20/20 chronological | See findings below |
 | `reliability-analysis.ts` | Which race segments/probability/gap/agreement bands actually replicate out-of-sample? | 70/30 chronological discovery/holdout | Only probability/gap/agreement replicated; publishes the live calibration table |
+| `experiment-market-residual.ts` **(new)** | Do 32 time-safe features beat the closing price, especially for non-favourite winners? | 60/20/20 chronological | No - see the 2026-10-12 finding |
+| `experiment-odds-movement.ts` **(new)** | Do steamers/drifters (3h/8h price movement) add to the price? | 60/40 chronological | No - see the 2026-10-12 finding |
 
 ## Finding: the production ensemble does not currently beat the market (re-confirmed)
 
@@ -69,6 +71,34 @@ above - this dataset spans ~4 calendar months), and a genuinely different approa
 pairwise/ranking-based place model, rather than independent per-runner logistic regression) could
 still be worth trying later - simple independent logistic regression may just be too crude a
 model class for this particular target given how correlated "who places" is within a single race.
+
+## Finding (2026-10-12): non-favourite winners cannot be reliably identified from the data we hold
+
+Question: 62% of races are won by a non-favourite - can anything find those winners? Two read-only experiments, both chronological with a confirmatory test split.
+
+`experiment-market-residual.ts` (4,959 priced completed races; 992 test races; market = official starting price, a harder baseline than the live feed price) fits `score = b1*log(p_market) + b2*log(p_market)^2 + g.x` with x = the existing 13 features plus 19 new time-safe ones (freshness/first-up, career and last-start form, handicap rating and weight vs the field, barrier, early pace and pace-vs-field interaction, 60-day jockey/trainer strike rate, jockey change, form vs market expectation, proven at distance/condition/course).
+
+| Test split | Log loss | Top-1 | Notes |
+|---|---|---|---|
+| Pure market (SP) | 1.7075 | 38.0% | favourite wins 38.0% |
+| Market + longshot curve | **1.6970** | 38.0% | only real gain: favourites win MORE than priced, longshots LESS |
+| Market + existing 13 features | 1.6955 | 37.5% | gain over the curve alone is 0.0015 |
+| Market + 19 new features | 1.7019 | 37.3% | worse than the curve alone |
+| Market + all features | 1.7026 | 36.1% | overfits |
+
+- Market calibration on test: runners priced 0-5% win 1.6% (priced 2.5%); 40-60% win 55.6% (priced 47%); 60%+ win 81% (priced 66%). Backing every 60%+ runner at SP returned +2.6%, every other band lost 2-53%.
+- Wherever the fitted model disagrees with the favourite it loses: its pick wins 15.9-21.6% of the time versus 26.7-30.3% for the favourite in the same races, with ROI@SP of -19% to -40%. A "non-favourite with model/market ratio >= 1.5" band showed +43% ROI on 44 test bets but -51% on 25 validation bets: noise, not an edge.
+- Largest standardized coefficients beyond the price are all about 0.06 or smaller (jockey change, partnership form, barrier position); none replicate across validation and test.
+
+`experiment-odds-movement.ts` (1,958 races since 2026-08-18) tests steamers/drifters from the hourly price snapshots stored with each prediction. Adding 3-hour and 8-hour price movement made test log loss worse (1.7845 -> 1.7936/1.8091); firmed runners won 16-17% against 15% priced and drifters 4.4% against 4.9%, too small to matter. The last stored snapshot is a median 174 minutes before the jump, and TAB snapshots are only hourly, so close-to-jump money cannot be tested with the retained data.
+
+Conclusions:
+- Backing the favourite is still the accuracy ceiling (38%) and every tested fundamentals signal fails to add reliable information to it. v6-market-blend is already about 90% market and cannot do worse than that; the 10% fundamentals weight contributes about 0.0015 log loss.
+- Non-favourites are not predictable enough from form, ratings, weight, barrier, pace, jockey/trainer or the price history we store. They also win LESS often than their price implies, so "value" hunting among them loses on average.
+- The calibration gain (favourites underpriced) is real on SP but was NOT promoted: it was fitted to closing prices, and on the earlier stored feed prices the curve had the opposite sign and a 0.001 benefit. A calibration must be fitted on the same price the picks actually use (price at selection time) before any promotion under MODEL_PROMOTION.md.
+- Data that could plausibly change this and is not retained: dense TAB/exchange price history in the final 30 minutes (money movement), tote-vs-fixed gaps, sectional/pace-map data beyond Racing.com's standard-time difference, gear changes (sparse), track-bias and rail position, trial results, and weather forecasts. Capturing the final-30-minute TAB price path is the most promising next step.
+
+Re-run with `npx tsx scripts/experiment-market-residual.ts` (add `--refresh` to reload data; the data is cached under the ignored `scripts/output/`) and then `npx tsx scripts/experiment-odds-movement.ts`.
 
 ## Not yet done: pairwise modelling and learning-to-rank
 

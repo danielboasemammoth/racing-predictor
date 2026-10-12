@@ -167,6 +167,7 @@ export async function autoPlaceReliabilityBets(admin: SupabaseClient, now = new 
         betType: candidate.betType,
         stake,
         tabDecimalOdds: candidate.odds,
+        oddsSource: candidate.betType === 'WIN' && candidate.horse.win_odds_source === 'tab' ? 'tab' : 'recorded',
         modelProbability: candidate.probability,
         modelVersion: race.prediction.model_version,
         ...(summary.policyTrackingAvailable ? { policyVersion: INTERNAL_VALUE_POLICY_VERSION } : {}),

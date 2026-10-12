@@ -1,5 +1,5 @@
 export function legacyPaperBettingEnabled(): boolean {
-  return false
+  return process.env.LEGACY_PAPER_BETTING_ENABLED === 'true'
 }
 
-export const LEGACY_BETTING_RETIRED_MESSAGE = 'Legacy paper betting is read-only. Use the historical simulator; existing records are preserved.'
+export const LEGACY_BETTING_RETIRED_MESSAGE = 'Live paper betting is paused. Existing records and settlement are preserved.'

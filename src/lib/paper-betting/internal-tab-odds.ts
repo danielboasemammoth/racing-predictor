@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findMatchingInternalRace, normalizeHorseName, type InternalRaceCandidate } from '@/lib/paper-betting/fundamentals-bridge'
+import { melbourneDateKey } from '@/lib/daily-picks'
 import { isSimulationDecisionQuote, isSimulationSelectionQuote, isSimulationTabQuote } from '@/lib/betting/historical-simulator'
 
 export interface InternalRaceRef {
@@ -15,6 +16,53 @@ export interface TabPrice {
   capturedAt: string
   quotedAt?: string
   placeTerms?: { source: 'TAB'; product: 'fixed-place'; paidPlaces: 2 | 3; fieldSize: number; capturedAt: string }
+}
+
+async function matchTabRaces(admin: SupabaseClient, races: InternalRaceRef[], strict: boolean) {
+  const times = races.map((race) => new Date(race.raceDatetime).getTime())
+  const windowStart = new Date(Math.min(...times) - 60 * 60_000).toISOString()
+  const windowEnd = new Date(Math.max(...times) + 60 * 60_000).toISOString()
+
+  const { data: peRaceRows, error: peRaceError } = await admin
+    .from('pe_races')
+    .select('id, venue, race_number, start_time')
+    .eq('category', 'horse')
+    .gte('start_time', windowStart)
+    .lte('start_time', windowEnd)
+    .limit(1000)
+    .abortSignal(AbortSignal.timeout(30000))
+    .retry(false)
+  if (peRaceError) throw new Error(`Failed to look up PuntersEdge candidate races: ${peRaceError.message}`)
+  if (strict && peRaceRows?.length === 1000) throw new Error('TAB candidate race limit reached; refusing incomplete matching')
+
+  const peCandidates: InternalRaceCandidate[] = (peRaceRows ?? []).map((row) => ({
+    raceId: row.id as string,
+    racecourseName: row.venue as string,
+    raceNumber: row.race_number as number,
+    raceDatetime: row.start_time as string,
+  }))
+  if (peCandidates.length === 0) return null
+
+  const peRaceIdByInternalRaceId = new Map<string, string>()
+  for (const race of races) {
+    const match = findMatchingInternalRace(race.racecourseName, race.raceNumber, race.raceDatetime, peCandidates, strict ? 5 : 20)
+    if (match) peRaceIdByInternalRaceId.set(race.id, match.raceId)
+  }
+  if (peRaceIdByInternalRaceId.size === 0) return null
+
+  const matchedPeRaceIds = [...new Set(peRaceIdByInternalRaceId.values())]
+
+  const { data: runnerRows, error: runnerError } = await admin
+    .from('pe_runners')
+    .select('id, race_id, name')
+    .in('race_id', matchedPeRaceIds)
+    .limit(1000)
+    .abortSignal(AbortSignal.timeout(30000))
+    .retry(false)
+  if (runnerError) throw new Error(`Failed to look up PuntersEdge runners: ${runnerError.message}`)
+  if (strict && runnerRows?.length === 1000) throw new Error('TAB runner limit reached; refusing incomplete matching')
+
+  return { peRaceIdByInternalRaceId, matchedPeRaceIds, runnerRows }
 }
 
 /**
@@ -46,48 +94,10 @@ export async function getTabPricesForInternalRaces(
   if (races.length === 0) return result
   if (strict && races.length > 20) throw new Error('Verified TAB lookup is limited to 20 races')
 
+  const matched = await matchTabRaces(admin, races, strict)
+  if (!matched) return result
+  const { peRaceIdByInternalRaceId, matchedPeRaceIds, runnerRows } = matched
   const times = races.map((race) => new Date(race.raceDatetime).getTime())
-  const windowStart = new Date(Math.min(...times) - 60 * 60_000).toISOString()
-  const windowEnd = new Date(Math.max(...times) + 60 * 60_000).toISOString()
-
-  const { data: peRaceRows, error: peRaceError } = await admin
-    .from('pe_races')
-    .select('id, venue, race_number, start_time')
-    .eq('category', 'horse')
-    .gte('start_time', windowStart)
-    .lte('start_time', windowEnd)
-    .limit(1000)
-    .abortSignal(AbortSignal.timeout(30000))
-    .retry(false)
-  if (peRaceError) throw new Error(`Failed to look up PuntersEdge candidate races: ${peRaceError.message}`)
-  if (strict && peRaceRows?.length === 1000) throw new Error('TAB candidate race limit reached; refusing incomplete matching')
-
-  const peCandidates: InternalRaceCandidate[] = (peRaceRows ?? []).map((row) => ({
-    raceId: row.id as string,
-    racecourseName: row.venue as string,
-    raceNumber: row.race_number as number,
-    raceDatetime: row.start_time as string,
-  }))
-  if (peCandidates.length === 0) return result
-
-  const peRaceIdByInternalRaceId = new Map<string, string>()
-  for (const race of races) {
-    const match = findMatchingInternalRace(race.racecourseName, race.raceNumber, race.raceDatetime, peCandidates, strict ? 5 : 20)
-    if (match) peRaceIdByInternalRaceId.set(race.id, match.raceId)
-  }
-  if (peRaceIdByInternalRaceId.size === 0) return result
-
-  const matchedPeRaceIds = [...new Set(peRaceIdByInternalRaceId.values())]
-
-  const { data: runnerRows, error: runnerError } = await admin
-    .from('pe_runners')
-    .select('id, race_id, name')
-    .in('race_id', matchedPeRaceIds)
-    .limit(1000)
-    .abortSignal(AbortSignal.timeout(30000))
-    .retry(false)
-  if (runnerError) throw new Error(`Failed to look up PuntersEdge runners: ${runnerError.message}`)
-  if (strict && runnerRows?.length === 1000) throw new Error('TAB runner limit reached; refusing incomplete matching')
 
   const snapshotRows: Array<{ runner_id: string; tab_win_price: number | null; tab_place_price: number | null; captured_at: string; tab_age_seconds: number | null }> = []
   for (let offset = 0; ; offset += 500) {
@@ -152,5 +162,74 @@ export async function getTabPricesForInternalRaces(
     if (priceByName.size > 0) result.set(internalRaceId, priceByName)
   }
 
+  return result
+}
+
+export interface FirstTabQuoteRequest extends InternalRaceRef {
+  /** The pick already exists from this time; no quote captured earlier is eligible. */
+  notBefore: string
+}
+
+/**
+ * Earliest verified TAB WIN quote per runner on the race's own Melbourne day, captured at or after
+ * `notBefore` and before the jump. Used to place Picks History selections at the first moment a
+ * real TAB price existed, instead of when the forecast was first published (usually the previous
+ * evening or overnight, long before TAB prices exist). The quote must carry a known age of at most
+ * 120 seconds and the returned `capturedAt` is the selection time. Nothing later is borrowed.
+ */
+export async function getFirstTabPricesAfter(admin: SupabaseClient, races: FirstTabQuoteRequest[]): Promise<Map<string, Map<string, TabPrice>>> {
+  const result = new Map<string, Map<string, TabPrice>>()
+  if (races.length === 0) return result
+  if (races.length > 20) throw new Error('Verified TAB lookup is limited to 20 races')
+  if (races.some(race => !Number.isFinite(Date.parse(race.notBefore)))) throw new Error('Invalid selection-time TAB lookup')
+
+  const matched = await matchTabRaces(admin, races, true)
+  if (!matched) return result
+  const { peRaceIdByInternalRaceId, matchedPeRaceIds, runnerRows } = matched
+  const peIds = [...peRaceIdByInternalRaceId.values()]
+  const raceByRunnerId = new Map<string, FirstTabQuoteRequest>()
+  for (const [internalId, peId] of peRaceIdByInternalRaceId) {
+    if (peIds.filter(value => value === peId).length !== 1) continue
+    for (const runner of runnerRows ?? []) if (runner.race_id === peId) raceByRunnerId.set(runner.id, races.find(race => race.id === internalId)!)
+  }
+
+  const earliest = new Map<string, { runner_id: string; tab_win_price: number | null; tab_place_price: number | null; captured_at: string; tab_age_seconds: number }>()
+  const from = new Date(Math.min(...races.map(race => Date.parse(race.notBefore)))).toISOString()
+  const to = new Date(Math.max(...races.map(race => Date.parse(race.raceDatetime)))).toISOString()
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await admin.from('pe_odds_snapshots')
+      .select('id, runner_id, tab_win_price, tab_place_price, captured_at, tab_age_seconds')
+      .in('race_id', matchedPeRaceIds).gte('captured_at', from).lte('captured_at', to)
+      .order('captured_at', { ascending: true }).order('id', { ascending: true })
+      .range(offset, offset + 499).abortSignal(AbortSignal.timeout(30000)).retry(false)
+    if (error) throw new Error(`Failed to look up PuntersEdge odds snapshots: ${error.message}`)
+    for (const row of data ?? []) {
+      const race = raceByRunnerId.get(row.runner_id as string)
+      const age = row.tab_age_seconds as number | null
+      if (!race || earliest.has(row.runner_id) || typeof age !== 'number' || !(row.tab_win_price > 1)) continue
+      const capturedAt = Date.parse(row.captured_at)
+      const quotedAt = new Date(capturedAt - age * 1000).toISOString()
+      if (capturedAt < Date.parse(race.notBefore) || melbourneDateKey(row.captured_at) !== melbourneDateKey(race.raceDatetime)
+        || !isSimulationSelectionQuote(race.raceDatetime, row.captured_at, quotedAt, row.captured_at)) continue
+      earliest.set(row.runner_id, row)
+    }
+    if (!data || data.length < 500) break
+    if (offset >= 9500) throw new Error('TAB snapshot batch limit reached')
+  }
+
+  for (const [internalRaceId, peId] of peRaceIdByInternalRaceId) {
+    const runners = (runnerRows ?? []).filter(runner => runner.race_id === peId)
+    const names = runners.map(runner => normalizeHorseName(runner.name as string))
+    const priceByName = new Map<string, TabPrice>()
+    for (const [index, runner] of runners.entries()) {
+      const row = earliest.get(runner.id)
+      if (!row || names.filter(name => name === names[index]).length !== 1) continue
+      priceByName.set(names[index], {
+        win: row.tab_win_price ?? undefined, place: row.tab_place_price ?? undefined, capturedAt: row.captured_at,
+        quotedAt: new Date(Date.parse(row.captured_at) - row.tab_age_seconds * 1000).toISOString(),
+      })
+    }
+    if (priceByName.size > 0) result.set(internalRaceId, priceByName)
+  }
   return result
 }

@@ -3,6 +3,7 @@ import { revalidateTag } from 'next/cache'
 import { hasAdminSession } from '@/lib/admin-auth'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { PAGE_CACHE_KEYS, refreshPageCache, type PageCacheKey } from '@/lib/refresh-page-cache'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 export const maxDuration = 300
 
@@ -14,7 +15,8 @@ export async function POST(request: Request) {
   if (typeof key !== 'string' || !PAGE_CACHE_KEYS.includes(key as PageCacheKey)) {
     return NextResponse.json({ success: false, message: 'A valid snapshot key is required' }, { status: 400 })
   }
-  const results = await refreshPageCache(createAdminClient(), [key as PageCacheKey])
+  const keys: PageCacheKey[] = key === 'results' && legacyPaperBettingEnabled() ? ['results', 'validation'] : [key as PageCacheKey]
+  const results = await refreshPageCache(createAdminClient(), keys)
   const success = results.every(result => result.ok)
   if (success) revalidateTag('page-snapshots', 'max')
   const archiveFailed = results.some(result => result.code === 'HOME_ARCHIVE_FAILED')

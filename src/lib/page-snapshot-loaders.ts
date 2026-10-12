@@ -12,6 +12,7 @@ import { loadResultsSnapshot } from './results-snapshot'
 import { loadAccuracySnapshot } from './accuracy-snapshot'
 import { loadAnalyticsSnapshot } from './analytics-snapshot'
 import { getTabScheduledRaces } from './tab-races'
+import { readPaperBonusCredits } from './betting/bonus-back'
 
 function compactPrediction(prediction: Prediction, primary: boolean): Prediction {
   const payload = prediction.predictions
@@ -69,7 +70,8 @@ export function currentSnapshotOpportunities(rows: OpportunityRow[], now = new D
 export async function loadValidationSnapshot(db: SupabaseClient) {
   const account = await db.from('paper_accounts').select('id').eq('name', 'default').maybeSingle()
   if (account.error) throw account.error
-  return { accountId: account.data?.id ?? null, report: account.data ? await computeValidationReport(db, account.data.id) : null }
+  return { accountId: account.data?.id ?? null, report: account.data ? await computeValidationReport(db, account.data.id) : null,
+    bonusCredits: account.data ? await readPaperBonusCredits(db, account.data.id) : [] }
 }
 
 export async function loadPicksHistorySnapshot(db: SupabaseClient) {

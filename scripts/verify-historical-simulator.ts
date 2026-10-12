@@ -5,6 +5,7 @@ import type { SimulationRace } from '../src/lib/betting/historical-simulator'
 import { SIMULATION_PREFERENCES_KEY } from '../src/lib/betting/simulation-preferences'
 import { SAVED_STRATEGIES_KEY } from '../src/lib/betting/saved-strategies'
 import { TAB_PLACE_TRIAL } from '../src/lib/betting/tab-place-research'
+import type { BonusBackOffer } from '../src/lib/betting/bonus-back'
 
 const baseUrl = process.argv[2] ?? 'http://localhost:3021'
 assert.ok(['localhost', '127.0.0.1'].includes(new URL(baseUrl).hostname), 'Use a local preview only')
@@ -53,8 +54,11 @@ async function main() {
     const blockedRequests: string[] = []
     const batchRequests: Array<{ jurisdiction: string; preferences: { settings: { flatStake: number } } }> = []
     let batchError = false
+    let bonusOffers: BonusBackOffer[] = []
+    let bonusError = false
     await context.route('**/*', async route => {
       const url = new URL(route.request().url())
+      if (url.pathname === '/api/bonus-back') return route.fulfill({ status: bonusError ? 503 : 200, json: { offers: bonusOffers, canEdit: false } })
       if (process.argv.includes('--tab-batch') && url.pathname === '/api/paper-betting/tab-batch') {
         batchRequests.push(route.request().postDataJSON())
         const latest = batchRequests.at(-1)!
@@ -83,6 +87,56 @@ async function main() {
     const waitForCount = (count: number) => page.getByText(`Filtered bets (${count})`, { exact: true }).waitFor()
     const results = () => page.getByRole('region', { name: 'Simulation results', exact: true }).innerText()
     await waitForCount(240)
+    if (process.argv.includes('--bonus-back')) {
+      const observedAt = new Date(Date.parse(races[0].start) - 45 * 60_000).toISOString()
+      const selection = { ...races[0].selections[0], id: 'bonus-history', horse: 'TEST BONUS Runner',
+        forecastBasis: 'history' as const, historyObservedAt: observedAt, historyProvenance: 'home-snapshot' as const,
+        predictionId: 'bonus-prediction', position: 2, tabPriceStatus: 'captured' as const, tabPriceBasis: 'selection' as const,
+        tabPrice: { win: 2.5, place: 1.5, capturedAt: observedAt, quotedAt: observedAt } }
+      races[0].historySelections = [selection]
+      manifest.historyPickCount = 1
+      manifest.historyGeneratedAt = manifest.generatedAt
+      bonusOffers = [{ raceId: races[0].id, runnerId: selection.id, runnerName: selection.horse,
+        confirmedAt: new Date(Date.parse(observedAt) - 60_000).toISOString(), startsAt: races[0].start, cap: 50, basis: 'manual' }]
+      await page.reload()
+      await page.getByRole('button', { name: 'Picks History preset', exact: true }).click()
+      await waitForCount(1)
+      await page.getByLabel('WIN settlement odds', { exact: true }).selectOption('tab')
+      await page.getByText('Bonus-bet credits (non-cash): $10.00', { exact: true }).waitFor()
+      const cashWithBonus = await results()
+      assert.match(cashWithBonus, /-100\.0%/)
+      const table = page.getByRole('region', { name: 'Filtered bets', exact: true })
+      await table.getByRole('cell', { name: 'LOST', exact: true }).waitFor()
+      const downloadPromise = page.waitForEvent('download')
+      await page.getByRole('button', { name: 'Export all filtered bets', exact: true }).click()
+      const stream = await (await downloadPromise).createReadStream()
+      assert.ok(stream)
+      const chunks: Buffer[] = []
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk))
+      const csv = Buffer.concat(chunks).toString('utf8')
+      assert.match(csv, /"Bonus credit \(non-cash\)","Promotion eligibility"/)
+      assert.match(csv, /"LOST"/)
+      assert.match(csv, /"10","Manually confirmed/)
+      for (const viewport of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
+        await page.setViewportSize(viewport)
+        await page.getByText('Bonus-bet credits (non-cash): $10.00', { exact: true }).scrollIntoViewIfNeeded()
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false)
+        await mkdir('scripts/output', { recursive: true })
+        await page.screenshot({ path: `scripts/output/simulator-bonus-${viewport.name}.png` })
+      }
+      bonusOffers = []
+      await page.reload()
+      await waitForCount(1)
+      await page.getByText('Bonus-bet credits (non-cash): $0.00', { exact: true }).waitFor()
+      assert.equal((await results()).replace('Bonus-bet credits (non-cash): $0.00', ''), cashWithBonus.replace('Bonus-bet credits (non-cash): $10.00', ''))
+      bonusError = true
+      await page.reload()
+      await waitForCount(1)
+      await page.getByText('Bonus-bet credits (non-cash): Confirmations unavailable', { exact: true }).waitFor()
+      assert.deepEqual(errors, [])
+      console.log('Bonus-back browser checks passed: non-cash credit, unchanged losing cash result, CSV, unavailable confirmations and desktop/mobile layout. Fixtures only; no database writes.')
+      return
+    }
     if (process.argv.includes('--tab-batch')) {
       const batch = page.getByRole('region', { name: 'TAB Tote batch', exact: true })
       const generate = batch.getByRole('button', { name: 'Generate batch', exact: true })

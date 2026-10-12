@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getTabPricesForInternalRaces } from './internal-tab-odds'
+import { getFirstTabPricesAfter, getTabPricesForInternalRaces } from './internal-tab-odds'
 
 const races = [{ id: 'internal', racecourseName: 'Test', raceNumber: 1, raceDatetime: '2026-09-01T01:00:00Z' }]
 const capture = (captured_at: string, tab_age_seconds: number | null, price: number) => ({ id: captured_at, runner_id: 'runner', captured_at, tab_age_seconds, tab_win_price: price, tab_place_price: 2 })
@@ -47,4 +47,17 @@ it('freezes quotes at early selection time without borrowing later prices or rel
     expect((await getTabPricesForInternalRaces(fixture([snapshot]), races, false, selectedAt, 'selection')).size).toBe(0)
   }
   expect((await getTabPricesForInternalRaces(fixture([capture('2026-09-01T01:00:00Z', 0, 3)]), races, false, races[0].raceDatetime, 'selection')).size).toBe(0)
+})
+it('finds the earliest fresh same-day TAB quote at or after the pick was published, never an earlier-day or stale one', async () => {
+  const request = { ...races[0], notBefore: '2026-08-31T10:00:00Z' }
+  const snapshots = [capture('2026-08-31T13:00:00Z', 5, 9), capture('2026-08-31T20:30:00Z', 600, 8), capture('2026-09-01T00:30:00Z', 10, 3), capture('2026-09-01T00:45:00Z', 0, 2.5)]
+  expect((await getFirstTabPricesAfter(fixture(snapshots), [request])).get('internal')?.get('horse'))
+    .toEqual({ win: 3, place: 2, capturedAt: '2026-09-01T00:30:00Z', quotedAt: '2026-09-01T00:29:50.000Z' })
+  expect((await getFirstTabPricesAfter(fixture(snapshots), [{ ...request, notBefore: '2026-09-01T00:40:00Z' }])).get('internal')?.get('horse')?.win).toBe(2.5)
+})
+
+it('does not use unknown-age, post-start, ambiguous or pre-publication TAB quotes for the first selection quote', async () => {
+  const request = { ...races[0], notBefore: '2026-09-01T00:20:00Z' }
+  expect((await getFirstTabPricesAfter(fixture([capture('2026-09-01T00:10:00Z', 0, 3), capture('2026-09-01T00:30:00Z', null, 3), capture('2026-09-01T01:00:00Z', 0, 3), capture('2026-09-01T01:05:00Z', 0, 3)]), [request])).size).toBe(0)
+  expect((await getFirstTabPricesAfter(fixture([capture('2026-09-01T00:30:00Z', 0, 3)], true), [request])).size).toBe(0)
 })

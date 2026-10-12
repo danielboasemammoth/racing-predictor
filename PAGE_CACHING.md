@@ -13,7 +13,7 @@ Home, Results, Past Picks, Accuracy, Analytics and Greyhounds read precomputed d
 
 ## After-Run Refreshes
 
-The hourly pipeline refreshes `home`, `opportunities` and `results`. At 06:00 local time, or with `-Maintenance`, it additionally refreshes `validation`, `place-shadow`, `picks-history`, `accuracy` and `analytics`. The odds poll refreshes only `opportunities`. The simulator has its own hourly incremental publication endpoint and does not use the database page-snapshot cache.
+The hourly pipeline refreshes `home`, `opportunities` and `results`. With `LEGACY_PAPER_BETTING_ENABLED=true`, a `results` endpoint refresh also publishes `validation`, including separate bonus-credit reporting for the live paper dashboard. At 06:00 local time, or with `-Maintenance`, the pipeline additionally refreshes `validation`, `place-shadow`, `picks-history`, `accuracy` and `analytics`. The odds poll refreshes only `opportunities`. The simulator has its own hourly incremental publication endpoint and does not use the database page-snapshot cache.
 
 Hourly result ingestion explicitly uses `mode: recent` (today/yesterday); maintenance retains the seven-day reconciliation, as does the API default for manual callers. Upcoming prediction loading now reads lightweight model/timestamp metadata before fetching only the selected latest payloads, at most 20 per fetch. This avoids repeatedly downloading historical JSON while preserving all model coverage.
 

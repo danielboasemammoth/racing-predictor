@@ -4,7 +4,10 @@ import { CURRENT_MODEL_VERSIONS } from '../prediction-suite'
 import { buildSimulationRace, type SimulationSource } from './simulation-source'
 import { readSimulationChunks, readSimulationManifest, simulationReportBaseUrl, SIMULATION_MANIFEST_PATH, SIMULATION_REPORT_BUCKET, SIMULATION_PRICING_VERSION, type SimulationManifest } from './simulation-report'
 import type { SimulationRace } from './historical-simulator'
-import { getTabPricesForInternalRaces } from '../paper-betting/internal-tab-odds'
+import { getFirstTabPricesAfter, getTabPricesForInternalRaces, type FirstTabQuoteRequest } from '../paper-betting/internal-tab-odds'
+import { normalizeHorseName } from '../paper-betting/fundamentals-bridge'
+import { isSimulationSelectionQuote } from './historical-simulator'
+import { melbourneDateKey } from '../daily-picks'
 import { simulationDecisionKey, type SimulationDecision } from './simulation-decision'
 import type { DailyPicksHistoryDay } from '../daily-picks-history'
 import type { PredictedHorse } from '../types'
@@ -59,6 +62,19 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
       if (decisions.error) throw decisions.error
       stage = `Reading original History forecasts ${offset + 1}-${offset + batch.length} of ${changed.length}`
       const batchPicks = historyPicks.filter(pick => batch.some(race => race.id === pick.race.id))
+      const recordedQuote = (pick: typeof batchPicks[number]) => !!pick.tabPrice
+        && isSimulationSelectionQuote(pick.race.race_datetime, pick.observedAt, pick.tabPrice.quotedAt, pick.tabPrice.capturedAt)
+        && melbourneDateKey(pick.observedAt) === melbourneDateKey(pick.race.race_datetime)
+      const quoteRequests = new Map<string, FirstTabQuoteRequest>()
+      for (const pick of batchPicks) {
+        const source = sources.find(item => item.id === pick.race.id)
+        const current = quoteRequests.get(pick.race.id)
+        if (!source || recordedQuote(pick)) continue
+        quoteRequests.set(source.id, { id: source.id, racecourseName: source.venue, raceNumber: source.number, raceDatetime: source.start,
+          notBefore: current && Date.parse(current.notBefore) < Date.parse(pick.observedAt) ? current.notBefore : pick.observedAt })
+      }
+      stage = `Reading first same-day TAB quotes for History picks ${offset + 1}-${offset + batch.length} of ${changed.length}`
+      const firstQuotes = await getFirstTabPricesAfter(db, [...quoteRequests.values()])
       const historyForecasts = new Map<string, { race_id: string; forecast: SimulationSource['forecasts'][number] }>()
       const predictionIds = [...new Set(batchPicks.map(pick => pick.predictionId))]
       for (let predictionOffset = 0; predictionOffset < predictionIds.length; predictionOffset += 10) {
@@ -83,9 +99,13 @@ export async function refreshSimulationReport(db: SupabaseClient, budgetMs = 200
         const history = batchPicks.filter(pick => pick.race.id === source.id).flatMap(pick => {
           const retained = historyForecasts.get(pick.predictionId)
           if (!retained || retained.race_id !== source.id || Date.parse(pick.race.race_datetime) !== Date.parse(source.start)) return []
+          const quote = recordedQuote(pick) ? undefined : firstQuotes.get(pick.race.id)?.get(normalizeHorseName(pick.horse.horse_name ?? ''))
+          const timed = recordedQuote(pick) ? { observedAt: pick.observedAt, tabPrice: pick.tabPrice, tabPriceStatus: pick.tabPriceStatus }
+            : quote && Date.parse(quote.capturedAt) >= Date.parse(pick.observedAt)
+              ? { observedAt: quote.capturedAt, publishedAt: pick.observedAt, tabPrice: quote, tabPriceStatus: 'captured' as const }
+              : { observedAt: pick.observedAt, tabPrice: null, tabPriceStatus: 'unavailable' as const }
           return [{ forecast: retained.forecast, horseId: pick.horse.horse_id, winProbability: pick.winProbability,
-            top3Probability: pick.top3Probability, observedAt: pick.observedAt, provenance: pick.provenance,
-            tabPrice: pick.tabPrice, tabPriceStatus: pick.tabPriceStatus }]
+            top3Probability: pick.top3Probability, provenance: pick.provenance, ...timed }]
         })
         races.set(source.id, buildSimulationRace({ ...source, decisions: observations, history }, prices.get(source.id)))
       }

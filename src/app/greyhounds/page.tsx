@@ -4,6 +4,7 @@ import { SnapshotStatus } from '@/components/snapshot-status'
 import { SiteNav } from '@/components/site-nav'
 import { type OpportunityRow } from '@/lib/paper-betting/opportunities-query'
 import { PaperBetButton } from '@/components/paper-bet-button'
+import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 const DECISION_STYLES: Record<string, string> = {
   BET: 'bg-emerald-50 text-emerald-800 border-emerald-200',
@@ -87,6 +88,8 @@ export default async function GreyhoundsPage() {
                       <span className="font-semibold">{rec.decision}</span>
                     </span>
                     <PaperBetButton
+                      enabled={legacyPaperBettingEnabled()}
+                      winOddsSource="tab"
                       raceId={rec.race_id}
                       runnerId={rec.runner_id}
                       runnerName={runner.name}

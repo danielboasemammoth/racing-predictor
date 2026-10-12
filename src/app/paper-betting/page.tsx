@@ -9,7 +9,7 @@ export default function PaperBettingPage() {
     </div></header>
     <main className="mx-auto max-w-7xl space-y-5 px-4 py-6">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">Historical Simulator</h2>
-        <Link href="/paper-betting/archive" prefetch={false} className="text-sm text-teal-800 underline">Archived bets</Link>
+        <div className="flex gap-4 text-sm"><Link href="/paper-betting/live" prefetch={false} className="text-teal-800 underline">Live paper betting</Link><Link href="/paper-betting/archive" prefetch={false} className="text-teal-800 underline">Archived bets</Link></div>
       </div>
       <HistoricalSimulator />
     </main>

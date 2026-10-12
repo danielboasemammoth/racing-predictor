@@ -1,12 +1,13 @@
-import { beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { POST } from './route'
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), refresh: vi.fn(), invalidate: vi.fn(), client: vi.fn() }))
 vi.mock('@/lib/admin-auth', () => ({ hasAdminSession: mocks.auth }))
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.client }))
-vi.mock('@/lib/refresh-page-cache', () => ({ PAGE_CACHE_KEYS: ['home'], refreshPageCache: mocks.refresh }))
+vi.mock('@/lib/refresh-page-cache', () => ({ PAGE_CACHE_KEYS: ['home', 'results', 'validation'], refreshPageCache: mocks.refresh }))
 vi.mock('next/cache', () => ({ revalidateTag: mocks.invalidate }))
-beforeEach(() => { vi.clearAllMocks(); mocks.auth.mockResolvedValue(true) })
+beforeEach(() => { vi.clearAllMocks(); mocks.auth.mockResolvedValue(true); vi.stubEnv('LEGACY_PAPER_BETTING_ENABLED', 'false') })
+afterEach(() => vi.unstubAllEnvs())
 const request = (body: unknown) => new Request('http://localhost/api/admin/page-cache', { method: 'POST', body: JSON.stringify(body) })
 
 it('rejects unauthenticated refreshes without touching data', async () => {
@@ -27,4 +28,13 @@ it('revalidates only successfully published snapshots', async () => {
   expect(mocks.invalidate).not.toHaveBeenCalled()
   expect((await POST(request({ key: 'home' }))).status).toBe(200)
   expect(mocks.invalidate).toHaveBeenCalledWith('page-snapshots', 'max')
+})
+
+it('refreshes live-paper validation with hourly results only when simulated placement is enabled', async () => {
+  mocks.refresh.mockResolvedValue([{ key: 'results', ok: true }])
+  await POST(request({ key: 'results' }))
+  expect(mocks.refresh).toHaveBeenLastCalledWith(undefined, ['results'])
+  vi.stubEnv('LEGACY_PAPER_BETTING_ENABLED', 'true')
+  await POST(request({ key: 'results' }))
+  expect(mocks.refresh).toHaveBeenLastCalledWith(undefined, ['results', 'validation'])
 })

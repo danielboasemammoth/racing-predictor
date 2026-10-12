@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 export interface PaperBetButtonProps {
+  enabled?: boolean
+  winOddsSource?: 'tab' | 'recorded'
   raceId: string
   runnerId: string
   runnerName: string
@@ -53,6 +54,7 @@ export function PaperBetButton(props: PaperBetButtonProps) {
           source: props.source ?? 'puntersedge',
           betType,
           tabDecimalOdds: price,
+          oddsSource: betType === 'WIN' ? props.winOddsSource : 'recorded',
           modelProbability,
           modelVersion: props.modelVersion,
           edgePoints,
@@ -76,14 +78,14 @@ export function PaperBetButton(props: PaperBetButtonProps) {
     }
   }
 
-  if (!legacyPaperBettingEnabled()) return null
+  if (!props.enabled) return null
 
   if (status === 'placed') {
     return <span className="text-xs font-medium text-emerald-700">{message}</span>
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <select
         value={betType}
         onChange={(e) => setBetType(e.target.value as 'WIN' | 'PLACE')}

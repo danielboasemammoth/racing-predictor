@@ -3,7 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { refreshSimulationReport } from './refresh-simulation-report'
 import { readSimulationChunks, readSimulationManifest, SIMULATION_MANIFEST_PATH, SIMULATION_PRICING_VERSION } from './simulation-report'
 import { CURRENT_MODEL_VERSIONS } from '../prediction-suite'
+import { getFirstTabPricesAfter } from '../paper-betting/internal-tab-odds'
 
+vi.mock('../paper-betting/internal-tab-odds', async importOriginal => ({
+  ...await importOriginal<typeof import('../paper-betting/internal-tab-odds')>(),
+  getFirstTabPricesAfter: vi.fn(async () => new Map()),
+}))
 vi.mock('./simulation-report', async importOriginal => ({
   ...await importOriginal<typeof import('./simulation-report')>(),
   readSimulationChunks: vi.fn(), readSimulationManifest: vi.fn(), simulationReportBaseUrl: () => 'https://example.test/',
@@ -111,6 +116,28 @@ it('rebuilds a retained History pick by its original ID, including losers and wi
   expect(published.historySelections).toHaveLength(1)
   expect(published.historySelections[0]).toMatchObject({ id: 'horse-1', predictionId: 'early', position: 2, winProbability: 0.63, winOdds: 2, winSource: 'racing_com', tabPrice, tabPriceBasis: 'selection', tabPriceStatus: 'captured' })
   expect(JSON.parse(upload.mock.calls.at(-1)![1]).historyPickCount).toBe(2)
+})
+
+it('places a retained History pick at the first same-day TAB quote instead of its overnight publication time', async () => {
+  const { db, upload, history, rpc } = fixture()
+  const allHorses = Array.from({ length: 8 }, (_, index) => ({ horse_id: `horse-${index}`, horse_name: `Runner ${index}`, predicted_position: index + 1, confidence: 0.6, win_probability: 0.63, top3_probability: 0.8, win_odds: 2, place_odds: 1.5 }))
+  const forecast = { id: 'early', race_id: source.id, model_version: CURRENT_MODEL_VERSIONS[0], predicted_at: '2025-12-30T10:00:00Z', created_at: '2025-12-30T10:01:00Z', podium: allHorses.slice(0, 3), allHorses }
+  const pick = { race: { id: source.id, race_datetime: source.start }, horse: { horse_id: 'horse-1', horse_name: 'Runner 1' }, predictionId: 'early', winProbability: 0.63, top3Probability: 0.8, observedAt: '2025-12-30T10:05:00Z', provenance: 'home-snapshot', tabPrice: null, tabPriceStatus: 'unavailable' }
+  history.maybeSingle.mockResolvedValue({ data: { generated_at: '2026-01-02T00:00:00Z', payload: [{ dateKey: '2026-01-01', picks: [pick] }] }, error: null })
+  const predictions = { select: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), abortSignal: vi.fn().mockReturnThis(), retry: vi.fn().mockResolvedValue({ data: [forecast], error: null }) }
+  const originalFrom = vi.mocked(db.from).getMockImplementation()!
+  vi.mocked(db.from).mockImplementation(table => table === 'predictions' ? predictions as never : originalFrom(table))
+  const originalRpc = rpc.getMockImplementation()!
+  rpc.mockImplementation(name => name === 'simulation_race_sources' ? { data: null, error: null, abortSignal: () => Promise.resolve({ data: [{ ...source, entries: allHorses.map((horse, index) => ({ horse_id: horse.horse_id, position: index + 1, status: 'finished' })) }], error: null }) } as never : originalRpc(name))
+  const quote = { win: 3.1, place: 1.6, quotedAt: '2025-12-31T23:29:50Z', capturedAt: '2025-12-31T23:30:00Z' }
+  vi.mocked(getFirstTabPricesAfter).mockResolvedValue(new Map([[source.id, new Map([['runner 1', quote]])]]))
+  await refreshSimulationReport(db)
+  expect(getFirstTabPricesAfter).toHaveBeenCalledWith(db, [expect.objectContaining({ id: source.id, notBefore: pick.observedAt })])
+  expect(JSON.parse(upload.mock.calls[0][1])[0].historySelections[0]).toMatchObject({ id: 'horse-1', historyObservedAt: quote.capturedAt, historyPublishedAt: pick.observedAt, tabPrice: quote, tabPriceStatus: 'captured' })
+  vi.mocked(getFirstTabPricesAfter).mockResolvedValue(new Map())
+  upload.mockClear()
+  await refreshSimulationReport(db)
+  expect(JSON.parse(upload.mock.calls[0][1])[0].historySelections[0]).toMatchObject({ historyObservedAt: pick.observedAt, tabPrice: null, tabPriceStatus: 'unavailable' })
 })
 
 it('preserves the previous report when the retained History snapshot cannot be read', async () => {

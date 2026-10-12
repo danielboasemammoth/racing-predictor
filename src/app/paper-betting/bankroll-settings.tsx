@@ -7,6 +7,7 @@ interface BankrollSettingsProps {
   currentStartingBankroll: number | null
   currentStakingMethod?: string
   betCount: number
+  preserveHistoryOnly?: boolean
 }
 
 const STAKING_METHODS = [
@@ -18,7 +19,7 @@ const STAKING_METHODS = [
 
 /** Lets the user pick/change their paper-betting starting budget. Existing profit/loss is preserved
  * unless they explicitly tick "wipe bet history", which is destructive and requires confirmation. */
-export function BankrollSettings({ currentStartingBankroll, currentStakingMethod, betCount }: BankrollSettingsProps) {
+export function BankrollSettings({ currentStartingBankroll, currentStakingMethod, betCount, preserveHistoryOnly = false }: BankrollSettingsProps) {
   const router = useRouter()
   const [amount, setAmount] = useState(currentStartingBankroll ?? 500)
   const [stakingMethod, setStakingMethod] = useState(currentStakingMethod ?? 'flat-1pct')
@@ -126,7 +127,7 @@ export function BankrollSettings({ currentStartingBankroll, currentStakingMethod
         </button>
       </div>
 
-      {betCount > 0 && (
+      {!preserveHistoryOnly && betCount > 0 && (
         <label className="mt-3 flex items-center gap-2 text-xs text-red-700">
           <input type="checkbox" checked={wipeHistory} onChange={(e) => setWipeHistory(e.target.checked)} disabled={status === 'pending'} />
           Wipe all {betCount} recorded bets and reset bankroll instead of preserving current profit/loss (cannot be undone)
@@ -139,7 +140,7 @@ export function BankrollSettings({ currentStartingBankroll, currentStakingMethod
       {status === 'saved' && <p className="mt-2 text-xs text-emerald-700">{message}</p>}
       {status === 'error' && <p className="mt-2 text-xs text-red-700">{message}</p>}
 
-      {currentStartingBankroll != null && (
+      {!preserveHistoryOnly && currentStartingBankroll != null && (
         <div className="mt-4 border-t border-slate-100 pt-3">
           <button
             type="button"

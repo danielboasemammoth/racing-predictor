@@ -2,6 +2,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PaperBettingPage from './page'
+import LivePaperBettingPage from './live/page'
 import { createClient } from '@/lib/supabase/server'
 import { readPageSnapshot } from '@/lib/page-cache-reader'
 import { queryLatestOpportunities } from '@/lib/paper-betting/opportunities-query'
@@ -9,6 +10,7 @@ import { computeValidationReport } from '@/lib/paper-betting/validation-query'
 import { loadPlaceShadowReport, summarizePlaceShadow } from '@/lib/paper-betting/place-shadow'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
+vi.mock('@/lib/admin-auth', () => ({ hasAdminSession: vi.fn().mockResolvedValue(false) }))
 vi.mock('@/lib/page-cache-reader', () => ({ readPageSnapshot: vi.fn() }))
 vi.mock('@/components/site-nav', () => ({ SiteNav: () => null }))
 vi.mock('./what-if-lab', () => ({ WhatIfLab: () => null }))
@@ -24,6 +26,7 @@ vi.mock('@/lib/paper-betting/place-shadow', async (importOriginal) => ({
 const timeout = { code: '57014', message: 'canceling statement due to statement timeout' }
 const query = {
   select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(),
+  retry: vi.fn().mockReturnThis(),
   maybeSingle: vi.fn(), limit: vi.fn(),
 }
 
@@ -51,6 +54,46 @@ afterEach(() => {
 })
 
 describe('paper betting page under database timeouts', () => {
+  it('shows full cached cash performance separately from conditional bonus credit', async () => {
+    vi.mocked(readPageSnapshot).mockResolvedValue({ generatedAt: '2026-10-11T00:00:00Z', data: {
+      accountId: 'account', report: { totalSettled: 10, windows: [{ label: 'All bets', netProfit: -20, roiPct: -20 }],
+        markets: [{ label: 'WIN / all', n: 10, races: 8, expectedHitRate: 0.4, winRate: 0.3, roiPct: -20, netProfit: -20 }],
+        policies: [], calibration: { brierScore: 0.2, logLoss: 0.5 } },
+      bonusCredits: [{ betId: 'bonus', runnerName: 'Runner', status: 'LOST', credit: 10, cap: 50 }],
+    } })
+    const html = renderToStaticMarkup(await LivePaperBettingPage())
+    expect(html).toContain('10 settled WIN/PLACE bets')
+    expect(html).toContain('30.0%')
+    expect(html).toContain('40.0%')
+    expect(html).toContain('$-20.00')
+    expect(html).toContain('$10.00 bonus credit')
+    expect(html).toContain('Credits never increase cash bankroll or cash ROI')
+  })
+
+  it('links to the restored dashboard while keeping the simulator independent', async () => {
+    const html = renderToStaticMarkup(await PaperBettingPage())
+    expect(html).toContain('/paper-betting/live')
+    expect(createClient).not.toHaveBeenCalled()
+  })
+
+  it('renders legacy account data without inventing accuracy when the snapshot is missing', async () => {
+    vi.mocked(readPageSnapshot).mockResolvedValue(null)
+    const html = renderToStaticMarkup(await LivePaperBettingPage())
+    expect(html).toContain('Live Paper Betting')
+    expect(html).toContain('Current bankroll')
+    expect(html).toContain('Performance snapshot unavailable')
+    expect(html).toContain('/paper-betting/archive')
+    expect(html).not.toContain('NaN')
+  })
+
+  it('keeps the restored page available during a wallet outage', async () => {
+    query.maybeSingle.mockResolvedValue({ data: null, error: timeout })
+    vi.mocked(readPageSnapshot).mockResolvedValue(null)
+    const html = renderToStaticMarkup(await LivePaperBettingPage())
+    expect(html).toContain('Paper account temporarily unavailable')
+    expect(html).toContain('Historical simulator')
+  })
+
   it('renders the simulator without querying wallet or legacy reports during a database outage', async () => {
     vi.mocked(queryLatestOpportunities).mockRejectedValue(timeout)
     vi.mocked(computeValidationReport).mockRejectedValue(timeout)

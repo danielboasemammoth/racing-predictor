@@ -2,6 +2,7 @@ import { kellyFraction } from './kelly'
 import { racingComProviderLabel } from './racing-com-odds'
 import type { TabPlaceTrial } from './tab-place-research'
 import type { TabPrice } from '../paper-betting/internal-tab-odds'
+import { bonusBackCredit, bonusBackEligible, type BonusBackOffer } from './bonus-back'
 
 export type SimulationMarket = 'WIN' | 'PLACE'
 export interface SimulationSelection {
@@ -14,6 +15,7 @@ export interface SimulationSelection {
   predictionId?: string
   historyProvenance?: 'home-snapshot' | 'pre-race-recovery'
   historyObservedAt?: string
+  historyPublishedAt?: string
   tabPrice?: TabPrice | null
   tabPriceStatus?: 'captured' | 'unavailable' | 'lookup-failed'
   tabPriceBasis?: 'selection' | 'decision' | 'near-start'
@@ -127,6 +129,8 @@ export interface SimulationBet {
   stake: number
   returned: number
   profit: number
+  bonusCredit?: number
+  bonusBackStatus?: string
 }
 
 export function isSimulationTabQuote(start: string, quotedAt?: string | null, capturedAt?: string | null): boolean {
@@ -247,6 +251,11 @@ export function simulationTabPrice(bet: SimulationBet): TabPrice | null {
   return valid ? price : null
 }
 
+/** Picks History is placed when a real TAB quote exists, so it is always priced and settled at that quote, never at the forecast's recorded Racing.com price. */
+export function simulationPricingFilter(filter: SimulationFilters): SimulationFilters {
+  return filter.forecast === 'picks-history' && filter.settlementOdds !== 'tab' ? { ...filter, settlementOdds: 'tab' } : filter
+}
+
 export function simulationSettlementOdds(bet: SimulationBet, filter: SimulationFilters): SimulationBet {
   if (filter.settlementOdds !== 'tab') return bet
   const price = simulationTabPrice(bet)
@@ -263,7 +272,7 @@ export function simulationSettlementOdds(bet: SimulationBet, filter: SimulationF
   const pricingIssue = bet.issue === 'Missing recorded odds' || bet.issue === 'TAB quote not verified near race start'
     || bet.issue === 'TAB quote not verified at decision time' || bet.issue === 'Missing or stale TAB decision quote'
     || (verifiedTerms && bet.market === 'PLACE' && bet.issue === 'Top-three probability does not match paid places')
-  const issue = odds === null ? `TAB ${bet.market} quote unavailable at ${source === 'tab_selection' ? 'selection time' : source === 'tab_decision' ? 'decision time' : 'near-start'}`
+  const issue = odds === null ? `TAB ${bet.market} quote unavailable at ${source === 'tab_selection' ? 'selection time (no TAB odds record on the race day after the pick was published)' : source === 'tab_decision' ? 'decision time' : 'near-start'}`
     : bet.market === 'PLACE' && verifiedTerms && probability === null ? 'Missing paid-place probability'
     : pricingIssue ? null : bet.issue
   return { ...bet, selection, source, odds, probability, implied, issue,
@@ -278,14 +287,15 @@ export function simulationExclusionReasons(bet: SimulationBet, filter: Simulatio
   return reasons
 }
 
-export function simulateBets(candidates: SimulationBet[], filters: Record<SimulationMarket, SimulationFilters>, settings: SimulationSettings) {
+export function simulateBets(candidates: SimulationBet[], filters: Record<SimulationMarket, SimulationFilters>, settings: SimulationSettings, offers: readonly BonusBackOffer[] = []) {
+  const offersByRace = new Map(offers.map(offer => [offer.raceId, offer]))
   const starting = Number.isFinite(settings.startingBankroll) ? Math.max(0, Math.round(settings.startingBankroll * 100)) : 0
   const selectionTiming = Object.values(filters).some(filter => filter.enabled && filter.forecast === 'picks-history')
-  const matched: SimulationBet[] = candidates.map(bet => simulationSettlementOdds(bet, filters[bet.market])).filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => {
+  const matched: SimulationBet[] = candidates.map(bet => simulationSettlementOdds(bet, simulationPricingFilter(filters[bet.market]))).filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => {
     const exactHistory = filters[bet.market].forecast === 'picks-history'
     const replay = { ...bet, placedAt: exactHistory ? bet.selection.historyObservedAt : bet.race.start }
     if (!exactHistory) return replay
-    if (bet.selection.scratched) return { ...replay, issue: null }
+    if (bet.selection.scratched) return { ...replay, issue: bet.odds === null ? bet.issue : null }
     if (bet.issue !== 'Changed field; deductions unverified') return replay
     const position = bet.selection.position
     if (position === null || position < 1) return { ...replay, issue: 'Runner result unavailable' }
@@ -310,6 +320,7 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
     || winners.get(`${bet.race.id}:${bet.selection.model}:${bet.market}`) === bet)
   const models = [...new Set(bets.map(bet => bet.selection.model))].sort()
   const summaries = models.map(model => {
+    const claimedOffers = new Set<string>()
     const portfolio = bets.filter(bet => bet.selection.model === model).sort((left, right) =>
       (selectionTiming ? left.placedAt! : left.race.start).localeCompare(selectionTiming ? right.placedAt! : right.race.start) || left.race.id.localeCompare(right.race.id) || left.id.localeCompare(right.id))
     let cash = starting
@@ -356,6 +367,17 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
         bet.stake = stake / 100
         bet.returned = returned / 100
         bet.profit = (returned - stake) / 100
+        const offer = offersByRace.get(bet.race.id)
+        if (offer && bet.market === 'WIN' && offer.runnerId === bet.selection.id) {
+          const observedAt = bet.selection.forecastBasis === 'history' ? bet.selection.historyObservedAt : bet.selection.evaluatedAt ?? bet.selection.tabCapturedAt ?? undefined
+          const eligible = bonusBackEligible(offer, bet.race.id, bet.selection.id, bet.market, observedAt)
+            && Date.parse(offer.startsAt) === Date.parse(bet.race.start) && bet.source.startsWith('tab')
+          bet.bonusBackStatus = !eligible ? 'Eligibility timing / TAB price not verified' : claimedOffers.has(offer.raceId) ? 'Offer already allocated in this model' : 'Manually confirmed; conditional bonus only'
+          if (eligible && !claimedOffers.has(offer.raceId)) {
+            claimedOffers.add(offer.raceId)
+            bet.bonusCredit = bonusBackCredit(bet.stake, offer.cap, bet.status, bet.selection.position)
+          }
+        }
         cash -= stake
         if (selectionTiming) {
           const settledAt = Date.parse(bet.race.settledAt ?? '')
@@ -375,6 +397,7 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
     const profit = decided.reduce((total, bet) => total + Math.round(bet.profit * 100), 0) / 100
     return { model, bets: decided.length, races: new Set(decided.map(bet => bet.race.id)).size,
       wins: decided.filter(bet => bet.status === 'WON').length, staked, profit,
+      bonusCredit: portfolio.reduce((total, bet) => total + Math.round((bet.bonusCredit ?? 0) * 100), 0) / 100,
       roi: staked ? profit / staked * 100 : null, bankroll: cash / 100, maxDrawdown: maxDrawdown * 100,
       excluded: portfolio.filter(bet => bet.status === 'EXCLUDED').length,
       estimatedReturns: decided.filter(bet => bet.payoutWarning).length,
