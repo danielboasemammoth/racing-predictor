@@ -15,7 +15,6 @@ export interface SimulationSelection {
   predictionId?: string
   historyProvenance?: 'home-snapshot' | 'pre-race-recovery'
   historyObservedAt?: string
-  historyPublishedAt?: string
   tabPrice?: TabPrice | null
   tabPriceStatus?: 'captured' | 'unavailable' | 'lookup-failed'
   tabPriceBasis?: 'selection' | 'decision' | 'near-start'
@@ -251,11 +250,6 @@ export function simulationTabPrice(bet: SimulationBet): TabPrice | null {
   return valid ? price : null
 }
 
-/** Picks History is placed when a real TAB quote exists, so it is always priced and settled at that quote, never at the forecast's recorded Racing.com price. */
-export function simulationPricingFilter(filter: SimulationFilters): SimulationFilters {
-  return filter.forecast === 'picks-history' && filter.settlementOdds !== 'tab' ? { ...filter, settlementOdds: 'tab' } : filter
-}
-
 export function simulationSettlementOdds(bet: SimulationBet, filter: SimulationFilters): SimulationBet {
   if (filter.settlementOdds !== 'tab') return bet
   const price = simulationTabPrice(bet)
@@ -272,7 +266,7 @@ export function simulationSettlementOdds(bet: SimulationBet, filter: SimulationF
   const pricingIssue = bet.issue === 'Missing recorded odds' || bet.issue === 'TAB quote not verified near race start'
     || bet.issue === 'TAB quote not verified at decision time' || bet.issue === 'Missing or stale TAB decision quote'
     || (verifiedTerms && bet.market === 'PLACE' && bet.issue === 'Top-three probability does not match paid places')
-  const issue = odds === null ? `TAB ${bet.market} quote unavailable at ${source === 'tab_selection' ? 'selection time (no TAB odds record on the race day after the pick was published)' : source === 'tab_decision' ? 'decision time' : 'near-start'}`
+  const issue = odds === null ? `TAB ${bet.market} quote unavailable at ${source === 'tab_selection' ? 'selection time' : source === 'tab_decision' ? 'decision time' : 'near-start'}`
     : bet.market === 'PLACE' && verifiedTerms && probability === null ? 'Missing paid-place probability'
     : pricingIssue ? null : bet.issue
   return { ...bet, selection, source, odds, probability, implied, issue,
@@ -291,11 +285,11 @@ export function simulateBets(candidates: SimulationBet[], filters: Record<Simula
   const offersByRace = new Map(offers.map(offer => [offer.raceId, offer]))
   const starting = Number.isFinite(settings.startingBankroll) ? Math.max(0, Math.round(settings.startingBankroll * 100)) : 0
   const selectionTiming = Object.values(filters).some(filter => filter.enabled && filter.forecast === 'picks-history')
-  const matched: SimulationBet[] = candidates.map(bet => simulationSettlementOdds(bet, simulationPricingFilter(filters[bet.market]))).filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => {
+  const matched: SimulationBet[] = candidates.map(bet => simulationSettlementOdds(bet, filters[bet.market])).filter(bet => matchesSimulationFilters(bet, filters[bet.market])).map(bet => {
     const exactHistory = filters[bet.market].forecast === 'picks-history'
     const replay = { ...bet, placedAt: exactHistory ? bet.selection.historyObservedAt : bet.race.start }
     if (!exactHistory) return replay
-    if (bet.selection.scratched) return { ...replay, issue: bet.odds === null ? bet.issue : null }
+    if (bet.selection.scratched) return { ...replay, issue: null }
     if (bet.issue !== 'Changed field; deductions unverified') return replay
     const position = bet.selection.position
     if (position === null || position < 1) return { ...replay, issue: 'Runner result unavailable' }

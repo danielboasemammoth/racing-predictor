@@ -147,7 +147,7 @@ export function buildSimulationRace(source: SimulationSource, tabPrices: Map<str
     historySelections.push({ ...selection, forecastBasis: 'history', predictionId: pick.forecast.id,
       tabPrice, tabPriceBasis: 'selection', tabPriceStatus: tabPrice ? 'captured' : pick.tabPriceStatus === 'captured' ? 'unavailable' : pick.tabPriceStatus,
       winProbability: probability(pick.winProbability), top3Probability: probability(pick.top3Probability),
-      historyProvenance: pick.provenance, historyObservedAt: pick.observedAt, historyPublishedAt: pick.publishedAt })
+      historyProvenance: pick.provenance, historyObservedAt: pick.observedAt })
   }
   return { id: source.id, start: source.start, settledAt: source.settledAt, venue: source.venue, state: source.state, number: source.number, fieldSize: active.length, selections, decisionSelections, historySelections, tabPlaceResearch }
 }

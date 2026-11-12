@@ -133,7 +133,7 @@ it('places a retained History pick at the first same-day TAB quote instead of it
   vi.mocked(getFirstTabPricesAfter).mockResolvedValue(new Map([[source.id, new Map([['runner 1', quote]])]]))
   await refreshSimulationReport(db)
   expect(getFirstTabPricesAfter).toHaveBeenCalledWith(db, [expect.objectContaining({ id: source.id, notBefore: pick.observedAt })])
-  expect(JSON.parse(upload.mock.calls[0][1])[0].historySelections[0]).toMatchObject({ id: 'horse-1', historyObservedAt: quote.capturedAt, historyPublishedAt: pick.observedAt, tabPrice: quote, tabPriceStatus: 'captured' })
+  expect(JSON.parse(upload.mock.calls[0][1])[0].historySelections[0]).toMatchObject({ id: 'horse-1', historyObservedAt: quote.capturedAt, tabPrice: quote, tabPriceStatus: 'captured' })
   vi.mocked(getFirstTabPricesAfter).mockResolvedValue(new Map())
   upload.mockClear()
   await refreshSimulationReport(db)
