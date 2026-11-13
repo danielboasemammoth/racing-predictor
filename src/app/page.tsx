@@ -19,7 +19,7 @@ import { PRODUCTION_MODEL_VERSION } from '@/lib/prediction-suite'
 import { SiteNav } from '@/components/site-nav'
 import { PaperBetButton } from '@/components/paper-bet-button'
 import { PicksSortFilter } from '@/components/picks-sort-filter'
-import { BonusBackPromotions } from '@/components/bonus-back-promotions'
+import { BonusBackPromotionBadge, BonusBackPromotions } from '@/components/bonus-back-promotions'
 import { legacyPaperBettingEnabled } from '@/lib/betting/legacy-betting'
 
 export const dynamic = 'force-dynamic'
@@ -180,13 +180,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         <SnapshotStatus generatedAt={snapshot?.generatedAt} />
-        <BonusBackPromotions races={races.map(race => ({ id: race.id, label: `${race.racecourses?.name ?? 'Race'} R${race.race_number}`, runners: (race.prediction?.predictions.all_horses ?? []).map(horse => ({ id: horse.horse_id, name: horse.horse_name, win: horse.win_probability, topThree: horse.top3_probability })) }))} />
         {!snapshot ? null : races.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
             <p className="text-slate-600 mb-2">{!snapshot.data.tabRaceIds ? 'TAB race availability is awaiting a page-cache refresh.' : 'No upcoming TAB races scheduled through tomorrow.'}</p>
             <Link href="/admin" className="text-teal-700 font-medium hover:underline">Go to Admin to run prediction model</Link>
           </div>
         ) : (
+          <BonusBackPromotions races={races.map(race => ({ id: race.id, label: `${race.racecourses?.name ?? 'Race'} R${race.race_number}`, runners: (race.prediction?.predictions.all_horses ?? []).map(horse => ({ id: horse.horse_id, name: horse.horse_name, win: horse.win_probability, topThree: horse.top3_probability })) }))}>
           <div className="space-y-6">
             {reliabilityContext && (
               <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -264,9 +264,10 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               <div key={race.id} className="bg-white rounded-xl border border-slate-200 p-6 hover:shadow-md transition">
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <div className="flex items-center gap-3 mb-1">
+                    <div className="flex flex-wrap items-center gap-3 mb-1">
                       <h3 className="text-lg font-semibold text-slate-900">{race.racecourses?.name}</h3>
                       <span className="text-sm text-slate-600">Race {race.race_number}</span>
+                      <BonusBackPromotionBadge raceId={race.id} />
                     </div>
                     <p className="text-sm text-slate-600">{race.race_name}</p>
                     <div className="flex gap-4 mt-2 text-xs text-slate-500">
@@ -432,6 +433,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ m
               </div>
             ))}
           </div>
+          </BonusBackPromotions>
         )}
       </main>
     </div>

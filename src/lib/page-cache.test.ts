@@ -63,6 +63,17 @@ describe('persisted page snapshots', () => {
       .rejects.toMatchObject({ code: 'HOME_ARCHIVE_FAILED' })
   })
 
+  it('keeps a successful home snapshot refresh when only the optional mirror upload fails', async () => {
+    const query = { update: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), lt: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: 'page' }], error: null }) }
+    const db = { from: vi.fn(() => query) } as unknown as SupabaseClient
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(publishHomeMirror).mockRejectedValueOnce(new Error('storage unavailable'))
+    await expect(createPageSnapshotStore(db).publish('home', { generatedAt: '2026-10-05T00:00:00Z', data: { races: [] } }))
+      .resolves.toBeUndefined()
+    expect(warning).toHaveBeenCalledWith('Home public mirror refresh failed; database snapshot was published', expect.any(Error))
+  })
+
   it('archives only a successfully published home generation, never a failed publication', async () => {
     const query = { update: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), lt: vi.fn().mockReturnThis(),
       select: vi.fn().mockResolvedValue({ data: [{ id: 'page' }], error: null }) }

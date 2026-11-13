@@ -36,7 +36,7 @@ export function createPageSnapshotStore(db: SupabaseClient): PageSnapshotStore {
           recordHomePicks(db, snapshot.data, snapshot.generatedAt), publishHomeMirror(db, snapshot),
         ])
         if (archive.status === 'rejected') throw Object.assign(new Error('Home published, but shortlist archive failed', { cause: archive.reason }), { code: 'HOME_ARCHIVE_FAILED' })
-        if (mirror.status === 'rejected') throw Object.assign(new Error('Home published, but public mirror failed', { cause: mirror.reason }), { code: 'HOME_MIRROR_FAILED' })
+        if (mirror.status === 'rejected') console.warn('Home public mirror refresh failed; database snapshot was published', mirror.reason)
       }
     },
   }
