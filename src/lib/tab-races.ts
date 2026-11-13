@@ -16,7 +16,9 @@ interface TabMeeting {
 }
 
 export async function getTabScheduledRaces(races: RaceWithPrediction[], fetcher: typeof fetch = fetch): Promise<RaceWithPrediction[]> {
-  const keyFor = (venue: string, number: number, date: string) => `${date}:${venue.trim().toLowerCase().replace(/\s+/g, ' ')}:${number}`
+  const normalizeVenue = (venue: string) => venue.trim().toLowerCase().replace(/\s+/g, ' ')
+    .replace(/^sportsbet\s+/, '').replace(/^sandown\s+(?:hillside|lakeside)$/, 'sandown')
+  const keyFor = (venue: string, number: number, date: string) => `${date}:${normalizeVenue(venue)}:${number}`
   const dates = [...new Set(races.map(race => melbourneDateKey(race.race_datetime)))]
   const schedules = await Promise.all(dates.map(async date => {
     const response = await fetcher(`https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${date}/meetings?jurisdiction=VIC`, {

@@ -37,6 +37,15 @@ it('loads each Melbourne date including tomorrow', async () => {
   ])
 })
 
+it('matches sponsored Sandown course names to TAB Sandown meetings', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ meetings: [
+    { meetingName: 'SANDOWN', venueMnemonic: 'SAN', raceType: 'R', races: [tabRace(1)] },
+  ] }))
+  const races = [makeRace('sandown', 'Sportsbet Sandown Hillside')]
+
+  expect(await getTabRaceIds(races, fetcher)).toEqual(['sandown'])
+})
+
 it('rejects failed or malformed schedules instead of treating them as no TAB races', async () => {
   const races = [makeRace('today', 'Mornington')]
   await expect(getTabRaceIds(races, vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 503 })))).rejects.toThrow('TAB schedule unavailable')

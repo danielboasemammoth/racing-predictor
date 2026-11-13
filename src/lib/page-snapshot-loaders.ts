@@ -14,18 +14,31 @@ import { loadAnalyticsSnapshot } from './analytics-snapshot'
 import { getTabScheduledRaces } from './tab-races'
 import { readPaperBonusCredits } from './betting/bonus-back'
 
-function compactPrediction(prediction: Prediction, primary: boolean): Prediction {
+export function compactPrediction(prediction: Prediction, primary: boolean): Prediction {
   const payload = prediction.predictions
+  const compactHorse = ({ horse_id, horse_name, predicted_position, confidence, win_probability, top3_probability }: Prediction['predictions']['podium'][number]) => ({
+    horse_id, horse_name, predicted_position, confidence, win_probability, top3_probability,
+  })
+  const compact = { ...prediction, actual_results: undefined, predicted_times: {},
+    confidence_scores: { overall: prediction.confidence_scores.overall, winner: prediction.confidence_scores.winner } }
+  if (!primary) {
+    return { ...compact, predictions: { podium: payload.podium.slice(0, 1).map(compactHorse), all_horses: [] } }
+  }
+
+  const winnerId = payload.podium[0]?.horse_id
+  const winnerSnapshot = winnerId ? payload.feature_snapshots?.[winnerId] : null
+  const features = winnerSnapshot && typeof winnerSnapshot === 'object' && !Array.isArray(winnerSnapshot) ? winnerSnapshot.features : null
+  const historyStarts = features && typeof features === 'object' && !Array.isArray(features) ? features.historyStarts : 0
   return {
-    ...prediction, actual_results: undefined, predicted_times: {},
-    predictions: primary ? {
-      ...payload,
-      feature_snapshots: Object.fromEntries(Object.entries(payload.feature_snapshots ?? {}).map(([horseId, snapshot]) => {
-        const features = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot.features : null
-        const starts = features && typeof features === 'object' && !Array.isArray(features) ? features.historyStarts : 0
-        return [horseId, { features: { historyStarts: starts ?? 0 } }]
-      })),
-    } : { podium: payload.podium.slice(0, 1), all_horses: [] },
+    ...compact,
+    predictions: {
+      podium: payload.podium,
+      all_horses: payload.all_horses.map(compactHorse),
+      trifecta: payload.trifecta,
+      value_opportunities: payload.value_opportunities?.slice(0, 3),
+      place_hedges: payload.place_hedges?.slice(0, 2),
+      feature_snapshots: winnerId ? { [winnerId]: { features: { historyStarts: historyStarts ?? 0 } } } : {},
+    },
   }
 }
 
